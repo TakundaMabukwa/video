@@ -1,0 +1,206 @@
+import * as net from 'net';
+import { JTT808Parser } from './parser';
+import { JTT1078Commands } from './commands';
+import { JTT808MessageType, Vehicle } from '../types/jtt';
+
+export class JTT808Server {
+  private server: net.Server;
+  private vehicles = new Map<string, Vehicle>();
+  private connections = new Map<string, net.Socket>();
+  private serialCounter = 1;
+
+  constructor(private port: number, private udpPort: number) {
+    this.server = net.createServer(this.handleConnection.bind(this));
+  }
+
+  start(): Promise<void> {
+    return new Promise((resolve) => {
+      this.server.listen(this.port, () => {
+        console.log(`JT/T 808 TCP server listening on port ${this.port}`);
+        resolve();
+      });
+    });
+  }
+
+  private handleConnection(socket: net.Socket): void {
+    console.log(`New TCP connection from ${socket.remoteAddress}:${socket.remotePort}`);
+    
+    let buffer = Buffer.alloc(0);
+    
+    socket.on('data', (data) => {
+      buffer = Buffer.concat([buffer, data]);
+      
+      // Process complete messages
+      while (buffer.length > 0) {
+        const messageEnd = buffer.indexOf(0x7E, 1);
+        if (messageEnd === -1) break;
+        
+        const messageBuffer = buffer.slice(0, messageEnd + 1);
+        buffer = buffer.slice(messageEnd + 1);
+        
+        this.processMessage(messageBuffer, socket);
+      }
+    });
+
+    socket.on('close', () => {
+      console.log(`TCP connection closed: ${socket.remoteAddress}:${socket.remotePort}`);
+      this.handleDisconnection(socket);
+    });
+
+    socket.on('error', (error) => {
+      console.error(`TCP socket error:`, error);
+    });
+  }
+
+  private processMessage(buffer: Buffer, socket: net.Socket): void {
+    const message = JTT808Parser.parseMessage(buffer);
+    if (!message) {
+      console.warn('Failed to parse JT/T 808 message');
+      return;
+    }
+
+    console.log(`Received message 0x${message.messageId.toString(16)} from ${message.terminalPhone}`);
+
+    switch (message.messageId) {
+      case JTT808MessageType.TERMINAL_REGISTER:
+        this.handleTerminalRegister(message, socket);
+        break;
+      case JTT808MessageType.TERMINAL_AUTH:
+        this.handleTerminalAuth(message, socket);
+        break;
+      case JTT808MessageType.HEARTBEAT:
+        this.handleHeartbeat(message, socket);
+        break;
+      case JTT808MessageType.LOCATION_REPORT:
+        this.handleLocationReport(message, socket);
+        break;
+      default:
+        console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
+    }
+  }
+
+  private handleTerminalRegister(message: any, socket: net.Socket): void {
+    const vehicle: Vehicle = {
+      id: message.terminalPhone,
+      phone: message.terminalPhone,
+      connected: true,
+      lastHeartbeat: new Date(),
+      activeStreams: new Set()
+    };
+    
+    this.vehicles.set(message.terminalPhone, vehicle);
+    this.connections.set(message.terminalPhone, socket);
+    
+    // Send registration response (success)
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    
+    socket.write(response);
+    console.log(`Vehicle ${message.terminalPhone} registered successfully`);
+  }
+
+  private handleTerminalAuth(message: any, socket: net.Socket): void {
+    // Send auth response (success)
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    
+    socket.write(response);
+    console.log(`Vehicle ${message.terminalPhone} authenticated`);
+  }
+
+  private handleHeartbeat(message: any, socket: net.Socket): void {
+    const vehicle = this.vehicles.get(message.terminalPhone);
+    if (vehicle) {
+      vehicle.lastHeartbeat = new Date();
+    }
+    
+    // Send heartbeat response
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    
+    socket.write(response);
+  }
+
+  private handleLocationReport(message: any, socket: net.Socket): void {
+    // Send location report response
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    
+    socket.write(response);
+  }
+
+  private handleDisconnection(socket: net.Socket): void {
+    for (const [phone, conn] of this.connections.entries()) {
+      if (conn === socket) {
+        const vehicle = this.vehicles.get(phone);
+        if (vehicle) {
+          vehicle.connected = false;
+          vehicle.activeStreams.clear();
+        }
+        this.connections.delete(phone);
+        break;
+      }
+    }
+  }
+
+  // Public methods for video control
+  startVideo(vehicleId: string, channel: number = 1): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildStartVideoCommand(
+      vehicleId,
+      this.serialCounter++,
+      '127.0.0.1', // Server IP
+      this.udpPort,
+      channel
+    );
+    
+    socket.write(command);
+    vehicle.activeStreams.add(channel);
+    
+    console.log(`Started video stream for vehicle ${vehicleId}, channel ${channel}`);
+    return true;
+  }
+
+  stopVideo(vehicleId: string, channel: number = 1): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    if (!vehicle) return false;
+    
+    vehicle.activeStreams.delete(channel);
+    console.log(`Stopped video stream for vehicle ${vehicleId}, channel ${channel}`);
+    return true;
+  }
+
+  getVehicles(): Vehicle[] {
+    return Array.from(this.vehicles.values());
+  }
+
+  getVehicle(id: string): Vehicle | undefined {
+    return this.vehicles.get(id);
+  }
+}
