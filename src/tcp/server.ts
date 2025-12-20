@@ -91,17 +91,65 @@ export class JTT808Server {
     this.vehicles.set(message.terminalPhone, vehicle);
     this.connections.set(message.terminalPhone, socket);
     
-    // Send registration response (success)
-    const response = JTT1078Commands.buildGeneralResponse(
-      message.terminalPhone,
-      this.serialCounter++,
-      message.serialNumber,
-      message.messageId,
-      0
-    );
+    // Send proper 0x8100 registration response with auth token
+    const authToken = Buffer.from('AUTH123456', 'ascii');
+    const responseBody = Buffer.alloc(3 + authToken.length);
+    responseBody.writeUInt16BE(message.serialNumber, 0);
+    responseBody.writeUInt8(0, 2); // Success
+    authToken.copy(responseBody, 3);
+    
+    const response = this.buildMessage(0x8100, message.terminalPhone, this.serialCounter++, responseBody);
     
     socket.write(response);
-    console.log(`Vehicle ${message.terminalPhone} registered successfully`);
+    console.log(`Vehicle ${message.terminalPhone} registered with auth token`);
+  }
+
+  private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {
+    const phoneBytes = this.stringToBcd(phone);
+    const message = Buffer.alloc(13 + body.length);
+    message.writeUInt16BE(messageId, 0);
+    message.writeUInt16BE(body.length, 2);
+    phoneBytes.copy(message, 4);
+    message.writeUInt16BE(serial, 10);
+    body.copy(message, 12);
+    
+    const checksum = this.calculateChecksum(message);
+    message[12 + body.length] = checksum;
+    
+    const escaped = this.escape(message);
+    const result = Buffer.alloc(escaped.length + 2);
+    result[0] = 0x7E;
+    escaped.copy(result, 1);
+    result[result.length - 1] = 0x7E;
+    
+    return result;
+  }
+
+  private stringToBcd(str: string): Buffer {
+    const padded = str.padStart(12, '0');
+    return Buffer.from(padded, 'hex');
+  }
+
+  private escape(buffer: Buffer): Buffer {
+    const result: number[] = [];
+    for (const byte of buffer) {
+      if (byte === 0x7E) {
+        result.push(0x7D, 0x02);
+      } else if (byte === 0x7D) {
+        result.push(0x7D, 0x01);
+      } else {
+        result.push(byte);
+      }
+    }
+    return Buffer.from(result);
+  }
+
+  private calculateChecksum(buffer: Buffer): number {
+    let checksum = 0;
+    for (const byte of buffer) {
+      checksum ^= byte;
+    }
+    return checksum;
   }
 
   private handleTerminalAuth(message: any, socket: net.Socket): void {
