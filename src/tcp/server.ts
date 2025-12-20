@@ -33,10 +33,29 @@ export class JTT808Server {
     let buffer = Buffer.alloc(0);
     
     socket.on('data', (data) => {
+      console.log(`Received ${data.length} bytes from ${socket.remoteAddress}`);
       buffer = Buffer.concat([buffer, data]);
       
       // Process complete messages
       while (buffer.length > 0) {
+        // Check for RTP video data first (0x30316364)
+        if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0x30316364) {
+          // Find RTP packet length from header
+          if (buffer.length >= 20) {
+            const payloadLength = buffer.readUInt16BE(18);
+            const totalLength = 20 + payloadLength;
+            
+            if (buffer.length >= totalLength) {
+              const rtpPacket = buffer.slice(0, totalLength);
+              buffer = buffer.slice(totalLength);
+              this.handleRTPData(rtpPacket, socket);
+              continue;
+            }
+          }
+          break; // Wait for more data
+        }
+        
+        // Check for JT/T 808 message (0x7E)
         const messageEnd = buffer.indexOf(0x7E, 1);
         if (messageEnd === -1) break;
         
@@ -58,12 +77,6 @@ export class JTT808Server {
   }
 
   private processMessage(buffer: Buffer, socket: net.Socket): void {
-    // Check for RTP video data (0x30316364)
-    if (buffer.length > 4 && buffer.readUInt32BE(1) === 0x30316364) {
-      this.handleRTPData(buffer.slice(1), socket);
-      return;
-    }
-
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
       console.warn('Failed to parse JT/T 808 message');
@@ -85,7 +98,7 @@ export class JTT808Server {
       case JTT808MessageType.LOCATION_REPORT:
         this.handleLocationReport(message, socket);
         break;
-      case 0x0001: // Terminal general response
+      case 0x0001:
         console.log(`Terminal response 0x1, body: ${message.body.toString('hex')}`);
         break;
       default:
