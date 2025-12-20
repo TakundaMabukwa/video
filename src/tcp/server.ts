@@ -8,13 +8,13 @@ export class JTT808Server {
   private vehicles = new Map<string, Vehicle>();
   private connections = new Map<string, net.Socket>();
   private serialCounter = 1;
-  private rtpHandler?: (buffer: Buffer) => void;
+  private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
 
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
   }
 
-  setRTPHandler(handler: (buffer: Buffer) => void): void {
+  setRTPHandler(handler: (buffer: Buffer, vehicleId: string) => void): void {
     this.rtpHandler = handler;
   }
 
@@ -92,9 +92,17 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    // Forward to RTP handler (will implement)
+    // Get vehicle ID from connection
+    let vehicleId = 'unknown';
+    for (const [phone, conn] of this.connections.entries()) {
+      if (conn === socket) {
+        vehicleId = phone;
+        break;
+      }
+    }
+    
     if (this.rtpHandler) {
-      this.rtpHandler(buffer);
+      this.rtpHandler(buffer, vehicleId);
     }
   }
 
@@ -245,15 +253,16 @@ export class JTT808Server {
 
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
+    // Use TCP port (7611) instead of UDP for video streaming
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
       this.serialCounter++,
       serverIp,
-      this.udpPort,
+      this.port, // Use TCP port, not UDP
       channel
     );
     
-    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);
+    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.port}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     

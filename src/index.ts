@@ -17,8 +17,8 @@ async function startServer() {
   const tcpRTPHandler = new TCPRTPHandler();
   
   // Connect TCP RTP handler
-  tcpServer.setRTPHandler((buffer) => {
-    tcpRTPHandler.handleRTPPacket(buffer, 'tcp-stream');
+  tcpServer.setRTPHandler((buffer, vehicleId) => {
+    tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
   });
   
   // Start TCP server for JT/T 808 protocol
