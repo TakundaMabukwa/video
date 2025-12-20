@@ -85,6 +85,9 @@ export class JTT808Server {
       case JTT808MessageType.LOCATION_REPORT:
         this.handleLocationReport(message, socket);
         break;
+      case 0x0001: // Terminal general response
+        console.log(`Terminal response 0x1, body: ${message.body.toString('hex')}`);
+        break;
       default:
         console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
     }
