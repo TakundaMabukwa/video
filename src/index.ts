@@ -1,6 +1,7 @@
 import express from 'express';
 import { JTT808Server } from './tcp/server';
 import { UDPRTPServer } from './udp/server';
+import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 
 const TCP_PORT = 7611;  // JT/T 808 standard port
@@ -10,11 +11,14 @@ const API_PORT = 3000;  // REST API port
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
   
-  // Initialize servers
   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
   const udpServer = new UDPRTPServer(UDP_PORT);
+  const tcpRTPHandler = new TCPRTPHandler();
   
-  // Start TCP server for JT/T 808 protocol
+  tcpServer.setRTPHandler((buffer, vehicleId) => {
+    tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
+  });
+  
   await tcpServer.start();
   
   // Start UDP server for JT/T 1078 RTP streams
