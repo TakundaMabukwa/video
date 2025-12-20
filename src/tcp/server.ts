@@ -284,11 +284,11 @@ export class JTT808Server {
       vehicleId,
       this.serialCounter++,
       serverIp,
-      this.port,
+      this.udpPort,
       channel
     );
     
-    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.port}, Channel=${channel}`);
+    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     
