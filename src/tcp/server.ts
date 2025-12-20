@@ -100,8 +100,12 @@ export class JTT808Server {
     
     const response = this.buildMessage(0x8100, message.terminalPhone, this.serialCounter++, responseBody);
     
+    console.log(`Sending 0x8100 response with auth token: ${authToken.toString('hex')}`);
     socket.write(response);
     console.log(`Vehicle ${message.terminalPhone} registered with auth token`);
+    
+    // Keep connection alive
+    socket.setKeepAlive(true, 30000);
   }
 
   private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {
@@ -220,14 +224,17 @@ export class JTT808Server {
       return false;
     }
 
+    const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+    
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
       this.serialCounter++,
-      '127.0.0.1', // Server IP
+      serverIp,
       this.udpPort,
       channel
     );
     
+    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     
