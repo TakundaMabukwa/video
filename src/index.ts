@@ -1,6 +1,7 @@
 import express from 'express';
 import { JTT808Server } from './tcp/server';
 import { UDPRTPServer } from './udp/server';
+import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 
 const TCP_PORT = 7611;  // JT/T 808 standard port
@@ -13,6 +14,12 @@ async function startServer() {
   // Initialize servers
   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
   const udpServer = new UDPRTPServer(UDP_PORT);
+  const tcpRTPHandler = new TCPRTPHandler();
+  
+  // Connect TCP RTP handler
+  tcpServer.setRTPHandler((buffer) => {
+    tcpRTPHandler.handleRTPPacket(buffer, 'tcp-stream');
+  });
   
   // Start TCP server for JT/T 808 protocol
   await tcpServer.start();
