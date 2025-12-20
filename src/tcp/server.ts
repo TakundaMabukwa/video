@@ -185,7 +185,20 @@ export class JTT808Server {
   }
 
   private handleTerminalAuth(message: any, socket: net.Socket): void {
-    // Send auth response (success)
+    // If vehicle doesn't exist, create it (camera skipped registration)
+    if (!this.vehicles.has(message.terminalPhone)) {
+      const vehicle: Vehicle = {
+        id: message.terminalPhone,
+        phone: message.terminalPhone,
+        connected: true,
+        lastHeartbeat: new Date(),
+        activeStreams: new Set()
+      };
+      this.vehicles.set(message.terminalPhone, vehicle);
+      this.connections.set(message.terminalPhone, socket);
+      console.log(`Vehicle ${message.terminalPhone} added via auth`);
+    }
+    
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
       this.serialCounter++,
