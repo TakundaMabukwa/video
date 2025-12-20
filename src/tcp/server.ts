@@ -8,14 +8,9 @@ export class JTT808Server {
   private vehicles = new Map<string, Vehicle>();
   private connections = new Map<string, net.Socket>();
   private serialCounter = 1;
-  private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
 
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
-  }
-
-  setRTPHandler(handler: (buffer: Buffer, vehicleId: string) => void): void {
-    this.rtpHandler = handler;
   }
 
   start(): Promise<void> {
@@ -58,13 +53,6 @@ export class JTT808Server {
   }
 
   private processMessage(buffer: Buffer, socket: net.Socket): void {
-    // Check if this is JT/T 1078 RTP data (starts with 0x30316364)
-    if (buffer.length > 4 && buffer.readUInt32BE(1) === 0x30316364) {
-      console.log('Received RTP video packet over TCP');
-      this.handleRTPData(buffer.slice(1), socket);
-      return;
-    }
-
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
       console.warn('Failed to parse JT/T 808 message');
@@ -88,21 +76,6 @@ export class JTT808Server {
         break;
       default:
         console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
-    }
-  }
-
-  private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    // Get vehicle ID from connection
-    let vehicleId = 'unknown';
-    for (const [phone, conn] of this.connections.entries()) {
-      if (conn === socket) {
-        vehicleId = phone;
-        break;
-      }
-    }
-    
-    if (this.rtpHandler) {
-      this.rtpHandler(buffer, vehicleId);
     }
   }
 
@@ -253,16 +226,15 @@ export class JTT808Server {
 
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
-    // Use TCP port (7611) instead of UDP for video streaming
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
       this.serialCounter++,
       serverIp,
-      this.port, // Use TCP port, not UDP
+      this.udpPort,
       channel
     );
     
-    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.port}, Channel=${channel}`);
+    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     
