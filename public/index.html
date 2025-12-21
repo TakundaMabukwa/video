@@ -66,6 +66,41 @@
             background: #d1ecf1;
             color: #0c5460;
         }
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .video-card {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .video-card h4 {
+            margin: 0 0 10px 0;
+            color: #333;
+        }
+        .video-card video {
+            width: 100%;
+            max-width: 100%;
+        }
+        .vehicle-card {
+            padding: 10px;
+            margin: 5px 0;
+            background: #f9f9f9;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .vehicle-info {
+            flex: 1;
+        }
+        .vehicle-actions button {
+            margin-left: 5px;
+        }
     </style>
 </head>
 <body>
@@ -84,15 +119,14 @@
 
         <div id="status"></div>
 
-        <video id="video" controls></video>
+        <div id="videoGrid" class="video-grid"></div>
 
         <div id="vehicles" style="margin-top: 20px;"></div>
     </div>
 
     <script>
-        // Auto-detect API URL from current location
         const API_URL = `${window.location.protocol}//${window.location.host}/api`;
-        let hls = null;
+        const activeStreams = new Map();
 
         function showStatus(message, type = 'info') {
             const statusDiv = document.getElementById('status');
@@ -109,6 +143,12 @@
                 return;
             }
 
+            const streamKey = `${vehicleId}_${channel}`;
+            if (activeStreams.has(streamKey)) {
+                showStatus('Stream already active for this vehicle/channel', 'info');
+                return;
+            }
+
             try {
                 showStatus('Sending start command to camera...', 'info');
                 const response = await fetch(`${API_URL}/vehicles/${vehicleId}/start-live`, {
@@ -120,10 +160,8 @@
                 const data = await response.json();
                 
                 if (data.success) {
-                    showStatus('✅ Stream started! Waiting for video... (Vehicle must be ON)', 'success');
-                    setTimeout(() => {
-                        playHLS(vehicleId, channel);
-                    }, 2000);
+                    showStatus('✅ Stream started! Waiting for video...', 'success');
+                    addVideoPlayer(vehicleId, channel);
                 } else {
                     showStatus(`❌ Error: ${data.message}`, 'error');
                 }
@@ -132,16 +170,35 @@
             }
         }
 
+        function addVideoPlayer(vehicleId, channel) {
+            const streamKey = `${vehicleId}_${channel}`;
+            const videoGrid = document.getElementById('videoGrid');
+            
+            const videoCard = document.createElement('div');
+            videoCard.className = 'video-card';
+            videoCard.id = `card_${streamKey}`;
+            videoCard.innerHTML = `
+                <h4>🚗 Vehicle ${vehicleId} - Channel ${channel}</h4>
+                <video id="video_${streamKey}" controls autoplay muted></video>
+                <button onclick="stopStreamById('${vehicleId}', ${channel})" style="margin-top: 10px;">⏹️ Stop</button>
+            `;
+            
+            videoGrid.appendChild(videoCard);
+            
+            setTimeout(() => {
+                playHLS(vehicleId, channel);
+            }, 2000);
+        }
+
         function playHLS(vehicleId, channel) {
-            const video = document.getElementById('video');
+            const streamKey = `${vehicleId}_${channel}`;
+            const video = document.getElementById(`video_${streamKey}`);
+            if (!video) return;
+
             const streamUrl = `${API_URL}/stream/${vehicleId}/${channel}/playlist.m3u8`;
 
             if (Hls.isSupported()) {
-                if (hls) {
-                    hls.destroy();
-                }
-                
-                hls = new Hls({
+                const hls = new Hls({
                     enableWorker: true,
                     lowLatencyMode: true
                 });
@@ -151,51 +208,55 @@
                 
                 hls.on(Hls.Events.MANIFEST_PARSED, () => {
                     video.play();
-                    showStatus('🎬 Playing live stream!', 'success');
                 });
 
                 hls.on(Hls.Events.ERROR, (event, data) => {
                     if (data.fatal) {
-                        showStatus(`❌ Stream error: ${data.type} - ${data.details}`, 'error');
+                        console.error(`Stream error for ${streamKey}:`, data.type, data.details);
                     }
                 });
+
+                activeStreams.set(streamKey, hls);
             } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                 video.src = streamUrl;
                 video.addEventListener('loadedmetadata', () => {
                     video.play();
-                    showStatus('🎬 Playing live stream!', 'success');
                 });
-            } else {
-                showStatus('❌ HLS not supported in this browser', 'error');
+                activeStreams.set(streamKey, { destroy: () => {} });
+            }
+        }
+
+        async function stopStreamById(vehicleId, channel) {
+            const streamKey = `${vehicleId}_${channel}`;
+            
+            try {
+                await fetch(`${API_URL}/vehicles/${vehicleId}/stop-live`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ channel: parseInt(channel) })
+                });
+
+                const hls = activeStreams.get(streamKey);
+                if (hls) {
+                    hls.destroy();
+                    activeStreams.delete(streamKey);
+                }
+                
+                const card = document.getElementById(`card_${streamKey}`);
+                if (card) {
+                    card.remove();
+                }
+
+                showStatus(`⏹️ Stream stopped for vehicle ${vehicleId}`, 'info');
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
             }
         }
 
         async function stopStream() {
             const vehicleId = document.getElementById('vehicleId').value;
             const channel = document.getElementById('channel').value;
-
-            try {
-                const response = await fetch(`${API_URL}/vehicles/${vehicleId}/stop-live`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ channel: parseInt(channel) })
-                });
-
-                const data = await response.json();
-                
-                if (hls) {
-                    hls.destroy();
-                    hls = null;
-                }
-                
-                const video = document.getElementById('video');
-                video.pause();
-                video.src = '';
-
-                showStatus('⏹️ Stream stopped', 'info');
-            } catch (error) {
-                showStatus(`❌ Error: ${error.message}`, 'error');
-            }
+            await stopStreamById(vehicleId, channel);
         }
 
         async function getVehicles() {
@@ -208,13 +269,20 @@
                 if (data.success && data.data.length > 0) {
                     vehiclesDiv.innerHTML = '<h3>Connected Vehicles:</h3>' +
                         data.data.map(v => `
-                            <div style="padding: 10px; margin: 5px 0; background: #f9f9f9; border-radius: 4px;">
-                                <strong>${v.id}</strong> - 
-                                ${v.connected ? '🟢 Online' : '🔴 Offline'} - 
-                                Last seen: ${new Date(v.lastHeartbeat).toLocaleString()}
-                                <button onclick="document.getElementById('vehicleId').value='${v.id}'; startStream();">
-                                    ▶️ Stream
-                                </button>
+                            <div class="vehicle-card">
+                                <div class="vehicle-info">
+                                    <strong>🚗 ${v.id}</strong> - 
+                                    ${v.connected ? '🟢 Online' : '🔴 Offline'} - 
+                                    Last seen: ${new Date(v.lastHeartbeat).toLocaleString()}
+                                </div>
+                                <div class="vehicle-actions">
+                                    <button onclick="document.getElementById('vehicleId').value='${v.id}'; document.getElementById('channel').value='1'; startStream();">
+                                        ▶️ Ch1
+                                    </button>
+                                    <button onclick="document.getElementById('vehicleId').value='${v.id}'; document.getElementById('channel').value='2'; startStream();">
+                                        ▶️ Ch2
+                                    </button>
+                                </div>
                             </div>
                         `).join('');
                 } else {
