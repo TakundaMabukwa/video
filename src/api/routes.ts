@@ -1,6 +1,7 @@
 import express from 'express';
 import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
+import * as path from 'path';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
@@ -129,6 +130,20 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         frameAssembler: udpStats.frameAssemblerStats
       }
     });
+  });
+
+  // Serve HLS playlist
+  router.get('/stream/:vehicleId/:channel/playlist.m3u8', (req, res) => {
+    const { vehicleId, channel } = req.params;
+    const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+    res.sendFile(playlistPath);
+  });
+
+  // Serve HLS segments
+  router.get('/stream/:vehicleId/:channel/:segment', (req, res) => {
+    const { vehicleId, channel, segment } = req.params;
+    const segmentPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, segment);
+    res.sendFile(segmentPath);
   });
 
   return router;

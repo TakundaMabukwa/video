@@ -28,6 +28,9 @@ async function startServer() {
   const app = express();
   app.use(express.json());
   
+  // Serve static files
+  app.use(express.static('public'));
+  
   // Add routes
   app.use('/api', createRoutes(tcpServer, udpServer));
   
