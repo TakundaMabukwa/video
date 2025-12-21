@@ -90,7 +90,8 @@
     </div>
 
     <script>
-        const API_URL = 'http://localhost:3000/api';
+        // Auto-detect API URL from current location
+        const API_URL = `${window.location.protocol}//${window.location.host}/api`;
         let hls = null;
 
         function showStatus(message, type = 'info') {
@@ -109,7 +110,6 @@
             }
 
             try {
-                // Send start command to camera
                 showStatus('Sending start command to camera...', 'info');
                 const response = await fetch(`${API_URL}/vehicles/${vehicleId}/start-live`, {
                     method: 'POST',
@@ -121,8 +121,6 @@
                 
                 if (data.success) {
                     showStatus('✅ Stream started! Waiting for video... (Vehicle must be ON)', 'success');
-                    
-                    // Wait 2 seconds then try to play HLS
                     setTimeout(() => {
                         playHLS(vehicleId, channel);
                     }, 2000);
@@ -227,7 +225,6 @@
             }
         }
 
-        // Auto-load vehicles on page load
         window.onload = () => {
             getVehicles();
             showStatus('Ready! Click "List Vehicles" to see connected cameras', 'info');

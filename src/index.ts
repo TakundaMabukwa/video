@@ -4,9 +4,10 @@ import { UDPRTPServer } from './udp/server';
 import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 
-const TCP_PORT = 7611;  // JT/T 808 standard port
-const UDP_PORT = 6611;  // JT/T 1078 RTP port
-const API_PORT = 3000;  // REST API port
+const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
+const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
+const API_PORT = parseInt(process.env.API_PORT || '3000');
+const SERVER_IP = process.env.SERVER_IP || 'localhost';
 
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
@@ -55,6 +56,8 @@ async function startServer() {
   console.log(`TCP (JT/T 808): ${TCP_PORT}`);
   console.log(`UDP (JT/T 1078): ${UDP_PORT}`);
   console.log(`REST API: ${API_PORT}`);
+  console.log(`Server IP: ${SERVER_IP}`);
+  console.log(`Web UI: http://${SERVER_IP}:${API_PORT}`);
   console.log('==============================================\n');
   
   // Graceful shutdown
