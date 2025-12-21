@@ -95,6 +95,25 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Query camera capabilities
+  router.post('/vehicles/:id/query-capabilities', (req, res) => {
+    const { id } = req.params;
+    
+    const success = tcpServer.queryCapabilities(id);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Querying capabilities for vehicle ${id}, check logs for response`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+  });
+
   // Get server statistics
   router.get('/stats', (req, res) => {
     const vehicles = tcpServer.getVehicles();

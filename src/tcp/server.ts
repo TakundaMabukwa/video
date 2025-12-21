@@ -101,6 +101,10 @@ export class JTT808Server {
       case 0x0001:
         console.log(`Terminal response 0x1, body: ${message.body.toString('hex')}`);
         break;
+      case 0x1003: // Audio/video capabilities response
+        console.log(`Camera capabilities (0x1003): ${message.body.toString('hex')}`);
+        this.parseCapabilities(message.body);
+        break;
       default:
         console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
     }
@@ -269,6 +273,42 @@ export class JTT808Server {
     }
   }
 
+  private parseCapabilities(body: Buffer): void {
+    if (body.length < 2) return;
+    
+    const channelCount = body.readUInt8(0);
+    console.log(`Camera has ${channelCount} channels`);
+    
+    // Parse each channel's capabilities
+    let offset = 1;
+    for (let i = 0; i < channelCount && offset < body.length; i++) {
+      const physicalChannel = body.readUInt8(offset);
+      const codecType = body.readUInt8(offset + 1);
+      const streamType = body.readUInt8(offset + 2);
+      
+      console.log(`Channel ${physicalChannel}: Codec=${codecType}, StreamType=${streamType}`);
+      offset += 3;
+    }
+  }
+
+  queryCapabilities(vehicleId: string): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildQueryCapabilitiesCommand(
+      vehicleId,
+      this.serialCounter++
+    );
+    
+    console.log(`Sending 0x9003 query capabilities to ${vehicleId}`);
+    socket.write(command);
+    return true;
+  }
+
   // Public methods for video control
   startVideo(vehicleId: string, channel: number = 1): boolean {
     const vehicle = this.vehicles.get(vehicleId);
@@ -285,7 +325,9 @@ export class JTT808Server {
       this.serialCounter++,
       serverIp,
       this.udpPort,
-      channel
+      channel,
+      1, // Video only
+      0  // Main stream
     );
     
     console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);

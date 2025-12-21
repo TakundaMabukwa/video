@@ -1,6 +1,15 @@
 import { JTT808MessageType } from '../types/jtt';
 
 export class JTT1078Commands {
+  // Build 0x9003 command - Query audio/video capabilities
+  static buildQueryCapabilitiesCommand(
+    terminalPhone: string,
+    serialNumber: number
+  ): Buffer {
+    const body = Buffer.alloc(0); // Empty body
+    return this.buildMessage(0x9003, terminalPhone, serialNumber, body);
+  }
+
   // Build 0x9101 command - Start real-time audio/video transmission
   static buildStartVideoCommand(
     terminalPhone: string,
