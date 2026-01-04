@@ -6,7 +6,7 @@ import * as path from 'path';
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
 
-  // Get all connected vehicles
+  // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
     const vehicles = tcpServer.getVehicles();
     res.json({
@@ -16,8 +16,68 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         phone: v.phone,
         connected: v.connected,
         lastHeartbeat: v.lastHeartbeat,
-        activeStreams: Array.from(v.activeStreams)
+        activeStreams: Array.from(v.activeStreams),
+        channels: v.channels || []
       }))
+    });
+  });
+
+  // Start all video channels for a vehicle
+  router.post('/vehicles/:id/start-all-streams', (req, res) => {
+    const { id } = req.params;
+    const vehicle = tcpServer.getVehicle(id);
+    
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+    
+    const videoChannels = vehicle.channels?.filter(ch => ch.type === 'video' || ch.type === 'audio_video') || [];
+    const results = [];
+    
+    for (const channel of videoChannels) {
+      const success = tcpServer.startVideo(id, channel.logicalChannel);
+      results.push({
+        channel: channel.logicalChannel,
+        type: channel.type,
+        success
+      });
+    }
+    
+    res.json({
+      success: true,
+      message: `Started ${results.filter(r => r.success).length}/${results.length} video streams`,
+      data: results
+    });
+  });
+
+  // Stop all video channels for a vehicle
+  router.post('/vehicles/:id/stop-all-streams', (req, res) => {
+    const { id } = req.params;
+    const vehicle = tcpServer.getVehicle(id);
+    
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found`
+      });
+    }
+    
+    const activeChannels = Array.from(vehicle.activeStreams);
+    const results = [];
+    
+    for (const channel of activeChannels) {
+      const success = tcpServer.stopVideo(id, channel);
+      udpServer.stopStream(id, channel);
+      results.push({ channel, success });
+    }
+    
+    res.json({
+      success: true,
+      message: `Stopped ${results.length} video streams`,
+      data: results
     });
   });
 
@@ -92,6 +152,49 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           frameCount: 0,
           lastFrame: null
         }
+      }
+    });
+  });
+
+  // Get all active streams for a vehicle
+  router.get('/vehicles/:id/streams', (req, res) => {
+    const { id } = req.params;
+    const vehicle = tcpServer.getVehicle(id);
+    
+    if (!vehicle) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found`
+      });
+    }
+    
+    const streams = [];
+    for (const channel of vehicle.activeStreams) {
+      const streamInfo = udpServer.getStreamInfo(id, channel);
+      const channelInfo = vehicle.channels?.find(ch => ch.logicalChannel === channel);
+      
+      streams.push({
+        channel,
+        type: channelInfo?.type || 'unknown',
+        hasGimbal: channelInfo?.hasGimbal || false,
+        streamInfo: streamInfo || {
+          vehicleId: id,
+          channel,
+          active: false,
+          frameCount: 0,
+          lastFrame: null
+        },
+        playlistUrl: `/api/stream/${id}/${channel}/playlist.m3u8`
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        vehicleId: id,
+        totalChannels: vehicle.channels?.length || 0,
+        activeStreams: streams.length,
+        streams
       }
     });
   });

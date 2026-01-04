@@ -1,7 +1,9 @@
 import * as net from 'net';
 import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
-import { JTT808MessageType, Vehicle } from '../types/jtt';
+import { AlertParser } from './alertParser';
+import { AlertStorage } from '../storage/alertStorage';
+import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
 export class JTT808Server {
   private server: net.Server;
@@ -9,6 +11,7 @@ export class JTT808Server {
   private connections = new Map<string, net.Socket>();
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
+  private alertStorage = new AlertStorage();
 
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
@@ -247,6 +250,13 @@ export class JTT808Server {
   }
 
   private handleLocationReport(message: any, socket: net.Socket): void {
+    // Parse location and alert data
+    const alert = AlertParser.parseLocationReport(message.body, message.terminalPhone);
+    
+    if (alert) {
+      this.processAlert(alert);
+    }
+    
     // Send location report response
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
@@ -257,6 +267,55 @@ export class JTT808Server {
     );
     
     socket.write(response);
+  }
+
+  private processAlert(alert: LocationAlert): void {
+    console.log(`\n=== ALERT from ${alert.vehicleId} at ${alert.timestamp.toISOString()} ===`);
+    console.log(`Location: ${alert.latitude}, ${alert.longitude}`);
+    
+    if (alert.videoAlarms) {
+      console.log('Video Alarms:', alert.videoAlarms);
+    }
+    
+    if (alert.drivingBehavior) {
+      console.log('\n🚨 ABNORMAL DRIVING BEHAVIOR DETECTED:');
+      const behavior = alert.drivingBehavior;
+      
+      if (behavior.fatigue) {
+        console.log(`  😴 FATIGUE DETECTED - Level: ${behavior.fatigueLevel}/100`);
+      }
+      if (behavior.phoneCall) {
+        console.log(`  📱 PHONE CALL DETECTED`);
+      }
+      if (behavior.smoking) {
+        console.log(`  🚬 SMOKING DETECTED`);
+      }
+      if (behavior.custom > 0) {
+        console.log(`  ⚠️  CUSTOM BEHAVIOR: ${behavior.custom}`);
+      }
+    }
+    
+    if (alert.signalLossChannels?.length) {
+      console.log(`📺 Signal Loss - Channels: ${alert.signalLossChannels.join(', ')}`);
+    }
+    
+    if (alert.blockingChannels?.length) {
+      console.log(`🚫 Signal Blocking - Channels: ${alert.blockingChannels.join(', ')}`);
+    }
+    
+    if (alert.memoryFailures) {
+      if (alert.memoryFailures.main.length) {
+        console.log(`💾 Main Memory Failures: ${alert.memoryFailures.main.join(', ')}`);
+      }
+      if (alert.memoryFailures.backup.length) {
+        console.log(`💾 Backup Memory Failures: ${alert.memoryFailures.backup.join(', ')}`);
+      }
+    }
+    
+    console.log('=== END ALERT ===\n');
+    
+    // Save alert to JSON database
+    this.alertStorage.saveAlert(alert);
   }
 
   private handleDisconnection(socket: net.Socket): void {
@@ -279,16 +338,43 @@ export class JTT808Server {
     const channelCount = body.readUInt8(0);
     console.log(`Camera has ${channelCount} channels`);
     
-    // Parse each channel's capabilities
+    const channels: VehicleChannel[] = [];
     let offset = 1;
-    for (let i = 0; i < channelCount && offset < body.length; i++) {
+    
+    for (let i = 0; i < channelCount && offset + 2 < body.length; i++) {
       const physicalChannel = body.readUInt8(offset);
-      const codecType = body.readUInt8(offset + 1);
-      const streamType = body.readUInt8(offset + 2);
+      const logicalChannel = body.readUInt8(offset + 1);
+      const channelType = body.readUInt8(offset + 2);
+      const hasGimbal = offset + 3 < body.length ? body.readUInt8(offset + 3) === 1 : false;
       
-      console.log(`Channel ${physicalChannel}: Codec=${codecType}, StreamType=${streamType}`);
-      offset += 3;
+      const typeMap = { 0: 'audio_video', 1: 'audio', 2: 'video' } as const;
+      
+      channels.push({
+        physicalChannel,
+        logicalChannel,
+        type: typeMap[channelType as keyof typeof typeMap] || 'video',
+        hasGimbal
+      });
+      
+      console.log(`Channel ${physicalChannel}: Logical=${logicalChannel}, Type=${typeMap[channelType as keyof typeof typeMap]}, Gimbal=${hasGimbal}`);
+      offset += 4;
     }
+    
+    // Store channels in vehicle data
+    const phoneFromBody = this.extractPhoneFromContext();
+    if (phoneFromBody) {
+      const vehicle = this.vehicles.get(phoneFromBody);
+      if (vehicle) {
+        vehicle.channels = channels;
+      }
+    }
+  }
+  
+  private extractPhoneFromContext(): string | null {
+    // This would need to be passed from the message context
+    // For now, return the most recently connected vehicle
+    const connectedVehicles = Array.from(this.vehicles.values()).filter(v => v.connected);
+    return connectedVehicles.length > 0 ? connectedVehicles[connectedVehicles.length - 1].phone : null;
   }
 
   queryCapabilities(vehicleId: string): boolean {
@@ -353,5 +439,9 @@ export class JTT808Server {
 
   getVehicle(id: string): Vehicle | undefined {
     return this.vehicles.get(id);
+  }
+
+  getAlerts(): LocationAlert[] {
+    return this.alertStorage.getAlerts();
   }
 }

@@ -47,6 +47,14 @@ export interface Vehicle {
   connected: boolean;
   lastHeartbeat: Date;
   activeStreams: Set<number>;
+  channels?: VehicleChannel[];
+}
+
+export interface VehicleChannel {
+  physicalChannel: number;
+  logicalChannel: number;
+  type: 'audio' | 'video' | 'audio_video';
+  hasGimbal: boolean;
 }
 
 export interface StreamInfo {
@@ -55,4 +63,45 @@ export interface StreamInfo {
   active: boolean;
   frameCount: number;
   lastFrame: Date | null;
+}
+
+// Alert Types
+export enum VideoAlarmType {
+  VIDEO_SIGNAL_LOSS = 0x0101,
+  VIDEO_SIGNAL_BLOCKING = 0x0102,
+  STORAGE_FAILURE = 0x0103,
+  OTHER_VIDEO_FAILURE = 0x0104,
+  BUS_OVERCROWDING = 0x0105,
+  ABNORMAL_DRIVING = 0x0106,
+  SPECIAL_ALARM_THRESHOLD = 0x0107
+}
+
+export interface AbnormalDrivingBehavior {
+  fatigue: boolean;
+  phoneCall: boolean;
+  smoking: boolean;
+  custom: number; // bits 11-15
+  fatigueLevel: number; // 0-100
+}
+
+export interface VideoAlarmStatus {
+  videoSignalLoss: boolean;
+  videoSignalBlocking: boolean;
+  storageFailure: boolean;
+  otherVideoFailure: boolean;
+  busOvercrowding: boolean;
+  abnormalDriving: boolean;
+  specialAlarmThreshold: boolean;
+}
+
+export interface LocationAlert {
+  vehicleId: string;
+  timestamp: Date;
+  latitude: number;
+  longitude: number;
+  videoAlarms?: VideoAlarmStatus;
+  signalLossChannels?: number[]; // channels 1-32
+  blockingChannels?: number[]; // channels 1-32
+  memoryFailures?: { main: number[]; backup: number[]; };
+  drivingBehavior?: AbnormalDrivingBehavior;
 }

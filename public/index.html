@@ -268,25 +268,105 @@
                 
                 if (data.success && data.data.length > 0) {
                     vehiclesDiv.innerHTML = '<h3>Connected Vehicles:</h3>' +
-                        data.data.map(v => `
-                            <div class="vehicle-card">
-                                <div class="vehicle-info">
-                                    <strong>🚗 ${v.id}</strong> - 
-                                    ${v.connected ? '🟢 Online' : '🔴 Offline'} - 
-                                    Last seen: ${new Date(v.lastHeartbeat).toLocaleString()}
+                        data.data.map(v => {
+                            const videoChannels = v.channels?.filter(ch => ch.type === 'video' || ch.type === 'audio_video') || [];
+                            const channelButtons = videoChannels.length > 0 
+                                ? videoChannels.map(ch => 
+                                    `<button onclick="startChannelStream('${v.id}', ${ch.logicalChannel})">
+                                        ▶️ Ch${ch.logicalChannel}
+                                    </button>`
+                                  ).join('')
+                                : `<button onclick="startChannelStream('${v.id}', 1)">▶️ Ch1</button>
+                                   <button onclick="startChannelStream('${v.id}', 2)">▶️ Ch2</button>`;
+                            
+                            return `
+                                <div class="vehicle-card">
+                                    <div class="vehicle-info">
+                                        <strong>🚗 ${v.id}</strong> - 
+                                        ${v.connected ? '🟢 Online' : '🔴 Offline'} - 
+                                        Channels: ${v.channels?.length || 'Unknown'} - 
+                                        Active: ${v.activeStreams.length}
+                                        <br><small>Last seen: ${new Date(v.lastHeartbeat).toLocaleString()}</small>
+                                    </div>
+                                    <div class="vehicle-actions">
+                                        ${channelButtons}
+                                        <button onclick="startAllStreams('${v.id}')" style="background: #28a745;">▶️ All</button>
+                                        <button onclick="stopAllStreams('${v.id}')" style="background: #dc3545;">⏹️ All</button>
+                                    </div>
                                 </div>
-                                <div class="vehicle-actions">
-                                    <button onclick="document.getElementById('vehicleId').value='${v.id}'; document.getElementById('channel').value='1'; startStream();">
-                                        ▶️ Ch1
-                                    </button>
-                                    <button onclick="document.getElementById('vehicleId').value='${v.id}'; document.getElementById('channel').value='2'; startStream();">
-                                        ▶️ Ch2
-                                    </button>
-                                </div>
-                            </div>
-                        `).join('');
+                            `;
+                        }).join('');
                 } else {
                     vehiclesDiv.innerHTML = '<p>No vehicles connected</p>';
+                }
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        function startChannelStream(vehicleId, channel) {
+            document.getElementById('vehicleId').value = vehicleId;
+            document.getElementById('channel').value = channel;
+            startStream();
+        }
+
+        async function startAllStreams(vehicleId) {
+            try {
+                showStatus(`Starting all streams for vehicle ${vehicleId}...`, 'info');
+                const response = await fetch(`${API_URL}/vehicles/${vehicleId}/start-all-streams`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`✅ ${data.message}`, 'success');
+                    
+                    // Add video players for each successful stream
+                    data.data.forEach(result => {
+                        if (result.success) {
+                            setTimeout(() => {
+                                addVideoPlayer(vehicleId, result.channel);
+                            }, 1000);
+                        }
+                    });
+                } else {
+                    showStatus(`❌ Error: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopAllStreams(vehicleId) {
+            try {
+                const response = await fetch(`${API_URL}/vehicles/${vehicleId}/stop-all-streams`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    showStatus(`⏹️ ${data.message}`, 'success');
+                    
+                    // Remove all video cards for this vehicle
+                    data.data.forEach(result => {
+                        const streamKey = `${vehicleId}_${result.channel}`;
+                        const hls = activeStreams.get(streamKey);
+                        if (hls) {
+                            hls.destroy();
+                            activeStreams.delete(streamKey);
+                        }
+                        
+                        const card = document.getElementById(`card_${streamKey}`);
+                        if (card) {
+                            card.remove();
+                        }
+                    });
+                } else {
+                    showStatus(`❌ Error: ${data.message}`, 'error');
                 }
             } catch (error) {
                 showStatus(`❌ Error: ${error.message}`, 'error');
