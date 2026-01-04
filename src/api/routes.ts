@@ -1,6 +1,7 @@
 import express from 'express';
 import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
+import { requestScreenshot } from '../tcp/screenshotHandler';
 import * as path from 'path';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
@@ -120,6 +121,27 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         message: `Vehicle ${id} not found`
       });
     }
+  });
+
+  // Request screenshot from vehicle
+  router.post('/vehicles/:id/screenshot', (req, res) => {
+    const { id } = req.params;
+    const { channel = 1 } = req.body;
+    
+    const vehicle = tcpServer.getVehicle(id);
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+    
+    requestScreenshot(vehicle.socket, id, channel);
+    
+    res.json({
+      success: true,
+      message: `Screenshot requested for vehicle ${id}, channel ${channel}`
+    });
   });
 
   // Get stream info for a vehicle
@@ -290,6 +312,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const filePath = path.join(process.cwd(), 'media', vehicleId, filename);
     
     if (require('fs').existsSync(filePath)) {
+      // Set proper content type for images
+      if (filename.match(/\.(jpg|jpeg)$/i)) {
+        res.setHeader('Content-Type', 'image/jpeg');
+      } else if (filename.match(/\.png$/i)) {
+        res.setHeader('Content-Type', 'image/png');
+      } else if (filename.match(/\.mp4$/i)) {
+        res.setHeader('Content-Type', 'video/mp4');
+      }
+      
       if (download === 'true') {
         res.download(filePath, filename);
       } else {
