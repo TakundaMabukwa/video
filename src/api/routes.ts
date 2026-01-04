@@ -272,7 +272,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         .filter((file: string) => file.match(/\.(jpg|jpeg|png|mp4|avi)$/i))
         .map((file: string) => ({
           filename: file,
-          url: `/api/media/${id}/${file}`,
+          viewUrl: `/api/media/${id}/${file}`,
+          downloadUrl: `/api/media/${id}/${file}?download=true`,
           timestamp: file.split('_')[2]?.replace(/-/g, ':') || 'unknown'
         }));
       
@@ -290,9 +291,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     
     if (require('fs').existsSync(filePath)) {
       if (download === 'true') {
-        res.download(filePath);
+        res.download(filePath, filename);
       } else {
-        res.sendFile(filePath);
+        res.sendFile(path.resolve(filePath));
       }
     } else {
       res.status(404).json({ success: false, message: 'File not found' });
