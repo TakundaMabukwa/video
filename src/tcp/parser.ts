@@ -26,7 +26,7 @@ export class JTT808Parser {
       // Verify checksum
       const calculatedChecksum = this.calculateChecksum(unescaped.slice(0, 12 + bodyLength));
       if (checksum !== calculatedChecksum) {
-        console.warn(`Checksum mismatch: expected ${checksum}, got ${calculatedChecksum}`);
+        // Checksum mismatch - continue processing but don't log
       }
 
       return {

@@ -2,6 +2,7 @@ import * as net from 'net';
 import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
 import { AlertParser } from './alertParser';
+import { MultimediaParser } from './multimediaParser';
 import { AlertStorage } from '../storage/alertStorage';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
@@ -109,11 +110,12 @@ export class JTT808Server {
         this.parseCapabilities(message.body);
         break;
       case 0x0800: // Multimedia event message upload
-        console.log(`Multimedia event (0x800): ${message.body.toString('hex')}`);
         this.handleMultimediaEvent(message, socket);
         break;
+      case 0x0801: // Multimedia data upload
+        this.handleMultimediaData(message, socket);
+        break;
       case 0x0704: // Custom/proprietary message
-        console.log(`Custom message (0x704): ${message.body.toString('hex')}`);
         this.handleCustomMessage(message, socket);
         break;
       default:
@@ -465,6 +467,29 @@ export class JTT808Server {
   }
 
   private handleCustomMessage(message: any, socket: net.Socket): void {
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    socket.write(response);
+  }
+
+  private handleMultimediaData(message: any, socket: net.Socket): void {
+    const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
+    
+    if (multimedia) {
+      const filePath = MultimediaParser.saveMultimediaFile(
+        message.terminalPhone,
+        multimedia.filename,
+        multimedia.data
+      );
+      
+      console.log(`📷 Saved ${multimedia.type} from ${message.terminalPhone}: ${multimedia.filename}`);
+    }
+    
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
       this.serialCounter++,

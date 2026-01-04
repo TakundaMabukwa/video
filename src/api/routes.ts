@@ -251,3 +251,96 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
   return router;
 }
+
+// Get alerts
+router.get('/alerts', (req, res) => {
+  const alerts = tcpServer.getAlerts();
+  res.json({
+    success: true,
+    data: alerts
+  });
+});
+
+// Get vehicle images
+router.get('/vehicles/:id/images', (req, res) => {
+  const { id } = req.params;
+  const mediaDir = path.join(process.cwd(), 'media', id);
+  
+  try {
+    if (!require('fs').existsSync(mediaDir)) {
+      return res.json({ success: true, data: [] });
+    }
+    
+    const files = require('fs').readdirSync(mediaDir)
+      .filter((file: string) => file.match(/\.(jpg|jpeg|png|mp4|avi)$/i))
+      .map((file: string) => ({
+        filename: file,
+        url: `/api/media/${id}/${file}`,
+        timestamp: file.split('_')[2]?.replace(/-/g, ':') || 'unknown'
+      }));
+    
+    res.json({ success: true, data: files });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to read images' });
+  }
+});
+
+// Serve media files
+router.get('/media/:vehicleId/:filename', (req, res) => {
+  const { vehicleId, filename } = req.params;
+  const { download } = req.query;
+  const filePath = path.join(process.cwd(), 'media', vehicleId, filename);
+  
+  if (require('fs').existsSync(filePath)) {
+    if (download === 'true') {
+      res.download(filePath);
+    } else {
+      res.sendFile(filePath);
+    }
+  } else {
+    res.status(404).json({ success: false, message: 'File not found' });
+  }
+});
+
+// Get all images from all vehicles
+router.get('/images', (req, res) => {
+  const mediaDir = path.join(process.cwd(), 'media');
+  const allImages: any[] = [];
+  
+  try {
+    if (!require('fs').existsSync(mediaDir)) {
+      return res.json({ success: true, data: [] });
+    }
+    
+    const vehicleDirs = require('fs').readdirSync(mediaDir, { withFileTypes: true })
+      .filter((dirent: any) => dirent.isDirectory())
+      .map((dirent: any) => dirent.name);
+    
+    for (const vehicleId of vehicleDirs) {
+      const vehicleMediaDir = path.join(mediaDir, vehicleId);
+      const files = require('fs').readdirSync(vehicleMediaDir)
+        .filter((file: string) => file.match(/\.(jpg|jpeg|png|mp4|avi)$/i))
+        .map((file: string) => ({
+          vehicleId,
+          filename: file,
+          viewUrl: `/api/media/${vehicleId}/${file}`,
+          downloadUrl: `/api/media/${vehicleId}/${file}?download=true`,
+          timestamp: file.split('_')[2]?.replace(/-/g, ':') || 'unknown',
+          channel: file.split('_')[1]?.replace('ch', '') || '1',
+          eventCode: file.split('_')[3]?.split('.')[0]?.replace('event', '') || '0'
+        }));
+      
+      allImages.push(...files);
+    }
+    
+    allImages.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+    
+    res.json({ 
+      success: true, 
+      total: allImages.length,
+      data: allImages 
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to read images' });
+  }
+});
