@@ -108,6 +108,14 @@ export class JTT808Server {
         console.log(`Camera capabilities (0x1003): ${message.body.toString('hex')}`);
         this.parseCapabilities(message.body);
         break;
+      case 0x0800: // Multimedia event message upload
+        console.log(`Multimedia event (0x800): ${message.body.toString('hex')}`);
+        this.handleMultimediaEvent(message, socket);
+        break;
+      case 0x0704: // Custom/proprietary message
+        console.log(`Custom message (0x704): ${message.body.toString('hex')}`);
+        this.handleCustomMessage(message, socket);
+        break;
       default:
         console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
     }
@@ -443,5 +451,27 @@ export class JTT808Server {
 
   getAlerts(): LocationAlert[] {
     return this.alertStorage.getAlerts();
+  }
+
+  private handleMultimediaEvent(message: any, socket: net.Socket): void {
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    socket.write(response);
+  }
+
+  private handleCustomMessage(message: any, socket: net.Socket): void {
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.serialCounter++,
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    socket.write(response);
   }
 }
