@@ -47,6 +47,55 @@ export class JTT1078Commands {
     return this.buildMessage(JTT808MessageType.START_VIDEO_REQUEST, terminalPhone, serialNumber, body);
   }
 
+  // Build 0x9201 command - Remote video playback request (screenshot)
+  static buildScreenshotCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    channelId: number = 1
+  ): Buffer {
+    const body = Buffer.alloc(16);
+    let offset = 0;
+    
+    // Server channel ID (4 bytes)
+    body.writeUInt32BE(1, offset);
+    offset += 4;
+    
+    // Playback method: 4 = Single frame upload (1 byte)
+    body.writeUInt8(4, offset);
+    offset += 1;
+    
+    // Fast forward multiple (1 byte) - not used for single frame
+    body.writeUInt8(0, offset);
+    offset += 1;
+    
+    // Timestamp (6 bytes BCD) - current time
+    const now = new Date();
+    const year = now.getFullYear() % 100;
+    const month = now.getMonth() + 1;
+    const day = now.getDate();
+    const hour = now.getHours();
+    const minute = now.getMinutes();
+    const second = now.getSeconds();
+    
+    body.writeUInt8(parseInt(year.toString().padStart(2, '0'), 16), offset++);
+    body.writeUInt8(parseInt(month.toString().padStart(2, '0'), 16), offset++);
+    body.writeUInt8(parseInt(day.toString().padStart(2, '0'), 16), offset++);
+    body.writeUInt8(parseInt(hour.toString().padStart(2, '0'), 16), offset++);
+    body.writeUInt8(parseInt(minute.toString().padStart(2, '0'), 16), offset++);
+    body.writeUInt8(parseInt(second.toString().padStart(2, '0'), 16), offset++);
+    
+    // Channel ID (1 byte)
+    body.writeUInt8(channelId, offset);
+    offset += 1;
+    
+    // Reserved (3 bytes)
+    body.writeUInt8(0, offset++);
+    body.writeUInt8(0, offset++);
+    body.writeUInt8(0, offset++);
+    
+    return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
+  }
+
   // Build general platform response (0x8001)
   static buildGeneralResponse(
     terminalPhone: string,

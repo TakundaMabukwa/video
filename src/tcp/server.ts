@@ -405,6 +405,25 @@ export class JTT808Server {
     return true;
   }
 
+  requestScreenshot(vehicleId: string, channel: number = 1): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildScreenshotCommand(
+      vehicleId,
+      this.serialCounter++,
+      channel
+    );
+    
+    console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel}`);
+    socket.write(command);
+    return true;
+  }
+
   // Public methods for video control
   startVideo(vehicleId: string, channel: number = 1): boolean {
     const vehicle = this.vehicles.get(vehicleId);

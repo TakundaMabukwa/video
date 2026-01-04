@@ -1,7 +1,6 @@
 import express from 'express';
 import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
-import { requestScreenshot } from '../tcp/screenshotHandler';
 import * as path from 'path';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
@@ -128,20 +127,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const { channel = 1 } = req.body;
     
-    const vehicle = tcpServer.getVehicle(id);
-    if (!vehicle || !vehicle.connected) {
-      return res.status(404).json({
+    const success = tcpServer.requestScreenshot(id, channel);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Screenshot requested for vehicle ${id}, channel ${channel}`
+      });
+    } else {
+      res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
       });
     }
-    
-    requestScreenshot(vehicle.socket, id, channel);
-    
-    res.json({
-      success: true,
-      message: `Screenshot requested for vehicle ${id}, channel ${channel}`
-    });
   });
 
   // Get stream info for a vehicle
