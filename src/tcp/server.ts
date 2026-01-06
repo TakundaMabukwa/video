@@ -4,6 +4,7 @@ import { JTT1078Commands } from './commands';
 import { AlertParser } from './alertParser';
 import { MultimediaParser } from './multimediaParser';
 import { AlertStorage } from '../storage/alertStorage';
+import { DeviceLogger } from '../logging/deviceLogger';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
 export class JTT808Server {
@@ -13,6 +14,7 @@ export class JTT808Server {
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
   private alertStorage = new AlertStorage();
+  private deviceLogger = new DeviceLogger();
 
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
@@ -138,6 +140,9 @@ export class JTT808Server {
   }
 
   private handleTerminalRegister(message: any, socket: net.Socket): void {
+    const ipAddress = socket.remoteAddress || 'unknown';
+    this.deviceLogger.logDevice(message.terminalPhone, message.terminalPhone, ipAddress);
+    
     const vehicle: Vehicle = {
       id: message.terminalPhone,
       phone: message.terminalPhone,
@@ -215,8 +220,12 @@ export class JTT808Server {
   }
 
   private handleTerminalAuth(message: any, socket: net.Socket): void {
+    const ipAddress = socket.remoteAddress || 'unknown';
+    
     // If vehicle doesn't exist, create it (camera skipped registration)
     if (!this.vehicles.has(message.terminalPhone)) {
+      this.deviceLogger.logDevice(message.terminalPhone, message.terminalPhone, ipAddress);
+      
       const vehicle: Vehicle = {
         id: message.terminalPhone,
         phone: message.terminalPhone,
@@ -472,6 +481,10 @@ export class JTT808Server {
 
   getAlerts(): LocationAlert[] {
     return this.alertStorage.getAlerts();
+  }
+
+  getDevices(): any[] {
+    return this.deviceLogger.getDevices();
   }
 
   private handleMultimediaEvent(message: any, socket: net.Socket): void {

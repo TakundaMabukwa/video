@@ -372,5 +372,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Get all devices
+  router.get('/devices', (req, res) => {
+    const devices = tcpServer.getDevices();
+    res.json({
+      success: true,
+      total: devices.length,
+      data: devices
+    });
+  });
+
   return router;
 }
