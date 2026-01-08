@@ -16,35 +16,34 @@ export class MultimediaParser {
 
     try {
       const multimediaId = body.readUInt32BE(0);
-      const multimediaType = body.readUInt8(4);
-      const multimediaFormat = body.readUInt8(5);
-      const eventCode = body.readUInt8(6);
-      const channelId = body.readUInt8(7);
       
-      // Check if this is a fragmented packet (Type 0xFF = JPEG start in data)
-      if (body.length >= 12 && body[8] === 0xFF && body[9] === 0xD8) {
-        console.log(`\u2705 JPEG fragment start: ID=${multimediaId}`);
+      // Check if JPEG data starts at byte 8
+      if (body.length >= 10 && body[8] === 0xFF && body[9] === 0xD8) {
         const key = `${vehicleId}_${multimediaId}`;
-        this.fragmentBuffers.set(key, {
-          id: multimediaId,
-          vehicleId,
-          fragments: [body.slice(8)],
-          timestamp: new Date()
-        });
-        return null; // Wait for more fragments
+        const existing = this.fragmentBuffers.get(key);
+        
+        if (!existing) {
+          this.fragmentBuffers.set(key, {
+            id: multimediaId,
+            vehicleId,
+            fragments: [body.slice(8)],
+            timestamp: new Date()
+          });
+          return null;
+        }
       }
       
-      // Check if this is a continuation fragment
+      // Check continuation fragment
       const key = `${vehicleId}_${multimediaId}`;
       const existing = this.fragmentBuffers.get(key);
       
       if (existing) {
         existing.fragments.push(body.slice(8));
         
-        // Check if we have JPEG end marker
+        // Check for JPEG end
         const lastFragment = body.slice(8);
         let hasEnd = false;
-        for (let i = lastFragment.length - 2; i >= 0; i--) {
+        for (let i = lastFragment.length - 2; i >= Math.max(0, lastFragment.length - 100); i--) {
           if (lastFragment[i] === 0xFF && lastFragment[i + 1] === 0xD9) {
             hasEnd = true;
             break;
@@ -52,67 +51,30 @@ export class MultimediaParser {
         }
         
         if (hasEnd) {
-          console.log(`\u2705 JPEG complete: ${existing.fragments.length} fragments`);
           const fullData = Buffer.concat(existing.fragments);
           this.fragmentBuffers.delete(key);
           
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const filename = `${vehicleId}_ch${channelId}_${timestamp}_event${eventCode}.jpg`;
+          let jpegEnd = fullData.length;
+          for (let i = fullData.length - 2; i >= 0; i--) {
+            if (fullData[i] === 0xFF && fullData[i + 1] === 0xD9) {
+              jpegEnd = i + 2;
+              break;
+            }
+          }
           
-          return {
-            type: 'jpeg',
-            data: fullData,
-            filename
-          };
+          const jpegData = fullData.slice(0, jpegEnd);
+          console.log(`\u2705 JPEG: ${existing.fragments.length} fragments, ${jpegData.length} bytes`);
+          
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const filename = `${vehicleId}_${timestamp}.jpg`;
+          
+          return { type: 'jpeg', data: jpegData, filename };
         }
         
-        return null; // Wait for more fragments
+        return null;
       }
       
-      // Single-packet image (old format)
-      if (body.length < 36) return null;
-      
-      let multimediaData = body.slice(36);
-      
-      // Search for JPEG markers
-      if (multimediaType === 0) {
-        let jpegStart = -1;
-        for (let i = 0; i < Math.min(200, multimediaData.length - 2); i++) {
-          if (multimediaData[i] === 0xFF && multimediaData[i + 1] === 0xD8) {
-            jpegStart = i;
-            break;
-          }
-        }
-        
-        if (jpegStart === -1) return null;
-        
-        multimediaData = multimediaData.slice(jpegStart);
-        
-        // Find end marker
-        for (let i = multimediaData.length - 2; i >= 0; i--) {
-          if (multimediaData[i] === 0xFF && multimediaData[i + 1] === 0xD9) {
-            multimediaData = multimediaData.slice(0, i + 2);
-            break;
-          }
-        }
-      }
-      
-      let fileType = 'unknown';
-      let extension = '.bin';
-      
-      if (multimediaType === 0) {
-        fileType = 'jpeg';
-        extension = '.jpg';
-      }
-      
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filename = `${vehicleId}_ch${channelId}_${timestamp}_event${eventCode}${extension}`;
-      
-      return {
-        type: fileType,
-        data: multimediaData,
-        filename
-      };
+      return null;
     } catch (error) {
       console.error('Failed to parse multimedia data:', error);
       return null;
