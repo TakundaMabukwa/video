@@ -1,0 +1,906 @@
+{
+  "success": true,
+  "total": 100,
+  "data": [
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-08-50-166Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-08-50-166Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-08-50-166Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:08:50:166Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-07-39-346Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-07-39-346Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-07-39-346Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:07:39:346Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-06-27-711Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-06-27-711Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-06-27-711Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:06:27:711Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-05-16-045Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-05-16-045Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-05-16-045Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:05:16:045Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-04-08-227Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-04-08-227Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-04-08-227Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:04:08:227Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-01-39-722Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-01-39-722Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-01-39-722Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:01:39:722Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T18-00-31-733Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-00-31-733Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T18-00-31-733Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T18:00:31:733Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-59-18-411Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-59-18-411Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-59-18-411Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:59:18:411Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-58-09-088Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-58-09-088Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-58-09-088Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:58:09:088Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-56-57-641Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-56-57-641Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-56-57-641Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:56:57:641Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-55-49-704Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-55-49-704Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-55-49-704Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:55:49:704Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-54-36-251Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-54-36-251Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-54-36-251Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:54:36:251Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-53-26-135Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-53-26-135Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-53-26-135Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:53:26:135Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-52-17-705Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-52-17-705Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-52-17-705Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:52:17:705Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-51-04-689Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-51-04-689Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-51-04-689Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:51:04:689Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-49-55-306Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-49-55-306Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-49-55-306Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:49:55:306Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-48-46-279Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-48-46-279Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-48-46-279Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:48:46:279Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-47-32-968Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-47-32-968Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-47-32-968Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:47:32:968Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-46-22-629Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-46-22-629Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-46-22-629Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:46:22:629Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-45-24-223Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-45-24-223Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-45-24-223Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:45:24:223Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-44-32-380Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-44-32-380Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-44-32-380Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:44:32:380Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-43-51-026Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-51-026Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-51-026Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:43:51:026Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-43-20-506Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-20-506Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-20-506Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:43:20:506Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-43-00-371Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-00-371Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-43-00-371Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:43:00:371Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-42-51-326Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-42-51-326Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-42-51-326Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:42:51:326Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-28-46-692Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-28-46-692Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-28-46-692Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:28:46:692Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-27-36-320Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-27-36-320Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-27-36-320Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:27:36:320Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-26-25-822Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-26-25-822Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-26-25-822Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:26:25:822Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-25-15-585Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-25-15-585Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-25-15-585Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:25:15:585Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-24-05-201Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-24-05-201Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-24-05-201Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:24:05:201Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-22-54-626Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-22-54-626Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-22-54-626Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:22:54:626Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-21-44-276Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-21-44-276Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-21-44-276Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:21:44:276Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-20-33-881Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-20-33-881Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-20-33-881Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:20:33:881Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-19-23-324Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-19-23-324Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-19-23-324Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:19:23:324Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-18-13-205Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-18-13-205Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-18-13-205Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:18:13:205Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-17-02-909Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-17-02-909Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-17-02-909Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:17:02:909Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-16-02-098Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-16-02-098Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-16-02-098Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:16:02:098Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-15-11-820Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-15-11-820Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-15-11-820Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:15:11:820Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-14-31-939Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-14-31-939Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-14-31-939Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:14:31:939Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-14-00-904Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-14-00-904Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-14-00-904Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:14:00:904Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-13-40-169Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-13-40-169Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-13-40-169Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:13:40:169Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T17-13-31-646Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-13-31-646Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T17-13-31-646Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T17:13:31:646Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-38-18-018Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-38-18-018Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-38-18-018Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:38:18:018Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-37-07-687Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-37-07-687Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-37-07-687Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:37:07:687Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-35-57-138Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-35-57-138Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-35-57-138Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:35:57:138Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-34-46-893Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-34-46-893Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-34-46-893Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:34:46:893Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-33-38-746Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-33-38-746Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-33-38-746Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:33:38:746Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-32-25-846Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-32-25-846Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-32-25-846Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:32:25:846Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-31-15-516Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-31-15-516Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-31-15-516Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:31:15:516Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-30-05-146Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-30-05-146Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-30-05-146Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:30:05:146Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-28-54-671Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-28-54-671Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-28-54-671Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:28:54:671Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-27-44-228Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-27-44-228Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-27-44-228Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:27:44:228Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-26-33-959Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-26-33-959Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-26-33-959Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:26:33:959Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-25-35-897Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-25-35-897Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-25-35-897Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:25:35:897Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-24-42-885Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-24-42-885Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-24-42-885Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:24:42:885Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-23-58-440Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-58-440Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-58-440Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:23:58:440Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-23-27-745Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-27-745Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-27-745Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:23:27:745Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-23-07-577Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-07-577Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-23-07-577Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:23:07:577Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T16-22-58-651Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-22-58-651Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T16-22-58-651Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T16:22:58:651Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-22-09-359Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-22-09-359Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-22-09-359Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:22:09:359Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-20-57-057Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-20-57-057Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-20-57-057Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:20:57:057Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-19-46-736Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-19-46-736Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-19-46-736Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:19:46:736Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-18-37-559Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-18-37-559Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-18-37-559Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:18:37:559Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-17-27-793Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-17-27-793Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-17-27-793Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:17:27:793Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-16-17-202Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-16-17-202Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-16-17-202Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:16:17:202Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-15-06-399Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-15-06-399Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-15-06-399Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:15:06:399Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-13-57-199Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-13-57-199Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-13-57-199Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:13:57:199Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-12-44-207Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-12-44-207Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-12-44-207Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:12:44:207Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-11-33-587Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-11-33-587Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-11-33-587Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:11:33:587Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-10-23-169Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-10-23-169Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-10-23-169Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:10:23:169Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-09-13-192Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-09-13-192Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-09-13-192Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:09:13:192Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-08-03-842Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-08-03-842Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-08-03-842Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:08:03:842Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-06-53-649Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-06-53-649Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-06-53-649Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:06:53:649Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-05-44-275Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-05-44-275Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-05-44-275Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:05:44:275Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-04-41-362Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-04-41-362Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-04-41-362Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:04:41:362Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-03-53-765Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-03-53-765Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-03-53-765Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:03:53:765Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-03-11-071Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-03-11-071Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-03-11-071Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:03:11:071Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-02-40-218Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-40-218Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-40-218Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:02:40:218Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-02-19-759Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-19-759Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-19-759Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:02:19:759Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T15-02-10-994Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-10-994Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T15-02-10-994Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T15:02:10:994Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-45-41-683Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-45-41-683Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-45-41-683Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:45:41:683Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-44-33-648Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-44-33-648Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-44-33-648Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:44:33:648Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-43-20-981Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-43-20-981Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-43-20-981Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:43:20:981Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-42-12-843Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-42-12-843Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-42-12-843Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:42:12:843Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-40-59-798Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-40-59-798Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-40-59-798Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:40:59:798Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-39-49-701Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-39-49-701Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-39-49-701Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:39:49:701Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-38-41-794Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-38-41-794Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-38-41-794Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:38:41:794Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-37-28-981Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-37-28-981Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-37-28-981Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:37:28:981Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-36-20-926Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-36-20-926Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-36-20-926Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:36:20:926Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-35-07-917Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-35-07-917Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-35-07-917Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:35:07:917Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-33-57-893Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-33-57-893Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-33-57-893Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:33:57:893Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-32-49-525Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-32-49-525Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-32-49-525Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:32:49:525Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-31-37-077Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-31-37-077Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-31-37-077Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:31:37:077Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-30-29-069Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-30-29-069Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-30-29-069Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:30:29:069Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-29-26-097Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-29-26-097Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-29-26-097Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:29:26:097Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-28-38-176Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-28-38-176Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-28-38-176Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:28:38:176Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-27-55-120Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-55-120Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-55-120Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:27:55:120Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-27-27-075Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-27-075Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-27-075Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:27:27:075Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-27-03-862Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-03-862Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-27-03-862Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:27:03:862Z",
+      "channel": "0",
+      "eventCode": "0"
+    },
+    {
+      "vehicleId": "221083631472",
+      "filename": "221083631472_ch0_2026-01-04T14-26-54-063Z_event0.jpg",
+      "viewUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-26-54-063Z_event0.jpg",
+      "downloadUrl": "/api/media/221083631472/221083631472_ch0_2026-01-04T14-26-54-063Z_event0.jpg?download=true",
+      "timestamp": "2026:01:04T14:26:54:063Z",
+      "channel": "0",
+      "eventCode": "0"
+    }
+  ]
+}

@@ -330,19 +330,31 @@ export class JTT808Server {
   }
 
   private processAlert(alert: LocationAlert): void {
+    // Check if there are any actual alerts
+    const hasVideoAlarms = alert.videoAlarms && Object.values(alert.videoAlarms).some(v => v === true);
+    const hasDrivingBehavior = alert.drivingBehavior && (alert.drivingBehavior.fatigue || alert.drivingBehavior.phoneCall || alert.drivingBehavior.smoking || alert.drivingBehavior.custom > 0);
+    const hasSignalLoss = alert.signalLossChannels && alert.signalLossChannels.length > 0;
+    const hasBlocking = alert.blockingChannels && alert.blockingChannels.length > 0;
+    const hasMemoryFailures = alert.memoryFailures && (alert.memoryFailures.main.length > 0 || alert.memoryFailures.backup.length > 0);
+    
+    // Only log if there are actual alerts
+    if (!hasVideoAlarms && !hasDrivingBehavior && !hasSignalLoss && !hasBlocking && !hasMemoryFailures) {
+      return; // No alerts, skip logging
+    }
+    
     console.log('\n' + '='.repeat(80));
     console.log(`🚨🚨🚨 ALERT DETECTED 🚨🚨🚨`);
     console.log(`Vehicle: ${alert.vehicleId} | Time: ${alert.timestamp.toISOString()}`);
     console.log(`Location: ${alert.latitude}, ${alert.longitude}`);
     console.log('='.repeat(80));
     
-    if (alert.videoAlarms) {
+    if (hasVideoAlarms) {
       console.log('\n📹 VIDEO ALARMS:', alert.videoAlarms);
     }
     
-    if (alert.drivingBehavior) {
+    if (hasDrivingBehavior) {
       console.log('\n🚨 ABNORMAL DRIVING BEHAVIOR:');
-      const behavior = alert.drivingBehavior;
+      const behavior = alert.drivingBehavior!;
       
       if (behavior.fatigue) {
         console.log(`  😴 FATIGUE - Level: ${behavior.fatigueLevel}/100 ${behavior.fatigueLevel > 70 ? '⚠️ CRITICAL' : ''}`);
@@ -358,20 +370,20 @@ export class JTT808Server {
       }
     }
     
-    if (alert.signalLossChannels?.length) {
-      console.log(`\n📺 SIGNAL LOSS - Channels: ${alert.signalLossChannels.join(', ')}`);
+    if (hasSignalLoss) {
+      console.log(`\n📺 SIGNAL LOSS - Channels: ${alert.signalLossChannels!.join(', ')}`);
     }
     
-    if (alert.blockingChannels?.length) {
-      console.log(`🚫 SIGNAL BLOCKING - Channels: ${alert.blockingChannels.join(', ')}`);
+    if (hasBlocking) {
+      console.log(`🚫 SIGNAL BLOCKING - Channels: ${alert.blockingChannels!.join(', ')}`);
     }
     
-    if (alert.memoryFailures) {
-      if (alert.memoryFailures.main.length) {
-        console.log(`\n💾 MAIN MEMORY FAILURES: ${alert.memoryFailures.main.join(', ')}`);
+    if (hasMemoryFailures) {
+      if (alert.memoryFailures!.main.length) {
+        console.log(`\n💾 MAIN MEMORY FAILURES: ${alert.memoryFailures!.main.join(', ')}`);
       }
-      if (alert.memoryFailures.backup.length) {
-        console.log(`💾 BACKUP MEMORY FAILURES: ${alert.memoryFailures.backup.join(', ')}`);
+      if (alert.memoryFailures!.backup.length) {
+        console.log(`💾 BACKUP MEMORY FAILURES: ${alert.memoryFailures!.backup.join(', ')}`);
       }
     }
     

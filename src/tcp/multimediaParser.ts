@@ -6,7 +6,8 @@ export class MultimediaParser {
     if (body.length < 28) return null;
 
     try {
-      console.log(`Raw multimedia body (${body.length} bytes): ${body.slice(0, 32).toString('hex')}`);
+      console.log(`\n📦 Multimedia packet: ${body.length} bytes`);
+      console.log(`First 64 bytes: ${body.slice(0, 64).toString('hex')}`);
       
       // JT/T 808 multimedia data format (Table 17)
       const multimediaId = body.readUInt32BE(0);
@@ -15,31 +16,46 @@ export class MultimediaParser {
       const eventCode = body.readUInt8(6);
       const channelId = body.readUInt8(7);
       
-      // Location data (28 bytes) - skip for now
-      const locationData = body.slice(8, 36);
-      
-      console.log(`Multimedia: ID=${multimediaId}, Type=${multimediaType}, Format=${multimediaFormat}, Event=${eventCode}, Channel=${channelId}`);
+      console.log(`ID=${multimediaId}, Type=${multimediaType}, Format=${multimediaFormat}, Event=${eventCode}, Ch=${channelId}`);
       
       // Extract actual multimedia data (after 36-byte header)
       let multimediaData = body.slice(36);
+      console.log(`Data after header: ${multimediaData.length} bytes, first 32: ${multimediaData.slice(0, 32).toString('hex')}`);
       
       // For images, look for JPEG magic bytes
       if (multimediaType === 0) {
-        // Search for JPEG start in the remaining data
-        for (let i = 0; i < Math.min(100, multimediaData.length - 2); i++) {
+        let jpegStart = -1;
+        for (let i = 0; i < Math.min(200, multimediaData.length - 2); i++) {
           if (multimediaData[i] === 0xFF && multimediaData[i + 1] === 0xD8) {
-            console.log(`✅ Found JPEG at offset ${i} in multimedia data`);
-            multimediaData = multimediaData.slice(i);
+            jpegStart = i;
+            console.log(`✅ JPEG start (FF D8) at offset ${i}`);
             break;
           }
         }
         
-        // Validate JPEG end marker
-        const lastBytes = multimediaData.slice(-2);
-        if (lastBytes[0] === 0xFF && lastBytes[1] === 0xD9) {
-          console.log('✅ Valid JPEG with end marker');
+        if (jpegStart === -1) {
+          console.log(`❌ NO JPEG MARKER FOUND in first 200 bytes`);
+          console.log(`Full data (first 100): ${multimediaData.slice(0, 100).toString('hex')}`);
+          return null;
+        }
+        
+        multimediaData = multimediaData.slice(jpegStart);
+        
+        // Find JPEG end marker
+        let jpegEnd = -1;
+        for (let i = multimediaData.length - 2; i >= 0; i--) {
+          if (multimediaData[i] === 0xFF && multimediaData[i + 1] === 0xD9) {
+            jpegEnd = i + 2;
+            console.log(`✅ JPEG end (FF D9) at offset ${i}`);
+            break;
+          }
+        }
+        
+        if (jpegEnd > 0) {
+          multimediaData = multimediaData.slice(0, jpegEnd);
+          console.log(`✅ Valid JPEG: ${multimediaData.length} bytes`);
         } else {
-          console.log('⚠️ JPEG missing end marker, truncating at last valid data');
+          console.log(`⚠️ No JPEG end marker, using full data: ${multimediaData.length} bytes`);
         }
       }
       
@@ -47,7 +63,7 @@ export class MultimediaParser {
       let fileType = 'unknown';
       let extension = '.bin';
       
-      if (multimediaType === 0) { // Image
+      if (multimediaType === 0) {
         if (multimediaFormat === 0) {
           fileType = 'jpeg';
           extension = '.jpg';
@@ -55,10 +71,10 @@ export class MultimediaParser {
           fileType = 'tiff';
           extension = '.tiff';
         }
-      } else if (multimediaType === 1) { // Audio
+      } else if (multimediaType === 1) {
         fileType = 'wav';
         extension = '.wav';
-      } else if (multimediaType === 2) { // Video
+      } else if (multimediaType === 2) {
         fileType = 'mp4';
         extension = '.mp4';
       }
