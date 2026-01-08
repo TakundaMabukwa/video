@@ -281,6 +281,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Get vehicle images
   router.get('/vehicles/:id/images', (req, res) => {
     const { id } = req.params;
+    const limit = parseInt(req.query.limit as string) || 50;
     const mediaDir = path.join(process.cwd(), 'media', id);
     
     try {
@@ -289,7 +290,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
       
       const files = require('fs').readdirSync(mediaDir)
-        .filter((file: string) => file.match(/\.(jpg|jpeg|png|mp4|avi)$/i))
+        .filter((file: string) => file.match(/\.(jpg|jpeg|png)$/i))
+        .slice(0, limit)
         .map((file: string) => ({
           filename: file,
           viewUrl: `/api/media/${id}/${file}`,
@@ -333,6 +335,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/images', (req, res) => {
     const mediaDir = path.join(process.cwd(), 'media');
     const allImages: any[] = [];
+    const limit = parseInt(req.query.limit as string) || 100;
     
     try {
       if (!require('fs').existsSync(mediaDir)) {
@@ -346,7 +349,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       for (const vehicleId of vehicleDirs) {
         const vehicleMediaDir = path.join(mediaDir, vehicleId);
         const files = require('fs').readdirSync(vehicleMediaDir)
-          .filter((file: string) => file.match(/\.(jpg|jpeg|png|mp4|avi)$/i))
+          .filter((file: string) => file.match(/\.(jpg|jpeg|png)$/i))
+          .slice(0, limit)
           .map((file: string) => ({
             vehicleId,
             filename: file,
@@ -358,6 +362,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           }));
         
         allImages.push(...files);
+        if (allImages.length >= limit) break;
       }
       
       allImages.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
@@ -365,7 +370,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       res.json({ 
         success: true, 
         total: allImages.length,
-        data: allImages 
+        data: allImages.slice(0, limit)
       });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to read images' });
