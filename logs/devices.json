@@ -1,0 +1,154 @@
+[
+  {
+    "vehicleId": "221083721190",
+    "phone": "221083721190",
+    "firstSeen": "2026-01-06T06:50:33.594Z",
+    "lastSeen": "2026-01-08T09:30:41.452Z",
+    "ipAddress": "::ffff:41.13.7.249",
+    "connectionCount": 3846
+  },
+  {
+    "vehicleId": "628074814327",
+    "phone": "628074814327",
+    "firstSeen": "2026-01-06T06:50:33.633Z",
+    "lastSeen": "2026-01-08T08:40:19.007Z",
+    "ipAddress": "::ffff:105.245.24.51",
+    "connectionCount": 5817
+  },
+  {
+    "vehicleId": "221083667385",
+    "phone": "221083667385",
+    "firstSeen": "2026-01-06T06:50:33.856Z",
+    "lastSeen": "2026-01-08T08:40:18.564Z",
+    "ipAddress": "::ffff:105.245.36.89",
+    "connectionCount": 4465
+  },
+  {
+    "vehicleId": "221083648922",
+    "phone": "221083648922",
+    "firstSeen": "2026-01-06T06:50:34.027Z",
+    "lastSeen": "2026-01-08T09:31:21.139Z",
+    "ipAddress": "::ffff:105.245.44.63",
+    "connectionCount": 1849
+  },
+  {
+    "vehicleId": "221083631472",
+    "phone": "221083631472",
+    "firstSeen": "2026-01-06T06:50:34.161Z",
+    "lastSeen": "2026-01-07T08:08:06.481Z",
+    "ipAddress": "::ffff:41.13.13.37",
+    "connectionCount": 1935
+  },
+  {
+    "vehicleId": "221083669290",
+    "phone": "221083669290",
+    "firstSeen": "2026-01-06T06:50:34.196Z",
+    "lastSeen": "2026-01-07T18:38:03.771Z",
+    "ipAddress": "::ffff:41.13.148.20",
+    "connectionCount": 3887
+  },
+  {
+    "vehicleId": "221083667252",
+    "phone": "221083667252",
+    "firstSeen": "2026-01-06T06:50:34.506Z",
+    "lastSeen": "2026-01-08T08:16:07.409Z",
+    "ipAddress": "::ffff:41.13.148.99",
+    "connectionCount": 3547
+  },
+  {
+    "vehicleId": "221080361990",
+    "phone": "221080361990",
+    "firstSeen": "2026-01-06T06:50:39.427Z",
+    "lastSeen": "2026-01-08T07:33:45.334Z",
+    "ipAddress": "::ffff:105.245.120.245",
+    "connectionCount": 3461
+  },
+  {
+    "vehicleId": "221084138949",
+    "phone": "221084138949",
+    "firstSeen": "2026-01-06T06:50:39.502Z",
+    "lastSeen": "2026-01-08T09:58:27.266Z",
+    "ipAddress": "::ffff:105.245.40.210",
+    "connectionCount": 6722
+  },
+  {
+    "vehicleId": "628074862359",
+    "phone": "628074862359",
+    "firstSeen": "2026-01-06T06:50:39.567Z",
+    "lastSeen": "2026-01-08T08:40:18.009Z",
+    "ipAddress": "::ffff:41.13.20.25",
+    "connectionCount": 6111
+  },
+  {
+    "vehicleId": "221083702554",
+    "phone": "221083702554",
+    "firstSeen": "2026-01-06T06:50:41.787Z",
+    "lastSeen": "2026-01-08T08:40:18.192Z",
+    "ipAddress": "::ffff:41.13.10.141",
+    "connectionCount": 5209
+  },
+  {
+    "vehicleId": "221083669142",
+    "phone": "221083669142",
+    "firstSeen": "2026-01-06T06:53:29.282Z",
+    "lastSeen": "2026-01-08T08:59:02.695Z",
+    "ipAddress": "::ffff:105.245.0.126",
+    "connectionCount": 2947
+  },
+  {
+    "vehicleId": "221083666502",
+    "phone": "221083666502",
+    "firstSeen": "2026-01-06T06:53:41.825Z",
+    "lastSeen": "2026-01-08T08:45:28.873Z",
+    "ipAddress": "::ffff:105.245.36.218",
+    "connectionCount": 491
+  },
+  {
+    "vehicleId": "221083663558",
+    "phone": "221083663558",
+    "firstSeen": "2026-01-06T06:55:49.953Z",
+    "lastSeen": "2026-01-08T09:31:21.437Z",
+    "ipAddress": "::ffff:105.245.171.199",
+    "connectionCount": 3065
+  },
+  {
+    "vehicleId": "221083639541",
+    "phone": "221083639541",
+    "firstSeen": "2026-01-06T06:56:06.785Z",
+    "lastSeen": "2026-01-08T07:42:47.511Z",
+    "ipAddress": "::ffff:41.13.21.147",
+    "connectionCount": 169
+  },
+  {
+    "vehicleId": "221083648963",
+    "phone": "221083648963",
+    "firstSeen": "2026-01-06T07:14:23.892Z",
+    "lastSeen": "2026-01-07T08:26:01.353Z",
+    "ipAddress": "::ffff:105.245.24.8",
+    "connectionCount": 374
+  },
+  {
+    "vehicleId": "221083649235",
+    "phone": "221083649235",
+    "firstSeen": "2026-01-06T07:48:15.888Z",
+    "lastSeen": "2026-01-08T07:05:35.934Z",
+    "ipAddress": "::ffff:105.245.32.248",
+    "connectionCount": 2880
+  },
+  {
+    "vehicleId": "221083632934",
+    "phone": "221083632934",
+    "firstSeen": "2026-01-06T08:23:55.970Z",
+    "lastSeen": "2026-01-08T08:16:04.078Z",
+    "ipAddress": "::ffff:105.245.56.76",
+    "connectionCount": 4763
+  },
+  {
+    "vehicleId": "221083633486",
+    "phone": "221083633486",
+    "firstSeen": "2026-01-06T11:19:38.577Z",
+    "lastSeen": "2026-01-06T11:38:08.726Z",
+    "ipAddress": "::ffff:105.245.16.244",
+    "connectionCount": 2
+  }
+]

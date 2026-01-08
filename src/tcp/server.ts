@@ -269,6 +269,47 @@ export class JTT808Server {
   }
 
   private handleLocationReport(message: any, socket: net.Socket): void {
+    console.log(`\n📍 Location Report from ${message.terminalPhone}`);
+    console.log(`Body length: ${message.body.length} bytes`);
+    console.log(`Body hex: ${message.body.toString('hex')}`);
+    
+    // Parse basic location (first 28 bytes)
+    if (message.body.length >= 28) {
+      const alarmFlag = message.body.readUInt32BE(0);
+      const statusFlag = message.body.readUInt32BE(4);
+      const lat = message.body.readUInt32BE(8) / 1000000;
+      const lon = message.body.readUInt32BE(12) / 1000000;
+      console.log(`Alarm flags: 0x${alarmFlag.toString(16).padStart(8, '0')}`);
+      console.log(`Status flags: 0x${statusFlag.toString(16).padStart(8, '0')}`);
+      console.log(`Location: ${lat}, ${lon}`);
+      
+      // Parse additional info fields
+      let offset = 28;
+      console.log(`\nAdditional Info Fields:`);
+      while (offset < message.body.length - 2) {
+        const infoId = message.body.readUInt8(offset);
+        const infoLength = message.body.readUInt8(offset + 1);
+        
+        if (offset + 2 + infoLength > message.body.length) break;
+        
+        const infoData = message.body.slice(offset + 2, offset + 2 + infoLength);
+        console.log(`  ID: 0x${infoId.toString(16).padStart(2, '0')} | Length: ${infoLength} | Data: ${infoData.toString('hex')}`);
+        
+        // Decode known alert fields
+        if (infoId === 0x14) console.log(`    → Video Alarms`);
+        if (infoId === 0x15) console.log(`    → Signal Loss Channels`);
+        if (infoId === 0x16) console.log(`    → Signal Blocking Channels`);
+        if (infoId === 0x17) console.log(`    → Memory Failures`);
+        if (infoId === 0x18) console.log(`    → Abnormal Driving Behavior`);
+        
+        offset += 2 + infoLength;
+      }
+      
+      if (offset === 28) {
+        console.log(`  ⚠️  NO ADDITIONAL INFO FIELDS - Cameras not sending alert data`);
+      }
+    }
+    
     // Parse location and alert data
     const alert = AlertParser.parseLocationReport(message.body, message.terminalPhone);
     
@@ -289,19 +330,22 @@ export class JTT808Server {
   }
 
   private processAlert(alert: LocationAlert): void {
-    console.log(`\n=== ALERT from ${alert.vehicleId} at ${alert.timestamp.toISOString()} ===`);
+    console.log('\n' + '='.repeat(80));
+    console.log(`🚨🚨🚨 ALERT DETECTED 🚨🚨🚨`);
+    console.log(`Vehicle: ${alert.vehicleId} | Time: ${alert.timestamp.toISOString()}`);
     console.log(`Location: ${alert.latitude}, ${alert.longitude}`);
+    console.log('='.repeat(80));
     
     if (alert.videoAlarms) {
-      console.log('Video Alarms:', alert.videoAlarms);
+      console.log('\n📹 VIDEO ALARMS:', alert.videoAlarms);
     }
     
     if (alert.drivingBehavior) {
-      console.log('\n🚨 ABNORMAL DRIVING BEHAVIOR DETECTED:');
+      console.log('\n🚨 ABNORMAL DRIVING BEHAVIOR:');
       const behavior = alert.drivingBehavior;
       
       if (behavior.fatigue) {
-        console.log(`  😴 FATIGUE DETECTED - Level: ${behavior.fatigueLevel}/100`);
+        console.log(`  😴 FATIGUE - Level: ${behavior.fatigueLevel}/100 ${behavior.fatigueLevel > 70 ? '⚠️ CRITICAL' : ''}`);
       }
       if (behavior.phoneCall) {
         console.log(`  📱 PHONE CALL DETECTED`);
@@ -310,28 +354,28 @@ export class JTT808Server {
         console.log(`  🚬 SMOKING DETECTED`);
       }
       if (behavior.custom > 0) {
-        console.log(`  ⚠️  CUSTOM BEHAVIOR: ${behavior.custom}`);
+        console.log(`  ⚠️  CUSTOM: ${behavior.custom}`);
       }
     }
     
     if (alert.signalLossChannels?.length) {
-      console.log(`📺 Signal Loss - Channels: ${alert.signalLossChannels.join(', ')}`);
+      console.log(`\n📺 SIGNAL LOSS - Channels: ${alert.signalLossChannels.join(', ')}`);
     }
     
     if (alert.blockingChannels?.length) {
-      console.log(`🚫 Signal Blocking - Channels: ${alert.blockingChannels.join(', ')}`);
+      console.log(`🚫 SIGNAL BLOCKING - Channels: ${alert.blockingChannels.join(', ')}`);
     }
     
     if (alert.memoryFailures) {
       if (alert.memoryFailures.main.length) {
-        console.log(`💾 Main Memory Failures: ${alert.memoryFailures.main.join(', ')}`);
+        console.log(`\n💾 MAIN MEMORY FAILURES: ${alert.memoryFailures.main.join(', ')}`);
       }
       if (alert.memoryFailures.backup.length) {
-        console.log(`💾 Backup Memory Failures: ${alert.memoryFailures.backup.join(', ')}`);
+        console.log(`💾 BACKUP MEMORY FAILURES: ${alert.memoryFailures.backup.join(', ')}`);
       }
     }
     
-    console.log('=== END ALERT ===\n');
+    console.log('\n' + '='.repeat(80) + '\n');
     
     // Save alert to JSON database
     this.alertStorage.saveAlert(alert);

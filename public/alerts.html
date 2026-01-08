@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🚨 Alert Monitor - JT/T 1078</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui; background: #0a0a0a; color: #fff; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+    h1 { font-size: 24px; }
+    .stats { display: flex; gap: 20px; }
+    .stat { background: #1a1a1a; padding: 10px 20px; border-radius: 8px; }
+    .stat-value { font-size: 32px; font-weight: bold; color: #ff4444; }
+    .stat-label { font-size: 12px; color: #888; }
+    .alerts { display: flex; flex-direction: column; gap: 15px; }
+    .alert { background: #1a1a1a; border-left: 4px solid #ff4444; padding: 20px; border-radius: 8px; animation: slideIn 0.3s; }
+    .alert.critical { border-color: #ff0000; background: #2a0000; }
+    .alert.high { border-color: #ff4444; }
+    .alert.medium { border-color: #ff9944; }
+    .alert.low { border-color: #ffdd44; }
+    .alert-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+    .alert-title { font-size: 18px; font-weight: bold; }
+    .alert-time { color: #888; font-size: 14px; }
+    .alert-vehicle { color: #4af; font-size: 14px; margin-bottom: 10px; }
+    .alert-details { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+    .detail { background: #0a0a0a; padding: 10px; border-radius: 4px; }
+    .detail-label { font-size: 12px; color: #888; }
+    .detail-value { font-size: 16px; margin-top: 5px; }
+    .icon { font-size: 24px; margin-right: 10px; }
+    .no-alerts { text-align: center; padding: 60px; color: #666; font-size: 18px; }
+    .sound-toggle { background: #1a1a1a; border: 2px solid #4af; color: #4af; padding: 10px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    .sound-toggle.active { background: #4af; color: #000; }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(-20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .pulse { animation: pulse 1s infinite; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🚨 Real-Time Alert Monitor</h1>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value" id="alertCount">0</div>
+        <div class="stat-label">Total Alerts</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value" id="criticalCount">0</div>
+        <div class="stat-label">Critical</div>
+      </div>
+      <button class="sound-toggle active" id="soundToggle" onclick="toggleSound()">🔊 Sound ON</button>
+    </div>
+  </div>
+  
+  <div class="alerts" id="alertsContainer">
+    <div class="no-alerts">✅ No alerts detected. System monitoring...</div>
+  </div>
+
+  <audio id="alertSound" preload="auto">
+    <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGe77OeeSwwPUKXi8LdjHAU5k9jyzHksBSR3yPDekEALFF+16+qnVRQKRp/g8r5sIQYtg9DzzYo2CBhnu+znnnMMEFCl4/C4ZBwGOpXZ88x6LQUkeMnw3pFBCxRftuvqp1UUCkef4PK+bSIGLYPP882KNggYZ7vs556TDRBQpuPwuGUcBjqV2fPMei0FJHjJ8N6RQQsUX7br6qdVFApHn+Dyvmwh" type="audio/wav">
+  </audio>
+
+  <script>
+    let soundEnabled = true;
+    let lastAlertId = null;
+    let alertCount = 0;
+    let criticalCount = 0;
+
+    function toggleSound() {
+      soundEnabled = !soundEnabled;
+      const btn = document.getElementById('soundToggle');
+      btn.textContent = soundEnabled ? '🔊 Sound ON' : '🔇 Sound OFF';
+      btn.classList.toggle('active');
+    }
+
+    function playAlertSound() {
+      if (soundEnabled) {
+        const audio = document.getElementById('alertSound');
+        audio.currentTime = 0;
+        audio.play().catch(e => console.log('Audio play failed:', e));
+      }
+    }
+
+    function getSeverity(alert) {
+      if (alert.drivingBehavior?.fatigue || alert.drivingBehavior?.smoking) return 'critical';
+      if (alert.videoAlarms?.equipmentFailure || alert.memoryFailures) return 'high';
+      if (alert.videoAlarms?.signalLoss || alert.signalLossChannels?.length) return 'medium';
+      return 'low';
+    }
+
+    function formatTime(timestamp) {
+      const date = new Date(timestamp);
+      return date.toLocaleString();
+    }
+
+    function renderAlert(alert) {
+      const severity = getSeverity(alert);
+      const icons = {
+        fatigue: '😴',
+        phoneCall: '📱',
+        smoking: '🚬',
+        signalLoss: '📺',
+        blocking: '🚫',
+        memory: '💾',
+        equipment: '⚠️'
+      };
+
+      let details = [];
+
+      if (alert.drivingBehavior) {
+        const b = alert.drivingBehavior;
+        if (b.fatigue) details.push({ icon: icons.fatigue, label: 'Fatigue Level', value: `${b.fatigueLevel}/100` });
+        if (b.phoneCall) details.push({ icon: icons.phoneCall, label: 'Phone Call', value: 'DETECTED' });
+        if (b.smoking) details.push({ icon: icons.smoking, label: 'Smoking', value: 'DETECTED' });
+      }
+
+      if (alert.signalLossChannels?.length) {
+        details.push({ icon: icons.signalLoss, label: 'Signal Loss', value: `Channels: ${alert.signalLossChannels.join(', ')}` });
+      }
+
+      if (alert.blockingChannels?.length) {
+        details.push({ icon: icons.blocking, label: 'Signal Blocking', value: `Channels: ${alert.blockingChannels.join(', ')}` });
+      }
+
+      if (alert.memoryFailures) {
+        const m = alert.memoryFailures;
+        if (m.main.length) details.push({ icon: icons.memory, label: 'Main Memory Failure', value: m.main.join(', ') });
+        if (m.backup.length) details.push({ icon: icons.memory, label: 'Backup Memory Failure', value: m.backup.join(', ') });
+      }
+
+      if (alert.videoAlarms) {
+        const v = alert.videoAlarms;
+        if (v.equipmentFailure) details.push({ icon: icons.equipment, label: 'Equipment Failure', value: 'DETECTED' });
+      }
+
+      return `
+        <div class="alert ${severity}">
+          <div class="alert-header">
+            <div class="alert-title">${severity.toUpperCase()} ALERT</div>
+            <div class="alert-time">${formatTime(alert.timestamp)}</div>
+          </div>
+          <div class="alert-vehicle">🚗 Vehicle: ${alert.vehicleId} | 📍 ${alert.latitude.toFixed(6)}, ${alert.longitude.toFixed(6)}</div>
+          <div class="alert-details">
+            ${details.map(d => `
+              <div class="detail">
+                <div class="detail-label">${d.icon} ${d.label}</div>
+                <div class="detail-value">${d.value}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    async function checkAlerts() {
+      try {
+        const response = await fetch('/api/alerts');
+        const data = await response.json();
+        
+        if (data.success && data.data.length > 0) {
+          const alerts = data.data;
+          const latestAlert = alerts[alerts.length - 1];
+          
+          // New alert detected
+          if (lastAlertId !== latestAlert.timestamp) {
+            lastAlertId = latestAlert.timestamp;
+            alertCount = alerts.length;
+            criticalCount = alerts.filter(a => getSeverity(a) === 'critical').length;
+            
+            document.getElementById('alertCount').textContent = alertCount;
+            document.getElementById('criticalCount').textContent = criticalCount;
+            
+            const container = document.getElementById('alertsContainer');
+            container.innerHTML = alerts.reverse().map(renderAlert).join('');
+            
+            playAlertSound();
+            
+            // Browser notification
+            if (Notification.permission === 'granted') {
+              new Notification('🚨 New Alert Detected', {
+                body: `Vehicle ${latestAlert.vehicleId} - ${getSeverity(latestAlert).toUpperCase()}`,
+                icon: '/favicon.ico'
+              });
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch alerts:', error);
+      }
+    }
+
+    // Request notification permission
+    if (Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    // Poll every 2 seconds
+    setInterval(checkAlerts, 2000);
+    checkAlerts();
+  </script>
+</body>
+</html>
