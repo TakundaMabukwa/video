@@ -9,6 +9,8 @@ export class UDPRTPServer {
   private frameAssembler = new FrameAssembler();
   private videoWriter = new VideoWriter();
   private streams = new Map<string, StreamInfo>();
+  private packetCount = 0;
+  private lastLogTime = Date.now();
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -32,6 +34,16 @@ export class UDPRTPServer {
   }
 
   private handleRTPPacket(buffer: Buffer, rinfo: dgram.RemoteInfo): void {
+    this.packetCount++;
+    
+    // Rate limit logging - only log every 5 seconds
+    const now = Date.now();
+    if (now - this.lastLogTime > 5000) {
+      console.log(`Processed ${this.packetCount} packets in last 5s`);
+      this.packetCount = 0;
+      this.lastLogTime = now;
+    }
+    
     const parsed = JTT1078RTPParser.parseRTPPacket(buffer);
     if (!parsed) {
       return;
@@ -44,7 +56,7 @@ export class UDPRTPServer {
     let streamInfo = this.streams.get(streamKey);
     if (!streamInfo) {
       streamInfo = {
-        vehicleId: rinfo.address, // Use IP as vehicle ID for now
+        vehicleId: rinfo.address,
         channel: header.channelNumber,
         active: true,
         frameCount: 0,
@@ -60,12 +72,9 @@ export class UDPRTPServer {
       streamInfo.frameCount++;
       streamInfo.lastFrame = new Date();
       
-      // Write frame to disk
-      this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
-      
-      // Log I-frame detection (basic heuristic)
+      // Only write I-frames to reduce disk I/O
       if (this.isIFrame(completeFrame)) {
-        console.log(`I-frame detected: vehicle ${streamInfo.vehicleId}, channel ${header.channelNumber}, size ${completeFrame.length}`);
+        this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
       }
     }
   }
