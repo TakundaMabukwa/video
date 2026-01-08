@@ -24,9 +24,26 @@ GET  /api/vehicles                    # List connected vehicles
 POST /api/vehicles/:id/start-live     # Start video stream
 POST /api/vehicles/:id/stop-live      # Stop video stream  
 GET  /api/vehicles/:id/stream-info    # Get stream metadata
+GET  /api/vehicles/:id/streams        # Get all active streams
+POST /api/vehicles/:id/screenshot     # Request screenshot (0x9201)
 GET  /api/stats                       # Server statistics
+GET  /api/devices                     # All logged devices
+GET  /api/images                      # All captured images
 GET  /health                          # Health check
 ```
+
+## Web Viewer
+
+Access the live video viewer at:
+```
+http://localhost:3000/viewer.html
+```
+
+Features:
+- View all channels from connected vehicles
+- Start/stop video streams per channel
+- Request screenshots on-demand
+- Real-time stream status updates
 
 ## Protocol Support
 

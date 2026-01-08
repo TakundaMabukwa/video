@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Vehicle Video Viewer</title>
+  <style>
+    body { font-family: Arial; margin: 20px; background: #f0f0f0; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { color: #333; }
+    .vehicle-select { margin: 20px 0; padding: 10px; background: white; border-radius: 5px; }
+    .channels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+    .channel-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    .channel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .channel-title { font-weight: bold; font-size: 16px; }
+    .channel-status { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+    .status-active { background: #4CAF50; color: white; }
+    .status-inactive { background: #999; color: white; }
+    video { width: 100%; height: 300px; background: #000; border-radius: 4px; }
+    .controls { margin-top: 10px; display: flex; gap: 10px; }
+    button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+    .btn-start { background: #4CAF50; color: white; }
+    .btn-stop { background: #f44336; color: white; }
+    .btn-screenshot { background: #2196F3; color: white; }
+    button:hover { opacity: 0.8; }
+    .info { font-size: 12px; color: #666; margin-top: 5px; }
+    select { padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #ddd; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎥 Vehicle Video Viewer</h1>
+    
+    <div class="vehicle-select">
+      <label>Select Vehicle: </label>
+      <select id="vehicleSelect" onchange="loadVehicleChannels()">
+        <option value="">-- Select Vehicle --</option>
+      </select>
+      <span id="vehicleInfo" class="info"></span>
+    </div>
+
+    <div id="channelsContainer" class="channels-grid"></div>
+  </div>
+
+  <script>
+    const API_BASE = 'http://localhost:3000/api';
+    let currentVehicle = null;
+
+    async function loadVehicles() {
+      const res = await fetch(`${API_BASE}/vehicles`);
+      const data = await res.json();
+      
+      const select = document.getElementById('vehicleSelect');
+      data.data.forEach(v => {
+        const option = document.createElement('option');
+        option.value = v.id;
+        option.textContent = `${v.id} ${v.connected ? '🟢' : '🔴'}`;
+        select.appendChild(option);
+      });
+    }
+
+    async function loadVehicleChannels() {
+      const vehicleId = document.getElementById('vehicleSelect').value;
+      if (!vehicleId) return;
+
+      const res = await fetch(`${API_BASE}/vehicles/${vehicleId}/streams`);
+      const data = await res.json();
+      
+      currentVehicle = data.data;
+      document.getElementById('vehicleInfo').textContent = 
+        `Total Channels: ${currentVehicle.totalChannels} | Active: ${currentVehicle.activeStreams}`;
+
+      renderChannels();
+    }
+
+    function renderChannels() {
+      const container = document.getElementById('channelsContainer');
+      container.innerHTML = '';
+
+      if (!currentVehicle || !currentVehicle.streams.length) {
+        container.innerHTML = '<p>No active streams. Start a channel to view video.</p>';
+        return;
+      }
+
+      currentVehicle.streams.forEach(stream => {
+        const card = document.createElement('div');
+        card.className = 'channel-card';
+        card.innerHTML = `
+          <div class="channel-header">
+            <div class="channel-title">Channel ${stream.channel} - ${stream.type}</div>
+            <div class="channel-status ${stream.streamInfo.active ? 'status-active' : 'status-inactive'}">
+              ${stream.streamInfo.active ? 'ACTIVE' : 'INACTIVE'}
+            </div>
+          </div>
+          <video id="video-${stream.channel}" controls autoplay muted></video>
+          <div class="info">
+            Frames: ${stream.streamInfo.frameCount} | 
+            ${stream.hasGimbal ? '🎮 PTZ' : '📹 Fixed'}
+          </div>
+          <div class="controls">
+            <button class="btn-start" onclick="startStream(${stream.channel})">▶ Start</button>
+            <button class="btn-stop" onclick="stopStream(${stream.channel})">⏹ Stop</button>
+            <button class="btn-screenshot" onclick="requestScreenshot(${stream.channel})">📸 Screenshot</button>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function startStream(channel) {
+      await fetch(`${API_BASE}/vehicles/${currentVehicle.vehicleId}/start-live`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel })
+      });
+      setTimeout(loadVehicleChannels, 1000);
+    }
+
+    async function stopStream(channel) {
+      await fetch(`${API_BASE}/vehicles/${currentVehicle.vehicleId}/stop-live`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel })
+      });
+      setTimeout(loadVehicleChannels, 1000);
+    }
+
+    async function requestScreenshot(channel) {
+      const res = await fetch(`${API_BASE}/vehicles/${currentVehicle.vehicleId}/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel })
+      });
+      const data = await res.json();
+      alert(data.message);
+    }
+
+    // Load vehicles on page load
+    loadVehicles();
+
+    // Auto-refresh every 5 seconds
+    setInterval(() => {
+      if (currentVehicle) loadVehicleChannels();
+    }, 5000);
+  </script>
+</body>
+</html>
