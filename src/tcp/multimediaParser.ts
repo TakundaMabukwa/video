@@ -13,7 +13,7 @@ export class MultimediaParser {
   private static fragmentBuffers = new Map<string, MultimediaFragment>();
   private static imageStorage = new ImageStorage();
 
-  static parseMultimediaData(body: Buffer, vehicleId: string): { type: string; data: Buffer; filename: string } | null {
+  static parseMultimediaData(body: Buffer, vehicleId: string): { type: string; data: Buffer; filename: string; channel: number } | null {
     if (body.length < 8) return null;
 
     try {
@@ -44,7 +44,7 @@ export class MultimediaParser {
           const filename = `${vehicleId}_ch${channelId}_event${eventCode}_${timestamp}.jpg`;
           
           console.log(`✅ Complete JPEG: ${jpegData.length} bytes, channel ${channelId}, event ${eventCode}`);
-          return { type: 'jpeg', data: jpegData, filename };
+          return { type: 'jpeg', data: jpegData, filename, channel: channelId };
         } else {
           // Fragmented - need to buffer
           const key = `${vehicleId}_${multimediaId}`;
@@ -89,7 +89,7 @@ export class MultimediaParser {
               const filename = `${vehicleId}_ch${channelId}_event${eventCode}_${timestamp}.jpg`;
               
               console.log(`✅ Complete JPEG from ${existing.fragments.length} fragments: ${jpegData.length} bytes`);
-              return { type: 'jpeg', data: jpegData, filename };
+              return { type: 'jpeg', data: jpegData, filename, channel: channelId };
             }
           }
         }

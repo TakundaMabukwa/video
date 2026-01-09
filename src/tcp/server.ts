@@ -3,8 +3,9 @@ import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
 import { AlertParser } from './alertParser';
 import { MultimediaParser } from './multimediaParser';
-import { AlertStorage } from '../storage/alertStorage';
-import { DeviceLogger } from '../logging/deviceLogger';
+import { AlertStorageDB } from '../storage/alertStorageDB';
+import { DeviceStorage } from '../storage/deviceStorage';
+import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager } from '../alerts/alertManager';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
@@ -14,8 +15,9 @@ export class JTT808Server {
   private connections = new Map<string, net.Socket>();
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
-  private alertStorage = new AlertStorage();
-  private deviceLogger = new DeviceLogger();
+  private alertStorage = new AlertStorageDB();
+  private deviceStorage = new DeviceStorage();
+  private imageStorage = new ImageStorage();
   private alertManager: AlertManager;
 
   constructor(private port: number, private udpPort: number) {
@@ -90,7 +92,7 @@ export class JTT808Server {
         const messageBuffer = buffer.slice(0, messageEnd + 1);
         buffer = buffer.slice(messageEnd + 1);
         
-        this.processMessage(messageBuffer, socket);
+        await this.processMessage(messageBuffer, socket);
       }
     });
 
@@ -104,7 +106,7 @@ export class JTT808Server {
     });
   }
 
-  private processMessage(buffer: Buffer, socket: net.Socket): void {
+  private async processMessage(buffer: Buffer, socket: net.Socket): Promise<void> {
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
       console.warn('Failed to parse JT/T 808 message');
@@ -142,7 +144,7 @@ export class JTT808Server {
         this.handleMultimediaEvent(message, socket);
         break;
       case 0x0801: // Multimedia data upload
-        this.handleMultimediaData(message, socket);
+        await this.handleMultimediaData(message, socket);
         break;
       case 0x0704: // Custom/proprietary message
         this.handleCustomMessage(message, socket);
@@ -170,7 +172,7 @@ export class JTT808Server {
 
   private handleTerminalRegister(message: any, socket: net.Socket): void {
     const ipAddress = socket.remoteAddress || 'unknown';
-    this.deviceLogger.logDevice(message.terminalPhone, message.terminalPhone, ipAddress);
+    this.deviceStorage.upsertDevice(message.terminalPhone, ipAddress);
     
     const vehicle: Vehicle = {
       id: message.terminalPhone,
@@ -253,7 +255,7 @@ export class JTT808Server {
     
     // If vehicle doesn't exist, create it (camera skipped registration)
     if (!this.vehicles.has(message.terminalPhone)) {
-      this.deviceLogger.logDevice(message.terminalPhone, message.terminalPhone, ipAddress);
+      this.deviceStorage.upsertDevice(message.terminalPhone, ipAddress);
       
       const vehicle: Vehicle = {
         id: message.terminalPhone,
@@ -681,12 +683,12 @@ export class JTT808Server {
     return this.vehicles.get(id);
   }
 
-  getAlerts(): LocationAlert[] {
-    return this.alertStorage.getAlerts();
+  async getAlerts() {
+    return await this.alertStorage.getActiveAlerts();
   }
 
-  getDevices(): any[] {
-    return this.deviceLogger.getDevices();
+  async getDevices() {
+    return await this.deviceStorage.getDevices();
   }
 
   private handleMultimediaEvent(message: any, socket: net.Socket): void {
@@ -711,17 +713,14 @@ export class JTT808Server {
     socket.write(response);
   }
 
-  private handleMultimediaData(message: any, socket: net.Socket): void {
+  private async handleMultimediaData(message: any, socket: net.Socket): Promise<void> {
     const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
     
-    if (multimedia) {
-      const filePath = MultimediaParser.saveMultimediaFile(
-        message.terminalPhone,
-        multimedia.filename,
-        multimedia.data
-      );
+    if (multimedia && multimedia.type === 'jpeg') {
+      // Save image to Supabase and database
+      await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data);
       
-      console.log(`📷 Saved ${multimedia.type} from ${message.terminalPhone}: ${multimedia.filename}`);
+      console.log(`📷 Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
     }
     
     const response = JTT1078Commands.buildGeneralResponse(

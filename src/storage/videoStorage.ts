@@ -1,6 +1,14 @@
 import { query } from './database';
+import { supabase, ensureBucket } from './supabase';
+import * as fs from 'fs';
 
 export class VideoStorage {
+  private bucketReady: Promise<string>;
+
+  constructor() {
+    this.bucketReady = ensureBucket();
+  }
+
   async saveVideo(deviceId: string, channel: number, filePath: string, startTime: Date, videoType: 'live' | 'alert_pre' | 'alert_post', alertId?: string) {
     const result = await query(
       `INSERT INTO videos (device_id, channel, file_path, start_time, video_type, alert_id)
@@ -16,6 +24,41 @@ export class VideoStorage {
       `UPDATE videos SET end_time = $1, file_size = $2, duration_seconds = $3 WHERE id = $4`,
       [endTime, fileSize, duration, id]
     );
+  }
+
+  async uploadVideoToSupabase(id: string, localPath: string, deviceId: string, channel: number): Promise<string> {
+    const bucketName = await this.bucketReady;
+    
+    const videoData = fs.readFileSync(localPath);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${deviceId}/ch${channel}/${timestamp}.h264`;
+    
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .upload(filename, videoData, {
+        contentType: 'video/h264',
+        upsert: false
+      });
+    
+    if (error) {
+      console.error('Supabase video upload failed:', error);
+      throw error;
+    }
+    
+    const { data: urlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filename);
+    
+    const storageUrl = urlData.publicUrl;
+    
+    // Update database with storage URL
+    await query(
+      `UPDATE videos SET storage_url = $1 WHERE id = $2`,
+      [storageUrl, id]
+    );
+    
+    console.log(`📹 Video uploaded to Supabase: ${storageUrl}`);
+    return storageUrl;
   }
 
   async getVideos(deviceId: string, limit: number = 50) {

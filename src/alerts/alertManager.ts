@@ -3,6 +3,7 @@ import { LocationAlert } from '../types/jtt';
 import { CircularVideoBuffer } from './circularBuffer';
 import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
+import { AlertStorageDB } from '../storage/alertStorageDB';
 
 export enum AlertPriority {
   LOW = 'low',
@@ -30,6 +31,7 @@ export class AlertManager extends EventEmitter {
   private activeAlerts = new Map<string, AlertEvent>();
   private escalation: AlertEscalation;
   private notifier: AlertNotifier;
+  private alertStorage = new AlertStorageDB();
   private alertCounter = 0;
 
   constructor() {
@@ -86,6 +88,9 @@ export class AlertManager extends EventEmitter {
     };
 
     this.activeAlerts.set(alertId, alertEvent);
+
+    // Save alert to database
+    await this.alertStorage.saveAlert(alertEvent);
 
     // Request immediate screenshot for alert evidence
     console.log(`📸 Requesting screenshot for alert ${alertId}`);
@@ -182,20 +187,22 @@ export class AlertManager extends EventEmitter {
     return this.activeAlerts.get(id);
   }
 
-  acknowledgeAlert(id: string): boolean {
+  async acknowledgeAlert(id: string): Promise<boolean> {
     const alert = this.activeAlerts.get(id);
     if (alert && alert.status === 'new') {
       alert.status = 'acknowledged';
+      await this.alertStorage.updateAlertStatus(id, 'acknowledged', new Date());
       this.emit('alert-acknowledged', alert);
       return true;
     }
     return false;
   }
 
-  resolveAlert(id: string): boolean {
+  async resolveAlert(id: string): Promise<boolean> {
     const alert = this.activeAlerts.get(id);
     if (alert) {
       alert.status = 'resolved';
+      await this.alertStorage.updateAlertStatus(id, 'resolved', undefined, new Date());
       this.escalation.stopMonitoring(id);
       this.emit('alert-resolved', alert);
       return true;
@@ -203,11 +210,12 @@ export class AlertManager extends EventEmitter {
     return false;
   }
 
-  escalateAlert(id: string): boolean {
+  async escalateAlert(id: string): Promise<boolean> {
     const alert = this.activeAlerts.get(id);
     if (alert) {
       alert.status = 'escalated';
       alert.escalationLevel++;
+      await this.alertStorage.saveAlert(alert);
       this.notifier.sendEscalationNotification(alert);
       this.emit('alert-escalated', alert);
       return true;

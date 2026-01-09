@@ -12,13 +12,18 @@ export class DeviceStorage {
     );
   }
 
-  async getDevice(deviceId: string) {
-    const result = await query(`SELECT * FROM devices WHERE device_id = $1`, [deviceId]);
-    return result.rows[0];
+  async getDevices() {
+    const result = await query(
+      `SELECT * FROM devices ORDER BY last_seen DESC`
+    );
+    return result.rows;
   }
 
-  async getAllDevices() {
-    const result = await query(`SELECT * FROM devices ORDER BY last_seen DESC`);
-    return result.rows;
+  async getDevice(deviceId: string) {
+    const result = await query(
+      `SELECT * FROM devices WHERE device_id = $1`,
+      [deviceId]
+    );
+    return result.rows[0];
   }
 }

@@ -4,6 +4,7 @@ import { JTT808Server } from './tcp/server';
 import { UDPRTPServer } from './udp/server';
 import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
+import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
@@ -55,6 +56,7 @@ async function startServer() {
   
   // Add routes
   app.use('/api', createRoutes(tcpServer, udpServer));
+  app.use('/api/alerts', createAlertRoutes());
   
   // Health check endpoint
   app.get('/health', (req, res) => {

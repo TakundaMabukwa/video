@@ -1,5 +1,4 @@
 -- JT/T 1078 Video System - PostgreSQL Schema
--- Videos: Local disk | Images: Supabase Storage
 
 -- 1. DEVICES
 CREATE TABLE IF NOT EXISTS devices (
@@ -8,12 +7,13 @@ CREATE TABLE IF NOT EXISTS devices (
   last_seen TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 2. VIDEOS (file_path = local disk path)
+-- 2. VIDEOS (file_path = local disk path, storage_url = Supabase URL)
 CREATE TABLE IF NOT EXISTS videos (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   device_id TEXT NOT NULL REFERENCES devices(device_id) ON DELETE CASCADE,
   channel INTEGER NOT NULL,
   file_path TEXT NOT NULL,
+  storage_url TEXT,
   file_size BIGINT,
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,

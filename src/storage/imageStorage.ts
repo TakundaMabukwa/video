@@ -1,16 +1,23 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { query } from './database';
-import { supabase } from './supabase';
+import { supabase, ensureBucket } from './supabase';
 
 export class ImageStorage {
-  async saveImage(deviceId: string, channel: number, imageData: Buffer): Promise<string> {
+  private bucketReady: Promise<string>;
+
+  constructor() {
+    this.bucketReady = ensureBucket();
+  }
+
+  async saveImage(deviceId: string, channel: number, imageData: Buffer, alertId?: string): Promise<string> {
+    const bucketName = await this.bucketReady;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${deviceId}/ch${channel}/${timestamp}.jpg`;
     
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
-      .from('videos')
+      .from(bucketName)
       .upload(filename, imageData, {
         contentType: 'image/jpeg',
         upsert: false
@@ -23,26 +30,26 @@ export class ImageStorage {
     
     // Get public URL
     const { data: urlData } = supabase.storage
-      .from('videos')
+      .from(bucketName)
       .getPublicUrl(filename);
     
     const storageUrl = urlData.publicUrl;
     
     // Save to database
     const result = await query(
-      `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [deviceId, channel, filename, storageUrl, imageData.length, new Date()]
+      [deviceId, channel, filename, storageUrl, imageData.length, new Date(), alertId || null]
     );
     
     console.log(`📸 Image uploaded: ${storageUrl}`);
     return result.rows[0].id;
   }
 
-  async saveImageFromPath(deviceId: string, channel: number, localPath: string, fileSize: number): Promise<string> {
+  async saveImageFromPath(deviceId: string, channel: number, localPath: string, fileSize: number, alertId?: string): Promise<string> {
     const imageData = fs.readFileSync(localPath);
-    return this.saveImage(deviceId, channel, imageData);
+    return this.saveImage(deviceId, channel, imageData, alertId);
   }
 
   async getImages(deviceId: string, limit: number = 50) {
@@ -53,6 +60,17 @@ export class ImageStorage {
        ORDER BY timestamp DESC 
        LIMIT $2`,
       [deviceId, limit]
+    );
+    return result.rows;
+  }
+
+  async getAlertImages(alertId: string) {
+    const result = await query(
+      `SELECT id, device_id, channel, storage_url, file_size, timestamp 
+       FROM images 
+       WHERE alert_id = $1 
+       ORDER BY timestamp DESC`,
+      [alertId]
     );
     return result.rows;
   }
