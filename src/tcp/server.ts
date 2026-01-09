@@ -488,13 +488,17 @@ export class JTT808Server {
       return false;
     }
 
+    const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+
     const command = JTT1078Commands.buildScreenshotCommand(
       vehicleId,
       this.serialCounter++,
+      serverIp,
+      this.port, // Use TCP port 7611
       channel
     );
     
-    console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel}`);
+    console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel} (TCP ${this.port})`);
     socket.write(command);
     return true;
   }
@@ -522,13 +526,13 @@ export class JTT808Server {
       vehicleId,
       this.serialCounter++,
       serverIp,
-      this.udpPort,
+      this.port, // Use TCP port 7611 instead of UDP port
       channel,
       1, // Video only
       0  // Main stream
     );
     
-    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.udpPort}, Channel=${channel}`);
+    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.port} (TCP), Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     

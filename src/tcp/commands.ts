@@ -51,22 +51,32 @@ export class JTT1078Commands {
   static buildScreenshotCommand(
     terminalPhone: string,
     serialNumber: number,
+    serverIp: string,
+    serverPort: number,
     channelId: number = 1
   ): Buffer {
     const body = Buffer.alloc(16);
     let offset = 0;
     
-    // Server channel ID (4 bytes)
-    body.writeUInt32BE(1, offset);
-    offset += 4;
+    // Server IP (4 bytes)
+    const ipParts = serverIp.split('.').map(Number);
+    body.writeUInt8(ipParts[0], offset++);
+    body.writeUInt8(ipParts[1], offset++);
+    body.writeUInt8(ipParts[2], offset++);
+    body.writeUInt8(ipParts[3], offset++);
+    
+    // Server port (2 bytes)
+    body.writeUInt16BE(serverPort, offset);
+    offset += 2;
+    
+    // Channel ID (1 byte)
+    body.writeUInt8(channelId, offset++);
     
     // Playback method: 4 = Single frame upload (1 byte)
-    body.writeUInt8(4, offset);
-    offset += 1;
+    body.writeUInt8(4, offset++);
     
     // Fast forward multiple (1 byte) - not used for single frame
-    body.writeUInt8(0, offset);
-    offset += 1;
+    body.writeUInt8(0, offset++);
     
     // Timestamp (6 bytes BCD) - current time
     const now = new Date();
@@ -83,15 +93,6 @@ export class JTT1078Commands {
     body.writeUInt8(parseInt(hour.toString().padStart(2, '0'), 16), offset++);
     body.writeUInt8(parseInt(minute.toString().padStart(2, '0'), 16), offset++);
     body.writeUInt8(parseInt(second.toString().padStart(2, '0'), 16), offset++);
-    
-    // Channel ID (1 byte)
-    body.writeUInt8(channelId, offset);
-    offset += 1;
-    
-    // Reserved (3 bytes)
-    body.writeUInt8(0, offset++);
-    body.writeUInt8(0, offset++);
-    body.writeUInt8(0, offset++);
     
     return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
   }
