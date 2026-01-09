@@ -6,7 +6,11 @@
     body { font-family: Arial; margin: 20px; background: #f0f0f0; }
     .container { max-width: 1400px; margin: 0 auto; }
     h1 { color: #333; }
-    .vehicle-select { margin: 20px 0; padding: 10px; background: white; border-radius: 5px; }
+    .vehicle-select { margin: 20px 0; padding: 15px; background: white; border-radius: 5px; display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+    .vehicle-select label { font-weight: bold; }
+    .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+    .badge-connected { background: #4CAF50; color: white; }
+    .badge-disconnected { background: #999; color: white; }
     .channels-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
     .channel-card { background: white; padding: 15px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
     .channel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
@@ -30,10 +34,11 @@
     <h1>🎥 Vehicle Video Viewer</h1>
     
     <div class="vehicle-select">
-      <label>Select Vehicle: </label>
+      <label>Select Vehicle:</label>
       <select id="vehicleSelect" onchange="loadVehicleChannels()">
         <option value="">-- Select Vehicle --</option>
       </select>
+      <span id="connectionStatus"></span>
       <span id="vehicleInfo" class="info"></span>
     </div>
 
@@ -41,32 +46,70 @@
   </div>
 
   <script>
-    const API_BASE = 'http://localhost:3000/api';
+    const API_BASE = window.location.origin + '/api';
     let currentVehicle = null;
+
+    let allVehicles = [];
 
     async function loadVehicles() {
       const res = await fetch(`${API_BASE}/vehicles`);
       const data = await res.json();
+      allVehicles = data.data;
       
       const select = document.getElementById('vehicleSelect');
-      data.data.forEach(v => {
+      select.innerHTML = '<option value="">-- Select Vehicle --</option>';
+      
+      // Sort: connected first, then by ID
+      allVehicles.sort((a, b) => {
+        if (a.connected && !b.connected) return -1;
+        if (!a.connected && b.connected) return 1;
+        return a.id.localeCompare(b.id);
+      });
+      
+      allVehicles.forEach(v => {
         const option = document.createElement('option');
         option.value = v.id;
         option.textContent = `${v.id} ${v.connected ? '🟢' : '🔴'}`;
+        option.dataset.connected = v.connected;
         select.appendChild(option);
       });
+      
+      // Auto-select first connected vehicle or 221084138949
+      const target = allVehicles.find(v => v.id === '221084138949' && v.connected) || 
+                     allVehicles.find(v => v.connected);
+      if (target) {
+        select.value = target.id;
+        loadVehicleChannels();
+      }
     }
 
     async function loadVehicleChannels() {
       const vehicleId = document.getElementById('vehicleSelect').value;
-      if (!vehicleId) return;
+      if (!vehicleId) {
+        document.getElementById('channelsContainer').innerHTML = '';
+        document.getElementById('connectionStatus').innerHTML = '';
+        document.getElementById('vehicleInfo').textContent = '';
+        return;
+      }
+
+      const vehicle = allVehicles.find(v => v.id === vehicleId);
+      const statusBadge = document.getElementById('connectionStatus');
+      
+      if (vehicle?.connected) {
+        statusBadge.innerHTML = '<span class="status-badge badge-connected">CONNECTED</span>';
+      } else {
+        statusBadge.innerHTML = '<span class="status-badge badge-disconnected">DISCONNECTED</span>';
+        document.getElementById('channelsContainer').innerHTML = '<p style="padding: 20px; text-align: center; color: #999;">⚠️ Vehicle is not connected. Cannot start streams.</p>';
+        document.getElementById('vehicleInfo').textContent = '';
+        return;
+      }
 
       const res = await fetch(`${API_BASE}/vehicles/${vehicleId}/streams`);
       const data = await res.json();
       
       currentVehicle = data.data;
       document.getElementById('vehicleInfo').textContent = 
-        `Total Channels: ${currentVehicle.totalChannels} | Active: ${currentVehicle.activeStreams}`;
+        `Total Channels: ${currentVehicle.totalChannels} | Active Streams: ${currentVehicle.activeStreams}`;
 
       renderChannels();
     }
@@ -75,43 +118,55 @@
       const container = document.getElementById('channelsContainer');
       container.innerHTML = '';
 
-      if (!currentVehicle || !currentVehicle.streams.length) {
-        container.innerHTML = '<p>No active streams. Start a channel to view video.</p>';
-        return;
-      }
+      if (!currentVehicle) return;
 
-      currentVehicle.streams.forEach(stream => {
-        const card = document.createElement('div');
-        card.className = 'channel-card';
-        card.innerHTML = `
-          <div class="channel-header">
-            <div class="channel-title">Channel ${stream.channel} - ${stream.type}</div>
-            <div class="channel-status ${stream.streamInfo.active ? 'status-active' : 'status-inactive'}">
-              ${stream.streamInfo.active ? 'ACTIVE' : 'INACTIVE'}
-            </div>
-          </div>
-          <video id="video-${stream.channel}" controls autoplay muted></video>
-          <div class="info">
-            Frames: ${stream.streamInfo.frameCount} | 
-            ${stream.hasGimbal ? '🎮 PTZ' : '📹 Fixed'}
-          </div>
-          <div class="controls">
-            <button class="btn-start" onclick="startStream(${stream.channel})">▶ Start</button>
-            <button class="btn-stop" onclick="stopStream(${stream.channel})">⏹ Stop</button>
-            <button class="btn-screenshot" onclick="requestScreenshot(${stream.channel})">📸 Screenshot</button>
-          </div>
-        `;
-        container.appendChild(card);
+      // Show all 4 channels even if not streaming
+      const channels = [1, 2, 3, 4];
+      channels.forEach(channelNum => {
+        const stream = currentVehicle.streams.find(s => s.channel === channelNum);
+        renderChannelCard(container, channelNum, stream);
       });
     }
 
+    function renderChannelCard(container, channelNum, stream) {
+      const isActive = stream?.streamInfo?.active || false;
+      const frameCount = stream?.streamInfo?.frameCount || 0;
+
+      const card = document.createElement('div');
+      card.className = 'channel-card';
+      card.innerHTML = `
+        <div class="channel-header">
+          <div class="channel-title">Channel ${channelNum}</div>
+          <div class="channel-status ${isActive ? 'status-active' : 'status-inactive'}">
+            ${isActive ? 'ACTIVE' : 'INACTIVE'}
+          </div>
+        </div>
+        <video id="video-${channelNum}" controls autoplay muted></video>
+        <div class="info">
+          Frames: ${frameCount} | Vehicle: ${currentVehicle.vehicleId}
+        </div>
+        <div class="controls">
+          <button class="btn-start" onclick="startStream(${channelNum})">▶ Start</button>
+          <button class="btn-stop" onclick="stopStream(${channelNum})">⏹ Stop</button>
+          <button class="btn-screenshot" onclick="requestScreenshot(${channelNum})">📸 Screenshot</button>
+        </div>
+      `;
+      container.appendChild(card);
+    }
+
     async function startStream(channel) {
-      await fetch(`${API_BASE}/vehicles/${currentVehicle.vehicleId}/start-live`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel })
-      });
-      setTimeout(loadVehicleChannels, 1000);
+      try {
+        const res = await fetch(`${API_BASE}/vehicles/${currentVehicle.vehicleId}/start-live`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel, streamType: 0, dataType: 0 })
+        });
+        const data = await res.json();
+        if (!res.ok) alert(`Error: ${data.message}`);
+        setTimeout(loadVehicleChannels, 1000);
+      } catch (err) {
+        alert('Failed to start stream: ' + err.message);
+      }
     }
 
     async function stopStream(channel) {
@@ -136,7 +191,10 @@
     // Load vehicles on page load
     loadVehicles();
 
-    // Auto-refresh every 5 seconds
+    // Auto-refresh vehicles list every 10 seconds
+    setInterval(loadVehicles, 10000);
+
+    // Auto-refresh channel status every 5 seconds
     setInterval(() => {
       if (currentVehicle) loadVehicleChannels();
     }, 5000);
