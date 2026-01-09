@@ -1,7 +1,12 @@
 node_modules/
-.env
-.env.local
-.env.production
 dist/
+.env
 recordings/
+media/
+hls/
+logs/
 *.log
+alerts.json
+t.json
+.DS_Store
+.md

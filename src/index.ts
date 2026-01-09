@@ -1,8 +1,15 @@
 import express from 'express';
+import { createServer } from 'http';
 import { JTT808Server } from './tcp/server';
 import { UDPRTPServer } from './udp/server';
 import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
+import { AlertWebSocketServer } from './api/websocket';
+import pool from './storage/database';
+import * as dotenv from 'dotenv';
+
+// Load environment variables
+dotenv.config();
 
 const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
@@ -12,9 +19,23 @@ const SERVER_IP = process.env.SERVER_IP || 'localhost';
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
   
+  // Test database connection
+  try {
+    await pool.query('SELECT NOW()');
+    console.log('✅ Database connected successfully');
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+    console.error('Please check your .env file and database configuration');
+    process.exit(1);
+  }
+  
   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
   const udpServer = new UDPRTPServer(UDP_PORT);
   const tcpRTPHandler = new TCPRTPHandler();
+  
+  // Connect alert manager between TCP and UDP servers
+  const alertManager = tcpServer.getAlertManager();
+  udpServer.setAlertManager(alertManager);
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
@@ -48,8 +69,15 @@ async function startServer() {
     });
   });
   
-  app.listen(API_PORT, () => {
+  // Create HTTP server for WebSocket
+  const httpServer = createServer(app);
+  
+  // Initialize WebSocket for real-time alerts
+  const wsServer = new AlertWebSocketServer(httpServer, alertManager);
+  
+  httpServer.listen(API_PORT, () => {
     console.log(`REST API server listening on port ${API_PORT}`);
+    console.log(`WebSocket server ready at ws://localhost:${API_PORT}/ws/alerts`);
   });
   
   console.log('\n=== JT/T 1078 Video Ingestion Server Started ===');

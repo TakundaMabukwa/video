@@ -5,6 +5,7 @@ import { AlertParser } from './alertParser';
 import { MultimediaParser } from './multimediaParser';
 import { AlertStorage } from '../storage/alertStorage';
 import { DeviceLogger } from '../logging/deviceLogger';
+import { AlertManager } from '../alerts/alertManager';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
 export class JTT808Server {
@@ -15,9 +16,15 @@ export class JTT808Server {
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
   private alertStorage = new AlertStorage();
   private deviceLogger = new DeviceLogger();
+  private alertManager: AlertManager;
 
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
+    this.alertManager = new AlertManager();
+  }
+
+  getAlertManager(): AlertManager {
+    return this.alertManager;
   }
 
   setRTPHandler(handler: (buffer: Buffer, vehicleId: string) => void): void {
@@ -391,6 +398,9 @@ export class JTT808Server {
     
     // Save alert to JSON database
     this.alertStorage.saveAlert(alert);
+    
+    // Process through alert manager for escalation and video capture
+    this.alertManager.processAlert(alert);
   }
 
   private handleDisconnection(socket: net.Socket): void {
@@ -497,6 +507,9 @@ export class JTT808Server {
     if (!vehicle || !socket || !vehicle.connected) {
       return false;
     }
+
+    // Initialize circular buffer for this channel
+    this.alertManager.initializeBuffer(vehicleId, channel);
 
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     

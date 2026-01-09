@@ -3,6 +3,7 @@ import { JTT1078RTPParser } from './rtpParser';
 import { FrameAssembler } from './frameAssembler';
 import { VideoWriter } from '../video/writer';
 import { StreamInfo } from '../types/jtt';
+import { AlertManager } from '../alerts/alertManager';
 
 export class UDPRTPServer {
   private server: dgram.Socket;
@@ -11,9 +12,14 @@ export class UDPRTPServer {
   private streams = new Map<string, StreamInfo>();
   private packetCount = 0;
   private lastLogTime = Date.now();
+  private alertManager?: AlertManager;
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
+  }
+
+  setAlertManager(alertManager: AlertManager): void {
+    this.alertManager = alertManager;
   }
 
   start(): Promise<void> {
@@ -72,8 +78,21 @@ export class UDPRTPServer {
       streamInfo.frameCount++;
       streamInfo.lastFrame = new Date();
       
+      const isIFrame = this.isIFrame(completeFrame);
+      
+      // Add to circular buffer for alert system
+      if (this.alertManager) {
+        this.alertManager.addFrameToBuffer(
+          streamInfo.vehicleId,
+          header.channelNumber,
+          completeFrame,
+          new Date(),
+          isIFrame
+        );
+      }
+      
       // Only write I-frames to reduce disk I/O
-      if (this.isIFrame(completeFrame)) {
+      if (isIFrame) {
         this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
       }
     }

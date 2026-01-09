@@ -1,9 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { VideoStorage } from '../storage/videoStorage';
 
 export class VideoWriter {
   private fileStreams = new Map<string, fs.WriteStream>();
   private frameCounters = new Map<string, number>();
+  private videoStorage = new VideoStorage();
+  private videoIds = new Map<string, string>();
+  private startTimes = new Map<string, Date>();
 
   writeFrame(vehicleId: string, channel: number, frameData: Buffer): void {
     const streamKey = `${vehicleId}_${channel}`;
@@ -29,10 +33,9 @@ export class VideoWriter {
     }
   }
 
-  private createOutputStream(vehicleId: string, channel: number, streamKey: string): void {
+  private async createOutputStream(vehicleId: string, channel: number, streamKey: string): Promise<void> {
     const recordingsDir = path.join(process.cwd(), 'recordings', vehicleId);
     
-    // Ensure directory exists
     if (!fs.existsSync(recordingsDir)) {
       fs.mkdirSync(recordingsDir, { recursive: true });
     }
@@ -43,6 +46,7 @@ export class VideoWriter {
     
     const stream = fs.createWriteStream(filepath);
     this.fileStreams.set(streamKey, stream);
+    this.startTimes.set(streamKey, new Date());
     
     stream.on('error', (error) => {
       console.error(`Error writing video file ${filepath}:`, error);
@@ -50,6 +54,20 @@ export class VideoWriter {
     });
 
     console.log(`Video recording started: ${filepath}`);
+    
+    // Save to database
+    try {
+      const videoId = await this.videoStorage.saveVideo(
+        vehicleId,
+        channel,
+        filepath,
+        new Date(),
+        'live'
+      );
+      this.videoIds.set(streamKey, videoId);
+    } catch (error) {
+      console.error('Failed to save video metadata to database:', error);
+    }
   }
 
   stopRecording(vehicleId: string, channel: number): void {
@@ -63,6 +81,25 @@ export class VideoWriter {
       const frameCount = this.frameCounters.get(streamKey) || 0;
       console.log(`Video recording stopped: vehicle ${vehicleId}, channel ${channel}, total frames ${frameCount}`);
       this.frameCounters.delete(streamKey);
+      
+      // Update database with end time and file size
+      const videoId = this.videoIds.get(streamKey);
+      const startTime = this.startTimes.get(streamKey);
+      if (videoId && startTime) {
+        const endTime = new Date();
+        const duration = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
+        const filepath = path.join(process.cwd(), 'recordings', vehicleId, `channel_${channel}_*.h264`);
+        
+        try {
+          const stats = fs.statSync(filepath);
+          this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
+        } catch (error) {
+          console.error('Failed to update video metadata:', error);
+        }
+        
+        this.videoIds.delete(streamKey);
+        this.startTimes.delete(streamKey);
+      }
     }
   }
 

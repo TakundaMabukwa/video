@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alert Management Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; background: #f5f5f5; }
+        .header { background: #2c3e50; color: white; padding: 20px; }
+        .header h1 { font-size: 24px; }
+        .stats { display: flex; gap: 20px; padding: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; flex: 1; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-card h3 { color: #7f8c8d; font-size: 14px; margin-bottom: 10px; }
+        .stat-card .value { font-size: 32px; font-weight: bold; }
+        .critical { color: #e74c3c; }
+        .high { color: #e67e22; }
+        .medium { color: #f39c12; }
+        .low { color: #3498db; }
+        .alerts-container { padding: 20px; }
+        .alert-card { background: white; padding: 20px; margin-bottom: 15px; border-radius: 8px; border-left: 5px solid; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .alert-card.critical { border-left-color: #e74c3c; }
+        .alert-card.high { border-left-color: #e67e22; }
+        .alert-card.medium { border-left-color: #f39c12; }
+        .alert-card.low { border-left-color: #3498db; }
+        .alert-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .alert-title { font-size: 18px; font-weight: bold; }
+        .alert-badge { padding: 5px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; color: white; }
+        .badge-new { background: #e74c3c; }
+        .badge-acknowledged { background: #3498db; }
+        .badge-escalated { background: #e67e22; animation: pulse 1s infinite; }
+        .alert-info { color: #7f8c8d; font-size: 14px; margin-bottom: 10px; }
+        .alert-actions { display: flex; gap: 10px; margin-top: 15px; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-acknowledge { background: #3498db; color: white; }
+        .btn-escalate { background: #e67e22; color: white; }
+        .btn-resolve { background: #27ae60; color: white; }
+        .btn-video { background: #9b59b6; color: white; }
+        .notification-bell { position: fixed; top: 20px; right: 20px; background: #e74c3c; color: white; width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 30px; cursor: pointer; box-shadow: 0 4px 8px rgba(0,0,0,0.2); animation: ring 0.5s ease-in-out; }
+        .notification-count { position: absolute; top: -5px; right: -5px; background: white; color: #e74c3c; width: 25px; height: 25px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+        @keyframes ring { 0%, 100% { transform: rotate(0deg); } 25% { transform: rotate(-15deg); } 75% { transform: rotate(15deg); } }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .connection-status { position: fixed; bottom: 20px; right: 20px; padding: 10px 20px; border-radius: 4px; font-size: 14px; }
+        .connected { background: #27ae60; color: white; }
+        .disconnected { background: #e74c3c; color: white; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🚨 Alert Management Dashboard</h1>
+    </div>
+
+    <div class="stats">
+        <div class="stat-card">
+            <h3>TOTAL ALERTS</h3>
+            <div class="value" id="total-alerts">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>NEW</h3>
+            <div class="value critical" id="new-alerts">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>ESCALATED</h3>
+            <div class="value high" id="escalated-alerts">0</div>
+        </div>
+        <div class="stat-card">
+            <h3>ACKNOWLEDGED</h3>
+            <div class="value medium" id="acknowledged-alerts">0</div>
+        </div>
+    </div>
+
+    <div class="alerts-container" id="alerts-container">
+        <!-- Alerts will be dynamically inserted here -->
+    </div>
+
+    <div class="notification-bell" id="notification-bell" onclick="clearNotifications()">
+        🔔
+        <div class="notification-count" id="notification-count" style="display: none;">0</div>
+    </div>
+
+    <div class="connection-status disconnected" id="connection-status">Connecting...</div>
+
+    <audio id="alert-sound" preload="auto">
+        <source src="data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIGGS57OihUBELTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKElyx6OyrWBQLSKHe8sFuIwUrgc7y2Yk2CBhkuezooVARDEyl4fG5ZRwFNo3V7859KQUofszw2o87ChJcsejtq1gVC0ih3vLBbiMFK4HO8tmJNggYZLns6KFQEQxMpeHxuWUcBTaN1e/OfSkFKH7M8NqPOwsSXLHo7atYFQtIod7ywW4jBSuBzvLZiTYIGGS57OihUBEMTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKElyx6O2rWBULSKHe8sFuIwUrgc7y2Yk2CBhkuezooVARDEyl4fG5ZRwFNo3V7859KQUofszw2o87ChJcsejtq1gVC0ih3vLBbiMFK4HO8tmJNggYZLns6KFQEQxMpeHxuWUcBTaN1e/OfSkFKH7M8NqPOwsSXLHo7atYFQtIod7ywW4jBSuBzvLZiTYIGGS57OihUBEMTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKElyx6O2rWBULSKHe8sFuIwUrgc7y2Yk2CBhkuezooVARDEyl4fG5ZRwFNo3V7859KQUofszw2o87ChJcsejtq1gVC0ih3vLBbiMFK4HO8tmJNggYZLns6KFQEQxMpeHxuWUcBTaN1e/OfSkFKH7M8NqPOwsSXLHo7atYFQtIod7ywW4jBSuBzvLZiTYIGGS57OihUBEMTKXh8bllHAU2jdXvzn0pBSh+zPDajzsKElyx6O2rWBULSKHe8sFuIwUrgc7y2Yk2CBhkuezooVARDEyl4fG5ZRwFNo3V7859KQUofszw2o87ChJcsejtq1gVC0ih3vLBbiMFK4HO8tmJNggYZLns6KFQEQxMpeHxuWUcBTaN1e/OfSkFKH7M8NqPOwsSXLHo7atYFQtIod7ywW4jBQ==" type="audio/wav">
+    </audio>
+
+    <script>
+        let ws;
+        let notificationCount = 0;
+        const alertSound = document.getElementById('alert-sound');
+
+        function connectWebSocket() {
+            ws = new WebSocket(`ws://${window.location.host}/ws/alerts`);
+
+            ws.onopen = () => {
+                console.log('WebSocket connected');
+                document.getElementById('connection-status').textContent = 'Connected';
+                document.getElementById('connection-status').className = 'connection-status connected';
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                console.log('Received:', message);
+
+                if (message.type === 'new_alert' || message.type === 'notification') {
+                    playAlertSound(message.sound || 'high_bell');
+                    showNotification();
+                    loadAlerts();
+                    loadStats();
+                } else if (message.type === 'alert_escalated') {
+                    playAlertSound('escalation_bell');
+                    showNotification();
+                    loadAlerts();
+                    loadStats();
+                } else if (message.type === 'flooding') {
+                    playAlertSound('critical_bell');
+                    alert(`⚠️ ALERT FLOODING: Vehicle ${message.vehicleId} - ${message.count} alerts in 1 minute!`);
+                    loadAlerts();
+                }
+            };
+
+            ws.onclose = () => {
+                console.log('WebSocket disconnected');
+                document.getElementById('connection-status').textContent = 'Disconnected';
+                document.getElementById('connection-status').className = 'connection-status disconnected';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+        }
+
+        function playAlertSound(type) {
+            alertSound.play().catch(e => console.log('Audio play failed:', e));
+        }
+
+        function showNotification() {
+            notificationCount++;
+            const countEl = document.getElementById('notification-count');
+            countEl.textContent = notificationCount;
+            countEl.style.display = 'flex';
+            
+            const bell = document.getElementById('notification-bell');
+            bell.style.animation = 'none';
+            setTimeout(() => bell.style.animation = 'ring 0.5s ease-in-out', 10);
+        }
+
+        function clearNotifications() {
+            notificationCount = 0;
+            document.getElementById('notification-count').style.display = 'none';
+        }
+
+        async function loadAlerts() {
+            const response = await fetch('/api/alerts/active');
+            const data = await response.json();
+            
+            const container = document.getElementById('alerts-container');
+            container.innerHTML = '';
+
+            if (data.data.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #7f8c8d;">No active alerts</div>';
+                return;
+            }
+
+            data.data.forEach(alert => {
+                const card = document.createElement('div');
+                card.className = `alert-card ${alert.priority}`;
+                card.innerHTML = `
+                    <div class="alert-header">
+                        <div class="alert-title">${alert.type}</div>
+                        <div class="alert-badge badge-${alert.status}">${alert.status.toUpperCase()}</div>
+                    </div>
+                    <div class="alert-info">
+                        <strong>Vehicle:</strong> ${alert.vehicleId} | 
+                        <strong>Channel:</strong> ${alert.channel} | 
+                        <strong>Priority:</strong> ${alert.priority.toUpperCase()} |
+                        <strong>Time:</strong> ${new Date(alert.timestamp).toLocaleString()}
+                    </div>
+                    <div class="alert-info">
+                        <strong>Location:</strong> ${alert.location.latitude.toFixed(6)}, ${alert.location.longitude.toFixed(6)}
+                    </div>
+                    ${alert.escalationLevel > 0 ? `<div class="alert-info" style="color: #e74c3c;"><strong>⚠️ Escalation Level:</strong> ${alert.escalationLevel}</div>` : ''}
+                    <div class="alert-actions">
+                        ${alert.status === 'new' ? `<button class="btn btn-acknowledge" onclick="acknowledgeAlert('${alert.id}')">Acknowledge</button>` : ''}
+                        <button class="btn btn-escalate" onclick="escalateAlert('${alert.id}')">Escalate</button>
+                        <button class="btn btn-resolve" onclick="resolveAlert('${alert.id}')">Resolve</button>
+                        ${alert.videoClipPath ? `<button class="btn btn-video" onclick="viewVideo('${alert.id}')">View Video</button>` : ''}
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        async function loadStats() {
+            const response = await fetch('/api/alerts/stats');
+            const data = await response.json();
+            
+            document.getElementById('total-alerts').textContent = data.data.total;
+            document.getElementById('new-alerts').textContent = data.data.new;
+            document.getElementById('escalated-alerts').textContent = data.data.escalated;
+            document.getElementById('acknowledged-alerts').textContent = data.data.acknowledged;
+        }
+
+        async function acknowledgeAlert(id) {
+            await fetch(`/api/alerts/${id}/acknowledge`, { method: 'POST' });
+            loadAlerts();
+            loadStats();
+        }
+
+        async function escalateAlert(id) {
+            await fetch(`/api/alerts/${id}/escalate`, { method: 'POST' });
+            loadAlerts();
+            loadStats();
+        }
+
+        async function resolveAlert(id) {
+            await fetch(`/api/alerts/${id}/resolve`, { method: 'POST' });
+            loadAlerts();
+            loadStats();
+        }
+
+        function viewVideo(id) {
+            window.open(`/api/alerts/${id}/video`, '_blank');
+        }
+
+        // Initialize
+        connectWebSocket();
+        loadAlerts();
+        loadStats();
+        setInterval(loadStats, 10000); // Refresh stats every 10 seconds
+    </script>
+</body>
+</html>

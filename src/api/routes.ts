@@ -279,29 +279,33 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get vehicle images
-  router.get('/vehicles/:id/images', (req, res) => {
+  router.get('/vehicles/:id/images', async (req, res) => {
     const { id } = req.params;
     const limit = parseInt(req.query.limit as string) || 50;
-    const mediaDir = path.join(process.cwd(), 'media', id);
     
     try {
-      if (!require('fs').existsSync(mediaDir)) {
-        return res.json({ success: true, data: [] });
-      }
+      const result = await require('../storage/database').query(
+        `SELECT id, device_id, channel, storage_url, file_size, timestamp 
+         FROM images 
+         WHERE device_id = $1 
+         ORDER BY timestamp DESC 
+         LIMIT $2`,
+        [id, limit]
+      );
       
-      const files = require('fs').readdirSync(mediaDir)
-        .filter((file: string) => file.match(/\.(jpg|jpeg|png)$/i))
-        .slice(0, limit)
-        .map((file: string) => ({
-          filename: file,
-          viewUrl: `/api/media/${id}/${file}`,
-          downloadUrl: `/api/media/${id}/${file}?download=true`,
-          timestamp: file.split('_')[2]?.replace(/-/g, ':') || 'unknown'
-        }));
-      
-      res.json({ success: true, data: files });
+      res.json({ 
+        success: true, 
+        data: result.rows.map((img: any) => ({
+          id: img.id,
+          deviceId: img.device_id,
+          channel: img.channel,
+          url: img.storage_url,
+          fileSize: img.file_size,
+          timestamp: img.timestamp
+        }))
+      });
     } catch (error) {
-      res.status(500).json({ success: false, message: 'Failed to read images' });
+      res.status(500).json({ success: false, message: 'Failed to fetch images' });
     }
   });
 
@@ -332,48 +336,31 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get all images from all vehicles
-  router.get('/images', (req, res) => {
-    const mediaDir = path.join(process.cwd(), 'media');
-    const allImages: any[] = [];
-    const limit = parseInt(req.query.limit as string) || 100;
-    
+  router.get('/images', async (req, res) => {
     try {
-      if (!require('fs').existsSync(mediaDir)) {
-        return res.json({ success: true, data: [] });
-      }
-      
-      const vehicleDirs = require('fs').readdirSync(mediaDir, { withFileTypes: true })
-        .filter((dirent: any) => dirent.isDirectory())
-        .map((dirent: any) => dirent.name);
-      
-      for (const vehicleId of vehicleDirs) {
-        const vehicleMediaDir = path.join(mediaDir, vehicleId);
-        const files = require('fs').readdirSync(vehicleMediaDir)
-          .filter((file: string) => file.match(/\.(jpg|jpeg|png)$/i))
-          .slice(0, limit)
-          .map((file: string) => ({
-            vehicleId,
-            filename: file,
-            viewUrl: `/api/media/${vehicleId}/${file}`,
-            downloadUrl: `/api/media/${vehicleId}/${file}?download=true`,
-            timestamp: file.split('_')[2]?.replace(/-/g, ':') || 'unknown',
-            channel: file.split('_')[1]?.replace('ch', '') || '1',
-            eventCode: file.split('_')[3]?.split('.')[0]?.replace('event', '') || '0'
-          }));
-        
-        allImages.push(...files);
-        if (allImages.length >= limit) break;
-      }
-      
-      allImages.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+      const limit = parseInt(req.query.limit as string) || 100;
+      const result = await require('../storage/database').query(
+        `SELECT id, device_id, channel, storage_url, file_size, timestamp 
+         FROM images 
+         ORDER BY timestamp DESC 
+         LIMIT $1`,
+        [limit]
+      );
       
       res.json({ 
         success: true, 
-        total: allImages.length,
-        data: allImages.slice(0, limit)
+        total: result.rows.length,
+        data: result.rows.map((img: any) => ({
+          id: img.id,
+          deviceId: img.device_id,
+          channel: img.channel,
+          url: img.storage_url,
+          fileSize: img.file_size,
+          timestamp: img.timestamp
+        }))
       });
     } catch (error) {
-      res.status(500).json({ success: false, message: 'Failed to read images' });
+      res.status(500).json({ success: false, message: 'Failed to fetch images' });
     }
   });
 
@@ -384,6 +371,138 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       success: true,
       total: devices.length,
       data: devices
+    });
+  });
+
+  // === ALERT MANAGEMENT ENDPOINTS ===
+  
+  // Get active alerts
+  router.get('/alerts/active', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const alerts = alertManager.getActiveAlerts();
+    res.json({
+      success: true,
+      total: alerts.length,
+      data: alerts
+    });
+  });
+
+  // Get alert by ID
+  router.get('/alerts/:id', (req, res) => {
+    const { id } = req.params;
+    const alertManager = tcpServer.getAlertManager();
+    const alert = alertManager.getAlertById(id);
+    
+    if (!alert) {
+      return res.status(404).json({
+        success: false,
+        message: `Alert ${id} not found`
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: alert
+    });
+  });
+
+  // Acknowledge alert
+  router.post('/alerts/:id/acknowledge', (req, res) => {
+    const { id } = req.params;
+    const alertManager = tcpServer.getAlertManager();
+    const success = alertManager.acknowledgeAlert(id);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Alert ${id} acknowledged`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Alert ${id} not found or already acknowledged`
+      });
+    }
+  });
+
+  // Resolve alert
+  router.post('/alerts/:id/resolve', (req, res) => {
+    const { id } = req.params;
+    const alertManager = tcpServer.getAlertManager();
+    const success = alertManager.resolveAlert(id);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Alert ${id} resolved`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Alert ${id} not found`
+      });
+    }
+  });
+
+  // Manually escalate alert
+  router.post('/alerts/:id/escalate', (req, res) => {
+    const { id } = req.params;
+    const alertManager = tcpServer.getAlertManager();
+    const success = alertManager.escalateAlert(id);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Alert ${id} escalated`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Alert ${id} not found`
+      });
+    }
+  });
+
+  // Get alert statistics
+  router.get('/alerts/stats', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const stats = alertManager.getAlertStats();
+    res.json({
+      success: true,
+      data: stats
+    });
+  });
+
+  // Get video clip for alert
+  router.get('/alerts/:id/video', (req, res) => {
+    const { id } = req.params;
+    const alertManager = tcpServer.getAlertManager();
+    const alert = alertManager.getAlertById(id);
+    
+    if (!alert || !alert.videoClipPath) {
+      return res.status(404).json({
+        success: false,
+        message: 'Video clip not found'
+      });
+    }
+    
+    if (require('fs').existsSync(alert.videoClipPath)) {
+      res.sendFile(path.resolve(alert.videoClipPath));
+    } else {
+      res.status(404).json({
+        success: false,
+        message: 'Video file not found on disk'
+      });
+    }
+  });
+
+  // Get buffer statistics
+  router.get('/alerts/buffers/stats', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const stats = alertManager.getBufferStats();
+    res.json({
+      success: true,
+      data: stats
     });
   });
 
