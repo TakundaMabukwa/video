@@ -86,6 +86,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const { channel = 1 } = req.body;
     
+    console.log(`📡 API: start-live called for vehicle ${id}, channel ${channel}`);
+    console.log(`  Request body:`, req.body);
+    
     const success = tcpServer.startVideo(id, channel);
     
     if (success) {
