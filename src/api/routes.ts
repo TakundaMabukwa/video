@@ -368,8 +368,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get all devices
-  router.get('/devices', (req, res) => {
-    const devices = tcpServer.getDevices();
+  router.get('/devices', async (req, res) => {
+    const devices = await tcpServer.getDevices();
     res.json({
       success: true,
       total: devices.length,
@@ -429,10 +429,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Acknowledge alert
-  router.post('/alerts/:id/acknowledge', (req, res) => {
+  router.post('/alerts/:id/acknowledge', async (req, res) => {
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
-    const success = alertManager.acknowledgeAlert(id);
+    const success = await alertManager.acknowledgeAlert(id);
     
     if (success) {
       res.json({
@@ -448,10 +448,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Resolve alert
-  router.post('/alerts/:id/resolve', (req, res) => {
+  router.post('/alerts/:id/resolve', async (req, res) => {
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
-    const success = alertManager.resolveAlert(id);
+    const success = await alertManager.resolveAlert(id);
     
     if (success) {
       res.json({
@@ -467,10 +467,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Manually escalate alert
-  router.post('/alerts/:id/escalate', (req, res) => {
+  router.post('/alerts/:id/escalate', async (req, res) => {
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
-    const success = alertManager.escalateAlert(id);
+    const success = await alertManager.escalateAlert(id);
     
     if (success) {
       res.json({

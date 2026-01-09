@@ -59,7 +59,7 @@ export class JTT808Server {
     
     let buffer = Buffer.alloc(0);
     
-    socket.on('data', (data) => {
+    socket.on('data', async (data) => {
       console.log(`Received ${data.length} bytes from ${socket.remoteAddress}`);
       buffer = Buffer.concat([buffer, data]);
       
@@ -420,8 +420,8 @@ export class JTT808Server {
     
     console.log('\n' + '='.repeat(80) + '\n');
     
-    // Save alert to JSON database
-    this.alertStorage.saveAlert(alert);
+    // Don't save LocationAlert to database - it's converted to AlertEvent by AlertManager
+    // this.alertStorage.saveAlert(alert);
     
     // Process through alert manager for escalation and screenshot capture
     this.alertManager.processAlert(alert);
