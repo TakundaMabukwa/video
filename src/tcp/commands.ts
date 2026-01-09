@@ -47,15 +47,60 @@ export class JTT1078Commands {
     return this.buildMessage(JTT808MessageType.START_VIDEO_REQUEST, terminalPhone, serialNumber, body);
   }
 
-  // Build 0x9201 command - Remote video playback request (screenshot)
-  static buildScreenshotCommand(
+  // Build 0x9205 command - Query resource list
+  static buildQueryResourceListCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    channelId: number,
+    startTime: Date,
+    endTime: Date,
+    alarmType: number = 0, // 0=all, 1-7=specific alarm types
+    mediaType: number = 0, // 0=audio+video, 1=audio, 2=video, 3=audio or video
+    streamType: number = 0 // 0=all, 1=main, 2=sub
+  ): Buffer {
+    const body = Buffer.alloc(18);
+    let offset = 0;
+    
+    // Channel ID (1 byte)
+    body.writeUInt8(channelId, offset++);
+    
+    // Start time (6 bytes BCD)
+    const startBcd = this.dateToBcd(startTime);
+    startBcd.copy(body, offset);
+    offset += 6;
+    
+    // End time (6 bytes BCD)
+    const endBcd = this.dateToBcd(endTime);
+    endBcd.copy(body, offset);
+    offset += 6;
+    
+    // Alarm type (1 byte)
+    body.writeUInt8(alarmType, offset++);
+    
+    // Media type (1 byte)
+    body.writeUInt8(mediaType, offset++);
+    
+    // Stream type (1 byte)
+    body.writeUInt8(streamType, offset++);
+    
+    // Storage type (1 byte) - 0=all, 1=main, 2=disaster recovery
+    body.writeUInt8(0, offset++);
+    
+    return this.buildMessage(0x9205, terminalPhone, serialNumber, body);
+  }
+
+  // Build 0x9201 command - Remote video playback request
+  static buildPlaybackCommand(
     terminalPhone: string,
     serialNumber: number,
     serverIp: string,
     serverPort: number,
-    channelId: number = 1
+    channelId: number,
+    startTime: Date,
+    endTime: Date,
+    playbackMethod: number = 0 // 0=normal, 1=fast forward, 2=key frames, 3=key frames + sub, 4=single frame
   ): Buffer {
-    const body = Buffer.alloc(16);
+    const body = Buffer.alloc(21);
     let offset = 0;
     
     // Server IP (4 bytes)
@@ -72,27 +117,24 @@ export class JTT1078Commands {
     // Channel ID (1 byte)
     body.writeUInt8(channelId, offset++);
     
-    // Playback method: 4 = Single frame upload (1 byte)
-    body.writeUInt8(4, offset++);
+    // Playback method (1 byte)
+    body.writeUInt8(playbackMethod, offset++);
     
-    // Fast forward multiple (1 byte) - not used for single frame
+    // Fast forward/rewind multiple (1 byte)
     body.writeUInt8(0, offset++);
     
-    // Timestamp (6 bytes BCD) - current time
-    const now = new Date();
-    const year = now.getFullYear() % 100;
-    const month = now.getMonth() + 1;
-    const day = now.getDate();
-    const hour = now.getHours();
-    const minute = now.getMinutes();
-    const second = now.getSeconds();
+    // Start time (6 bytes BCD)
+    const startBcd = this.dateToBcd(startTime);
+    startBcd.copy(body, offset);
+    offset += 6;
     
-    body.writeUInt8(parseInt(year.toString().padStart(2, '0'), 16), offset++);
-    body.writeUInt8(parseInt(month.toString().padStart(2, '0'), 16), offset++);
-    body.writeUInt8(parseInt(day.toString().padStart(2, '0'), 16), offset++);
-    body.writeUInt8(parseInt(hour.toString().padStart(2, '0'), 16), offset++);
-    body.writeUInt8(parseInt(minute.toString().padStart(2, '0'), 16), offset++);
-    body.writeUInt8(parseInt(second.toString().padStart(2, '0'), 16), offset++);
+    // End time (6 bytes BCD) - set to 0 for single frame
+    if (playbackMethod === 4) {
+      body.fill(0, offset, offset + 6);
+    } else {
+      const endBcd = this.dateToBcd(endTime);
+      endBcd.copy(body, offset);
+    }
     
     return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
   }
@@ -164,5 +206,28 @@ export class JTT1078Commands {
   private static stringToBcd(str: string): Buffer {
     const padded = str.padStart(12, '0');
     return Buffer.from(padded, 'hex');
+  }
+
+  private static dateToBcd(date: Date): Buffer {
+    const year = date.getFullYear() % 100;
+    const month = date.getMonth() + 1;
+    const day = date.getDate();
+    const hour = date.getHours();
+    const minute = date.getMinutes();
+    const second = date.getSeconds();
+    
+    const bcd = Buffer.alloc(6);
+    bcd[0] = this.toBcd(year);
+    bcd[1] = this.toBcd(month);
+    bcd[2] = this.toBcd(day);
+    bcd[3] = this.toBcd(hour);
+    bcd[4] = this.toBcd(minute);
+    bcd[5] = this.toBcd(second);
+    
+    return bcd;
+  }
+  
+  private static toBcd(value: number): number {
+    return ((Math.floor(value / 10) & 0x0F) << 4) | (value % 10 & 0x0F);
   }
 }

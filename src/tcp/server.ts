@@ -21,6 +21,18 @@ export class JTT808Server {
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
     this.alertManager = new AlertManager();
+    
+    // Listen for screenshot requests from alert manager
+    this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
+      console.log(`📸 Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${channel}`);
+      this.requestScreenshot(vehicleId, channel);
+    });
+    
+    // Listen for alert video requests (30s before + 30s after)
+    this.alertManager.on('request-alert-video', ({ vehicleId, channel, alertTime, alertId }) => {
+      console.log(`🎥 Alert ${alertId}: Requesting 30s pre/post video from ${vehicleId} channel ${channel}`);
+      this.requestAlertVideo(vehicleId, channel, alertTime);
+    });
   }
 
   getAlertManager(): AlertManager {
@@ -53,10 +65,13 @@ export class JTT808Server {
       while (buffer.length > 0) {
         // Check for RTP video data first (0x30316364)
         if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0x30316364) {
+          console.log(`🎥 RTP packet detected! Length: ${buffer.length}`);
           // Find RTP packet length from header
           if (buffer.length >= 20) {
             const payloadLength = buffer.readUInt16BE(18);
             const totalLength = 20 + payloadLength;
+            
+            console.log(`  RTP payload length: ${payloadLength}, total: ${totalLength}`);
             
             if (buffer.length >= totalLength) {
               const rtpPacket = buffer.slice(0, totalLength);
@@ -118,6 +133,11 @@ export class JTT808Server {
         console.log(`Camera capabilities (0x1003): ${message.body.toString('hex')}`);
         this.parseCapabilities(message.body);
         break;
+      case 0x1205: // Resource list response
+        console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
+        console.log(`Body: ${message.body.toString('hex')}`);
+        this.parseResourceList(message.body);
+        break;
       case 0x0800: // Multimedia event message upload
         this.handleMultimediaEvent(message, socket);
         break;
@@ -140,6 +160,8 @@ export class JTT808Server {
         break;
       }
     }
+    
+    console.log(`📦 RTP packet from vehicle ${vehicleId}, size: ${buffer.length}`);
     
     if (this.rtpHandler) {
       this.rtpHandler(buffer, vehicleId);
@@ -399,7 +421,7 @@ export class JTT808Server {
     // Save alert to JSON database
     this.alertStorage.saveAlert(alert);
     
-    // Process through alert manager for escalation and video capture
+    // Process through alert manager for escalation and screenshot capture
     this.alertManager.processAlert(alert);
   }
 
@@ -462,6 +484,45 @@ export class JTT808Server {
     return connectedVehicles.length > 0 ? connectedVehicles[connectedVehicles.length - 1].phone : null;
   }
 
+  private parseResourceList(body: Buffer): void {
+    if (body.length < 2) return;
+    
+    const itemCount = body.readUInt16BE(0);
+    console.log(`💾 Found ${itemCount} video files`);
+    
+    let offset = 2;
+    for (let i = 0; i < itemCount && offset < body.length; i++) {
+      if (offset + 28 > body.length) break;
+      
+      const channel = body.readUInt8(offset);
+      const startTime = this.parseBcdTime(body.slice(offset + 1, offset + 7));
+      const endTime = this.parseBcdTime(body.slice(offset + 7, offset + 13));
+      const alarmType = body.readUInt8(offset + 13);
+      const mediaType = body.readUInt8(offset + 14);
+      const streamType = body.readUInt8(offset + 15);
+      const storageType = body.readUInt8(offset + 16);
+      const fileSize = body.readUInt32BE(offset + 17);
+      
+      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
+      offset += 28;
+    }
+  }
+  
+  private parseBcdTime(buffer: Buffer): string {
+    if (buffer.length < 6) return 'invalid';
+    const year = this.fromBcd(buffer[0]) + 2000;
+    const month = this.fromBcd(buffer[1]);
+    const day = this.fromBcd(buffer[2]);
+    const hour = this.fromBcd(buffer[3]);
+    const minute = this.fromBcd(buffer[4]);
+    const second = this.fromBcd(buffer[5]);
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
+  }
+  
+  private fromBcd(byte: number): number {
+    return ((byte >> 4) & 0x0F) * 10 + (byte & 0x0F);
+  }
+
   queryCapabilities(vehicleId: string): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
@@ -489,16 +550,71 @@ export class JTT808Server {
     }
 
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+    const now = new Date();
 
-    const command = JTT1078Commands.buildScreenshotCommand(
+    const command = JTT1078Commands.buildPlaybackCommand(
       vehicleId,
       this.serialCounter++,
       serverIp,
-      this.port, // Use TCP port 7611
-      channel
+      this.port,
+      channel,
+      now,
+      now,
+      4 // Single frame upload
     );
     
     console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel} (TCP ${this.port})`);
+    socket.write(command);
+    return true;
+  }
+
+  requestAlertVideo(vehicleId: string, channel: number, alertTime: Date): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+    
+    // Request 30s before and 30s after alert
+    const startTime = new Date(alertTime.getTime() - 30000);
+    const endTime = new Date(alertTime.getTime() + 30000);
+
+    const command = JTT1078Commands.buildPlaybackCommand(
+      vehicleId,
+      this.serialCounter++,
+      serverIp,
+      this.port,
+      channel,
+      startTime,
+      endTime,
+      0 // Normal playback
+    );
+    
+    console.log(`🎥 Alert video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    socket.write(command);
+    return true;
+  }
+
+  queryResourceList(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildQueryResourceListCommand(
+      vehicleId,
+      this.serialCounter++,
+      channel,
+      startTime,
+      endTime
+    );
+    
+    console.log(`📝 Query resource list: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
     socket.write(command);
     return true;
   }

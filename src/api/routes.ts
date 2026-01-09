@@ -391,7 +391,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get alert by ID
-  router.get('/alerts/:id', (req, res) => {
+  router.get('/alerts/:id', async (req, res) => {
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const alert = alertManager.getAlertById(id);
@@ -403,10 +403,29 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       });
     }
     
-    res.json({
-      success: true,
-      data: alert
-    });
+    // Get associated screenshots
+    try {
+      const screenshots = await require('../storage/database').query(
+        `SELECT id, storage_url, timestamp 
+         FROM images 
+         WHERE alert_id = $1 
+         ORDER BY timestamp ASC`,
+        [id]
+      );
+      
+      res.json({
+        success: true,
+        data: {
+          ...alert,
+          screenshots: screenshots.rows
+        }
+      });
+    } catch (error) {
+      res.json({
+        success: true,
+        data: alert
+      });
+    }
   });
 
   // Acknowledge alert
@@ -506,6 +525,46 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     res.json({
       success: true,
       data: stats
+    });
+  });
+
+  // TEST: Query resource list (0x9205)
+  router.post('/vehicles/:id/test-query-resources', (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, minutesBack = 5 } = req.body;
+    
+    const vehicle = tcpServer.getVehicle(id);
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({ success: false, message: 'Vehicle not connected' });
+    }
+
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - minutesBack * 60000);
+    
+    const success = tcpServer.queryResourceList(id, channel, startTime, endTime);
+    res.json({
+      success,
+      message: success ? 'Query sent, check logs for 0x1205 response' : 'Failed to send query'
+    });
+  });
+
+  // TEST: Request playback (0x9201)
+  router.post('/vehicles/:id/test-playback', (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, minutesBack = 1 } = req.body;
+    
+    const vehicle = tcpServer.getVehicle(id);
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({ success: false, message: 'Vehicle not connected' });
+    }
+
+    const endTime = new Date();
+    const startTime = new Date(endTime.getTime() - minutesBack * 60000);
+    
+    const success = tcpServer.requestAlertVideo(id, channel, startTime);
+    res.json({
+      success,
+      message: success ? 'Playback request sent, check logs for RTP data' : 'Failed to send request'
     });
   });
 

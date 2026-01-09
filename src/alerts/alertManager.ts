@@ -87,7 +87,20 @@ export class AlertManager extends EventEmitter {
 
     this.activeAlerts.set(alertId, alertEvent);
 
-    // Capture 30s pre + 30s post video
+    // Request immediate screenshot for alert evidence
+    console.log(`📸 Requesting screenshot for alert ${alertId}`);
+    this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
+
+    // Request 30s before + 30s after video from camera's SD card
+    console.log(`🎥 Requesting 30s pre/post video for alert ${alertId}`);
+    this.emit('request-alert-video', { 
+      vehicleId: alert.vehicleId, 
+      channel, 
+      alertTime: alert.timestamp,
+      alertId 
+    });
+
+    // Capture 30s pre + 30s post video (if buffer exists)
     await this.captureEventVideo(alertEvent);
 
     // Send bell notification

@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS images (
   storage_url TEXT,
   file_size BIGINT,
   timestamp TIMESTAMPTZ NOT NULL,
+  alert_id TEXT REFERENCES alerts(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -59,3 +60,4 @@ CREATE INDEX IF NOT EXISTS idx_videos_alert ON videos(alert_id) WHERE alert_id I
 CREATE INDEX IF NOT EXISTS idx_alerts_device_time ON alerts(device_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status) WHERE status != 'resolved';
 CREATE INDEX IF NOT EXISTS idx_images_device_time ON images(device_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_images_alert ON images(alert_id) WHERE alert_id IS NOT NULL;
