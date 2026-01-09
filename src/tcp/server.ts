@@ -485,15 +485,23 @@ export class JTT808Server {
   }
 
   private parseResourceList(body: Buffer): void {
-    if (body.length < 2) return;
+    if (body.length < 2) {
+      console.log(`⚠️ Resource list body too short: ${body.length} bytes`);
+      return;
+    }
     
     const itemCount = body.readUInt16BE(0);
     console.log(`💾 Found ${itemCount} video files`);
+    console.log(`📦 Body length: ${body.length} bytes (expected: ${2 + itemCount * 28})`);
+    
+    if (body.length < 2 + itemCount * 28) {
+      console.log(`⚠️ Incomplete response - camera may send in multiple packets`);
+      console.log(`   Received: ${body.length} bytes, Expected: ${2 + itemCount * 28} bytes`);
+      return;
+    }
     
     let offset = 2;
-    for (let i = 0; i < itemCount && offset < body.length; i++) {
-      if (offset + 28 > body.length) break;
-      
+    for (let i = 0; i < itemCount && offset + 28 <= body.length; i++) {
       const channel = body.readUInt8(offset);
       const startTime = this.parseBcdTime(body.slice(offset + 1, offset + 7));
       const endTime = this.parseBcdTime(body.slice(offset + 7, offset + 13));
@@ -503,7 +511,7 @@ export class JTT808Server {
       const storageType = body.readUInt8(offset + 16);
       const fileSize = body.readUInt32BE(offset + 17);
       
-      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
+      console.log(`  📹 File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
       offset += 28;
     }
   }
