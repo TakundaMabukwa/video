@@ -501,10 +501,15 @@ export class JTT808Server {
 
   // Public methods for video control
   startVideo(vehicleId: string, channel: number = 1): boolean {
+    console.log(`🎬 startVideo called: vehicleId=${vehicleId}, channel=${channel}`);
+    
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
     
+    console.log(`  Vehicle found: ${!!vehicle}, Socket found: ${!!socket}, Connected: ${vehicle?.connected}`);
+    
     if (!vehicle || !socket || !vehicle.connected) {
+      console.log(`  ❌ Cannot start video: vehicle=${!!vehicle}, socket=${!!socket}, connected=${vehicle?.connected}`);
       return false;
     }
 
