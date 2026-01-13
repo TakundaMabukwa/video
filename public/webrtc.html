@@ -2,7 +2,6 @@
 <html>
 <head>
   <title>WebRTC Video Stream</title>
-  <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
   <h1>WebRTC Video Stream</h1>
@@ -10,32 +9,46 @@
   <div id="status">Connecting...</div>
   
   <script>
-    const socket = io({ path: '/webrtc' });
+    const ws = new WebSocket('ws://164.90.182.2:3000/webrtc');
     const video = document.getElementById('video');
     const status = document.getElementById('status');
     
     let peerConnection;
     const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     
-    socket.on('connect', () => {
+    ws.onopen = () => {
       status.textContent = 'Connected - Waiting for video...';
       initPeerConnection();
-    });
+    };
     
-    socket.on('video-data', (data) => {
-      console.log('Received video data:', data.vehicleId, data.data.length);
-    });
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      
+      if (msg.type === 'video-data') {
+        console.log('Received video data:', msg.vehicleId, msg.data.length);
+      } else if (msg.type === 'offer') {
+        handleOffer(msg);
+      } else if (msg.type === 'answer') {
+        handleAnswer(msg);
+      } else if (msg.type === 'ice-candidate') {
+        handleIceCandidate(msg);
+      }
+    };
     
-    socket.on('offer', async (data) => {
-      await peerConnection.setRemoteDescription(data.offer);
+    async function handleOffer(msg) {
+      await peerConnection.setRemoteDescription(msg.offer);
       const answer = await peerConnection.createAnswer();
       await peerConnection.setLocalDescription(answer);
-      socket.emit('answer', { answer, to: data.from });
-    });
+      ws.send(JSON.stringify({ type: 'answer', answer }));
+    }
     
-    socket.on('ice-candidate', (data) => {
-      peerConnection.addIceCandidate(data.candidate);
-    });
+    async function handleAnswer(msg) {
+      await peerConnection.setRemoteDescription(msg.answer);
+    }
+    
+    function handleIceCandidate(msg) {
+      peerConnection.addIceCandidate(msg.candidate);
+    }
     
     function initPeerConnection() {
       peerConnection = new RTCPeerConnection(config);
@@ -47,7 +60,7 @@
       
       peerConnection.onicecandidate = (event) => {
         if (event.candidate) {
-          socket.emit('ice-candidate', { candidate: event.candidate });
+          ws.send(JSON.stringify({ type: 'ice-candidate', candidate: event.candidate }));
         }
       };
     }

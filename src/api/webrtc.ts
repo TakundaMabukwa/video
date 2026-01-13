@@ -1,34 +1,36 @@
 import { Server as HTTPServer } from 'http';
-import { Server as SocketIOServer } from 'socket.io';
+import { WebSocketServer, WebSocket } from 'ws';
 
 export class WebRTCSignalingServer {
-  private io: SocketIOServer;
-  private peers = new Map<string, any>();
+  private wss: WebSocketServer;
+  private clients = new Map<WebSocket, string>();
 
   constructor(httpServer: HTTPServer) {
-    this.io = new SocketIOServer(httpServer, {
-      cors: { origin: '*' },
-      path: '/webrtc'
+    this.wss = new WebSocketServer({ 
+      server: httpServer, 
+      path: '/webrtc',
+      perMessageDeflate: false
     });
 
-    this.io.on('connection', (socket) => {
-      console.log(`[WebRTC] Client connected: ${socket.id}`);
+    this.wss.on('connection', (ws: WebSocket) => {
+      const clientId = Math.random().toString(36).substr(2, 9);
+      this.clients.set(ws, clientId);
+      console.log(`[WebRTC] Client connected: ${clientId}`);
 
-      socket.on('offer', (data) => {
-        socket.broadcast.emit('offer', { ...data, from: socket.id });
+      ws.on('message', (data: Buffer) => {
+        const msg = JSON.parse(data.toString());
+        
+        // Broadcast signaling messages to other clients
+        this.wss.clients.forEach((client) => {
+          if (client !== ws && client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify({ ...msg, from: clientId }));
+          }
+        });
       });
 
-      socket.on('answer', (data) => {
-        this.io.to(data.to).emit('answer', { ...data, from: socket.id });
-      });
-
-      socket.on('ice-candidate', (data) => {
-        socket.broadcast.emit('ice-candidate', { ...data, from: socket.id });
-      });
-
-      socket.on('disconnect', () => {
-        console.log(`[WebRTC] Client disconnected: ${socket.id}`);
-        this.peers.delete(socket.id);
+      ws.on('close', () => {
+        console.log(`[WebRTC] Client disconnected: ${clientId}`);
+        this.clients.delete(ws);
       });
     });
 
@@ -36,10 +38,17 @@ export class WebRTCSignalingServer {
   }
 
   broadcastVideoData(buffer: Buffer, vehicleId: string) {
-    this.io.emit('video-data', {
+    const msg = JSON.stringify({
+      type: 'video-data',
       vehicleId,
       data: buffer.toString('base64'),
       timestamp: Date.now()
+    });
+    
+    this.wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(msg);
+      }
     });
   }
 }
