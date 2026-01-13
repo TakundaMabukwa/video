@@ -6,8 +6,10 @@ import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
+import { onTcpData } from './services/video-feed';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
+import { buffer } from 'stream/consumers';
 
 // Load environment variables
 dotenv.config();
@@ -39,7 +41,10 @@ async function startServer() {
   udpServer.setAlertManager(alertManager);
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
+
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
+    const test = onTcpData(buffer);
+    console.log("Test: " + test);
   });
   
   await tcpServer.start();
