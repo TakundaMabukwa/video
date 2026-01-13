@@ -18,11 +18,22 @@ export class DataWebSocketServer {
   }
 
   broadcast(data: any) {
-    const payload = JSON.stringify(data);
+    const payload = typeof data === 'string' ? data : JSON.stringify(data);
 
     this.wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(payload);
+      }
+    });
+  }
+
+  broadcastBinary(buffer: Buffer) {
+    const clientCount = Array.from(this.wss.clients).filter(c => c.readyState === WebSocket.OPEN).length;
+    console.log(`📡 Broadcasting ${buffer.length} bytes to ${clientCount} clients`);
+    
+    this.wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(buffer);
       }
     });
   }

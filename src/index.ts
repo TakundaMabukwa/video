@@ -46,15 +46,9 @@ async function startServer() {
   udpServer.setAlertManager(alertManager);
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
-    
+    console.log(`📦 RTP data received: ${buffer.length} bytes from ${vehicleId}`);
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-
-    dataWsServer.broadcast({
-    type: 'RTP_PACKET',
-    vehicleId,
-    size: buffer.length,
-    timestamp: new Date().toISOString()
-  });
+    dataWsServer.broadcastBinary(buffer);
   });
   
   await tcpServer.start();
