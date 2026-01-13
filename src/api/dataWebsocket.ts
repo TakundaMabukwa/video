@@ -1,40 +1,135 @@
-import { WebSocketServer, WebSocket } from 'ws';
+// dataWebsocket.ts
 
+import { Server as HttpServer } from "http";
+
+import WebSocket, { WebSocketServer } from "ws";
+ 
+type BroadcastPayload = unknown;
+ 
 export class DataWebSocketServer {
+
   private wss: WebSocketServer;
 
-  constructor(port: number) {
-    this.wss = new WebSocketServer({ port });
+  private clients = new Set<WebSocket>();
+ 
+  constructor(httpServer: HttpServer, path = "/ws/data") {
 
-    this.wss.on('connection', (ws: WebSocket) => {
-      console.log('📡 Data WS client connected');
+    this.wss = new WebSocketServer({ server: httpServer, path });
+ 
+    this.wss.on("connection", (ws, req) => {
 
-      ws.on('close', () => {
-        console.log('❌ Data WS client disconnected');
+      this.clients.add(ws);
+ 
+      console.log(
+
+        `[WS] client connected (${this.clients.size}) from ${req.socket.remoteAddress}`
+
+      );
+ 
+      // Optional: send a hello so you can see immediate traffic in the browser
+
+      this.safeSend(ws, { type: "hello", ts: Date.now() });
+ 
+      ws.on("message", (raw) => {
+
+        // If you want, you can accept client commands here
+
+        // console.log("[WS] message from client:", raw.toString());
+
       });
+ 
+      ws.on("close", () => {
+
+        this.clients.delete(ws);
+
+        console.log(`[WS] client disconnected (${this.clients.size})`);
+
+      });
+ 
+      ws.on("error", (err) => {
+
+        console.error("[WS] client error:", err);
+
+      });
+
     });
+ 
+    // Keep-alive pings (helps with proxies / idle connections)
 
-    console.log(`📡 Data WebSocket listening on ws://localhost:${port}`);
-  }
+    const interval = setInterval(() => {
 
-  broadcast(data: any) {
-    const payload = typeof data === 'string' ? data : JSON.stringify(data);
+      for (const ws of this.clients) {
 
-    this.wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(payload);
+        if (ws.readyState === WebSocket.OPEN) {
+
+          ws.ping();
+
+        }
+
       }
-    });
+
+    }, 25000);
+ 
+    this.wss.on("close", () => clearInterval(interval));
+ 
+    console.log(`[WS] mounted on path: ${path}`);
+
+  }
+ 
+  public broadcast(payload: BroadcastPayload) {
+
+    const message = JSON.stringify(payload);
+
+    let sent = 0;
+
+    let skipped = 0;
+ 
+    for (const ws of this.clients) {
+
+      if (ws.readyState !== WebSocket.OPEN) {
+
+        skipped++;
+
+        continue;
+
+      }
+
+      try {
+
+        ws.send(message);
+
+        sent++;
+
+      } catch (e) {
+
+        skipped++;
+
+      }
+
+    }
+ 
+    console.log(`[WS] broadcast -> sent=${sent} skipped=${skipped}`);
+
+  }
+ 
+  public getClientCount() {
+
+    return this.clients.size;
+
+  }
+ 
+  private safeSend(ws: WebSocket, payload: any) {
+
+    try {
+
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(payload));
+
+    } catch {
+
+      // ignore
+
+    }
+
   }
 
-  broadcastBinary(buffer: Buffer) {
-    const clientCount = Array.from(this.wss.clients).filter(c => c.readyState === WebSocket.OPEN).length;
-    console.log(`📡 Broadcasting ${buffer.length} bytes to ${clientCount} clients`);
-    
-    this.wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(buffer);
-      }
-    });
-  }
 }
