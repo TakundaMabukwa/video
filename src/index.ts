@@ -6,13 +6,18 @@ import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
-import { onTcpData } from './services/video-feed';
+// import { onTcpData } from './services/video-feed';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
-import { buffer } from 'stream/consumers';
+import { DataWebSocketServer } from './api/dataWebsocket';
+
+
 
 // Load environment variables
 dotenv.config();
+const DATA_WS_PORT = parseInt(process.env.DATA_WS_PORT || '7080');
+
+const dataWsServer = new DataWebSocketServer(DATA_WS_PORT);
 
 const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
@@ -41,10 +46,15 @@ async function startServer() {
   udpServer.setAlertManager(alertManager);
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
-
+    
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-    const test = onTcpData(buffer);
-    console.log("Test: " + test);
+
+    dataWsServer.broadcast({
+    type: 'RTP_PACKET',
+    vehicleId,
+    size: buffer.length,
+    timestamp: new Date().toISOString()
+  });
   });
   
   await tcpServer.start();
