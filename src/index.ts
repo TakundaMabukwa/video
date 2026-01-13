@@ -141,7 +141,7 @@ async function startServer() {
   tcpServer.setRTPHandler((buffer, vehicleId) => {
     
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-    console.log(buffer);
+    console.log("buffer- ", buffer);
 
     dataWsServer.broadcast({
     type: 'RTP_PACKET',
