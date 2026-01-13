@@ -17,7 +17,11 @@ export class DataWebSocketServer {
     this.wss = new WebSocketServer({ 
       server: httpServer, 
       path,
-      perMessageDeflate: false
+      perMessageDeflate: {
+        zlibDeflateOptions: { chunkSize: 1024, memLevel: 7, level: 3 },
+        zlibInflateOptions: { chunkSize: 10 * 1024 },
+        threshold: 1024
+      }
     });
  
     this.wss.on("connection", (ws, req) => {
