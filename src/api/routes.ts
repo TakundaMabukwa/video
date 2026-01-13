@@ -87,11 +87,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { channel = 1 } = req.body;
     
     console.log(`📡 API: start-live called for vehicle ${id}, channel ${channel}`);
-    console.log(`  Request body:`, req.body);
     
     const success = tcpServer.startVideo(id, channel);
-    
     if (success) {
+      udpServer.startHLSStream(id, channel);
       res.json({
         success: true,
         message: `Video stream started for vehicle ${id}, channel ${channel}`
@@ -111,6 +110,12 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     
     const success = tcpServer.stopVideo(id, channel);
     udpServer.stopStream(id, channel);
+    
+    // Also stop TCP RTP handler stream
+    const tcpRTPHandler = (tcpServer as any).rtpHandler;
+    if (tcpRTPHandler?.stopStream) {
+      tcpRTPHandler.stopStream(id, channel);
+    }
     
     if (success) {
       res.json({

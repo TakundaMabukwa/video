@@ -4,11 +4,13 @@ import { FrameAssembler } from './frameAssembler';
 import { VideoWriter } from '../video/writer';
 import { StreamInfo } from '../types/jtt';
 import { AlertManager } from '../alerts/alertManager';
+import { HLSStreamer } from '../streaming/hls';
 
 export class UDPRTPServer {
   private server: dgram.Socket;
   private frameAssembler = new FrameAssembler();
   private videoWriter = new VideoWriter();
+  private hlsStreamer = new HLSStreamer();
   private streams = new Map<string, StreamInfo>();
   private packetCount = 0;
   private lastLogTime = Date.now();
@@ -91,7 +93,10 @@ export class UDPRTPServer {
         );
       }
       
-      // Only write I-frames to reduce disk I/O
+      // Write to HLS stream
+      this.hlsStreamer.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
+      
+      // Only write I-frames to disk to reduce I/O
       if (isIFrame) {
         this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
       }
@@ -122,11 +127,16 @@ export class UDPRTPServer {
     return Array.from(this.streams.values());
   }
 
+  startHLSStream(vehicleId: string, channel: number): void {
+    this.hlsStreamer.startStream(vehicleId, channel);
+  }
+
   stopStream(vehicleId: string, channel: number): void {
     const streamKey = `${vehicleId}_${channel}`;
     const streamInfo = this.streams.get(streamKey);
     if (streamInfo) {
       streamInfo.active = false;
+      this.hlsStreamer.stopStream(vehicleId, channel);
       console.log(`Stream stopped: ${streamKey}`);
     }
   }
