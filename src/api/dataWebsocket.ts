@@ -14,7 +14,11 @@ export class DataWebSocketServer {
  
   constructor(httpServer: HttpServer, path = "/ws/data") {
 
-    this.wss = new WebSocketServer({ server: httpServer, path });
+    this.wss = new WebSocketServer({ 
+      server: httpServer, 
+      path,
+      perMessageDeflate: false
+    });
  
     this.wss.on("connection", (ws, req) => {
 
