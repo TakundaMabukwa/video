@@ -20,6 +20,11 @@ export class JTT808Server {
   private imageStorage = new ImageStorage();
   private alertManager: AlertManager;
 
+  private getNextSerial(): number {
+    this.serialCounter = (this.serialCounter % 65535) + 1;
+    return this.serialCounter;
+  }
+
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
     this.alertManager = new AlertManager();
@@ -192,7 +197,7 @@ export class JTT808Server {
     responseBody.writeUInt8(0, 2); // Success
     authToken.copy(responseBody, 3);
     
-    const response = this.buildMessage(0x8100, message.terminalPhone, this.serialCounter++, responseBody);
+    const response = this.buildMessage(0x8100, message.terminalPhone, this.getNextSerial(), responseBody);
     
     console.log(`Sending 0x8100 response with auth token: ${authToken.toString('hex')}`);
     socket.write(response);
@@ -271,7 +276,7 @@ export class JTT808Server {
     
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
@@ -290,7 +295,7 @@ export class JTT808Server {
     // Send heartbeat response
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
@@ -351,7 +356,7 @@ export class JTT808Server {
     // Send location report response
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
@@ -543,7 +548,7 @@ export class JTT808Server {
 
     const command = JTT1078Commands.buildQueryCapabilitiesCommand(
       vehicleId,
-      this.serialCounter++
+      this.getNextSerial()
     );
     
     console.log(`Sending 0x9003 query capabilities to ${vehicleId}`);
@@ -564,7 +569,7 @@ export class JTT808Server {
 
     const command = JTT1078Commands.buildPlaybackCommand(
       vehicleId,
-      this.serialCounter++,
+      this.getNextSerial(),
       serverIp,
       this.port,
       channel,
@@ -594,7 +599,7 @@ export class JTT808Server {
 
     const command = JTT1078Commands.buildPlaybackCommand(
       vehicleId,
-      this.serialCounter++,
+      this.getNextSerial(),
       serverIp,
       this.port,
       channel,
@@ -618,7 +623,7 @@ export class JTT808Server {
 
     const command = JTT1078Commands.buildQueryResourceListCommand(
       vehicleId,
-      this.serialCounter++,
+      this.getNextSerial(),
       channel,
       startTime,
       endTime
@@ -650,7 +655,7 @@ export class JTT808Server {
     
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
-      this.serialCounter++,
+      this.getNextSerial(),
       serverIp,
       this.port, // Use TCP port 7611 instead of UDP port
       channel,
@@ -694,7 +699,7 @@ export class JTT808Server {
   private handleMultimediaEvent(message: any, socket: net.Socket): void {
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
@@ -705,7 +710,7 @@ export class JTT808Server {
   private handleCustomMessage(message: any, socket: net.Socket): void {
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
@@ -725,7 +730,7 @@ export class JTT808Server {
     
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
-      this.serialCounter++,
+      this.getNextSerial(),
       message.serialNumber,
       message.messageId,
       0
