@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+  <body>
+    <h3>WS Test</h3>
+    <pre id="log"></pre>
+    <script>
+      const log = (...a) => {
+        document.getElementById("log").textContent += a.join(" ") + "\n";
+        console.log(...a);
+      };
+
+      const ws = new WebSocket("ws://164.90.182.2:3000/ws/data");
+      ws.onopen = () => log("OPEN");
+      ws.onmessage = (e) => log("MSG", e.data);
+      ws.onerror = (e) => log("ERROR", e.type);
+      ws.onclose = (e) => log("CLOSE", e.code, e.reason);
+    </script>
+  </body>
+</html>

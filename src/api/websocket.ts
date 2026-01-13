@@ -7,7 +7,11 @@ export class AlertWebSocketServer {
   private clients = new Set<WebSocket>();
 
   constructor(httpServer: HTTPServer, alertManager: AlertManager) {
-    this.wss = new WebSocketServer({ server: httpServer, path: '/ws/alerts' });
+    this.wss = new WebSocketServer({ 
+      server: httpServer, 
+      path: '/ws/alerts',
+      perMessageDeflate: false
+    });
 
     this.wss.on('connection', (ws: WebSocket) => {
       console.log('🔌 WebSocket client connected');
