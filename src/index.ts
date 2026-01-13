@@ -6,7 +6,7 @@ import { TCPRTPHandler } from './tcp/rtpHandler';
 import { createRoutes } from './api/routes';
 import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
-import { DataWebSocketServer } from './api/dataWebsocket';
+import { WebRTCSignalingServer } from './api/webrtc';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
 
@@ -35,8 +35,8 @@ async function startServer() {
   
   const httpServer = createServer(app);
   
-  // Initialize data WebSocket on same HTTP server
-  const dataWsServer = new DataWebSocketServer(httpServer, '/ws/data');
+  // Initialize WebRTC signaling server
+  const webrtcServer = new WebRTCSignalingServer(httpServer);
   
   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
   const udpServer = new UDPRTPServer(UDP_PORT);
@@ -48,7 +48,7 @@ async function startServer() {
   tcpServer.setRTPHandler((buffer, vehicleId) => {
     console.log(`📦 RTP: ${buffer.length} bytes from ${vehicleId}`);
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-    dataWsServer.broadcast({ type: 'rtp', vehicleId, data: buffer.toString('base64'), size: buffer.length });
+    webrtcServer.broadcastVideoData(buffer, vehicleId);
   });
   
   await tcpServer.start();
@@ -74,7 +74,7 @@ async function startServer() {
   httpServer.listen(API_PORT, () => {
     console.log(`\n✅ REST API: http://localhost:${API_PORT}`);
     console.log(`✅ Alert WS: ws://localhost:${API_PORT}/ws/alerts`);
-    console.log(`✅ Data WS: ws://localhost:${API_PORT}/ws/data`);
+    console.log(`✅ WebRTC Signaling: http://localhost:${API_PORT}/webrtc`);
     console.log(`✅ TCP: ${TCP_PORT} | UDP: ${UDP_PORT}\n`);
   });
   

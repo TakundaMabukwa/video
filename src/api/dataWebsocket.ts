@@ -119,6 +119,17 @@ export class DataWebSocketServer {
     console.log(`[WS] broadcast -> sent=${sent} skipped=${skipped}`);
 
   }
+
+  public broadcastBinary(buffer: Buffer, vehicleId?: string) {
+    for (const ws of this.clients) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      try {
+        ws.send(buffer);
+      } catch (e) {
+        console.error('[WS] send error:', e);
+      }
+    }
+  }
  
   public getClientCount() {
 
