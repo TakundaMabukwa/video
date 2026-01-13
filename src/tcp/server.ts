@@ -60,12 +60,11 @@ export class JTT808Server {
   }
 
   private handleConnection(socket: net.Socket): void {
-    console.log(`New TCP connection from ${socket.remoteAddress}:${socket.remotePort}`);
-    
+    const clientAddr = `${socket.remoteAddress}:${socket.remotePort}`;
     let buffer = Buffer.alloc(0);
     
     socket.on('data', async (data) => {
-      console.log(`Received ${data.length} bytes from ${socket.remoteAddress}`);
+      console.log(`[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`);
       buffer = Buffer.concat([buffer, data]);
       
       // Process complete messages
@@ -78,7 +77,7 @@ export class JTT808Server {
             const payloadLength = buffer.readUInt16BE(18);
             const totalLength = 20 + payloadLength;
             
-            console.log(`  RTP payload length: ${payloadLength}, total: ${totalLength}`);
+            
             
             if (buffer.length >= totalLength) {
               const rtpPacket = buffer.slice(0, totalLength);
@@ -102,7 +101,7 @@ export class JTT808Server {
     });
 
     socket.on('close', () => {
-      console.log(`TCP connection closed: ${socket.remoteAddress}:${socket.remotePort}`);
+      
       this.handleDisconnection(socket);
     });
 
@@ -118,7 +117,7 @@ export class JTT808Server {
       return;
     }
 
-    console.log(`Received message 0x${message.messageId.toString(16)} from ${message.terminalPhone}`);
+    
 
     switch (message.messageId) {
       case JTT808MessageType.TERMINAL_REGISTER:
@@ -134,15 +133,15 @@ export class JTT808Server {
         this.handleLocationReport(message, socket);
         break;
       case 0x0001:
-        console.log(`Terminal response 0x1, body: ${message.body.toString('hex')}`);
+        
         break;
       case 0x1003: // Audio/video capabilities response
-        console.log(`Camera capabilities (0x1003): ${message.body.toString('hex')}`);
+        
         this.parseCapabilities(message.body);
         break;
       case 0x1205: // Resource list response
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
-        console.log(`Body: ${message.body.toString('hex')}`);
+        
         this.parseResourceList(message.body);
         break;
       case 0x0800: // Multimedia event message upload
@@ -155,7 +154,7 @@ export class JTT808Server {
         this.handleCustomMessage(message, socket);
         break;
       default:
-        console.log(`Unhandled message type: 0x${message.messageId.toString(16)}`);
+        
     }
   }
 
@@ -199,9 +198,9 @@ export class JTT808Server {
     
     const response = this.buildMessage(0x8100, message.terminalPhone, this.getNextSerial(), responseBody);
     
-    console.log(`Sending 0x8100 response with auth token: ${authToken.toString('hex')}`);
+    
     socket.write(response);
-    console.log(`Vehicle ${message.terminalPhone} registered with auth token`);
+    
     
     // Keep connection alive
     socket.setKeepAlive(true, 30000);
@@ -271,7 +270,7 @@ export class JTT808Server {
       };
       this.vehicles.set(message.terminalPhone, vehicle);
       this.connections.set(message.terminalPhone, socket);
-      console.log(`Vehicle ${message.terminalPhone} added via auth`);
+      
     }
     
     const response = JTT1078Commands.buildGeneralResponse(
@@ -283,7 +282,7 @@ export class JTT808Server {
     );
     
     socket.write(response);
-    console.log(`Vehicle ${message.terminalPhone} authenticated`);
+    
   }
 
   private handleHeartbeat(message: any, socket: net.Socket): void {
@@ -450,7 +449,7 @@ export class JTT808Server {
     if (body.length < 2) return;
     
     const channelCount = body.readUInt8(0);
-    console.log(`Camera has ${channelCount} channels`);
+    
     
     const channels: VehicleChannel[] = [];
     let offset = 1;
@@ -470,7 +469,7 @@ export class JTT808Server {
         hasGimbal
       });
       
-      console.log(`Channel ${physicalChannel}: Logical=${logicalChannel}, Type=${typeMap[channelType as keyof typeof typeMap]}, Gimbal=${hasGimbal}`);
+      
       offset += 4;
     }
     
@@ -503,7 +502,7 @@ export class JTT808Server {
     
     if (body.length < 2 + itemCount * 28) {
       console.log(`⚠️ Incomplete response - camera may send in multiple packets`);
-      console.log(`   Received: ${body.length} bytes, Expected: ${2 + itemCount * 28} bytes`);
+      
       return;
     }
     
@@ -551,7 +550,7 @@ export class JTT808Server {
       this.getNextSerial()
     );
     
-    console.log(`Sending 0x9003 query capabilities to ${vehicleId}`);
+    
     socket.write(command);
     return true;
   }
@@ -641,7 +640,7 @@ export class JTT808Server {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
     
-    console.log(`  Vehicle found: ${!!vehicle}, Socket found: ${!!socket}, Connected: ${vehicle?.connected}`);
+    
     
     if (!vehicle || !socket || !vehicle.connected) {
       console.log(`  ❌ Cannot start video: vehicle=${!!vehicle}, socket=${!!socket}, connected=${vehicle?.connected}`);
@@ -663,11 +662,11 @@ export class JTT808Server {
       0  // Main stream
     );
     
-    console.log(`Sending 0x9101: IP=${serverIp}, Port=${this.port} (TCP), Channel=${channel}`);
+    
     socket.write(command);
     vehicle.activeStreams.add(channel);
     
-    console.log(`Started video stream for vehicle ${vehicleId}, channel ${channel}`);
+    
     return true;
   }
 
@@ -676,7 +675,7 @@ export class JTT808Server {
     if (!vehicle) return false;
     
     vehicle.activeStreams.delete(channel);
-    console.log(`Stopped video stream for vehicle ${vehicleId}, channel ${channel}`);
+    
     return true;
   }
 
@@ -738,3 +737,8 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
+
+
+
+
