@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Video Feed</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial; background: #1e1e1e; color: #fff; }
+    .header { background: #252526; padding: 20px; border-bottom: 2px solid #4ec9b0; }
+    h1 { font-size: 24px; margin-bottom: 10px; }
+    .status { font-size: 14px; color: #888; }
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(640px, 1fr)); gap: 20px; padding: 20px; }
+    .video-card { background: #252526; border-radius: 8px; overflow: hidden; }
+    .video-header { padding: 15px; background: #2d2d30; display: flex; justify-content: space-between; align-items: center; }
+    .vehicle-name { font-size: 16px; font-weight: bold; color: #4ec9b0; }
+    .stream-status { font-size: 12px; padding: 4px 12px; border-radius: 12px; background: #0e639c; }
+    .stream-status.active { background: #4ec9b0; color: #000; }
+    canvas { width: 100%; height: auto; background: #000; display: block; }
+    .video-stats { padding: 12px 15px; background: #1e1e1e; font-size: 11px; font-family: monospace; color: #888; display: flex; justify-content: space-between; }
+    .stat { display: flex; align-items: center; gap: 8px; }
+    .stat-label { color: #666; }
+    .stat-value { color: #4ec9b0; font-weight: bold; }
+    .iframe-indicator { color: #ce9178; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>🎥 Live Video Feed</h1>
+    <div class="status" id="global-status">Connecting...</div>
+  </div>
+  
+  <div class="video-grid" id="video-grid"></div>
+
+  <script>
+    const players = new Map();
+    let eventSource = null;
+    let totalFrames = 0;
+
+    class VideoPlayer {
+      constructor(vehicleId, channel) {
+        this.vehicleId = vehicleId;
+        this.channel = channel;
+        this.frameCount = 0;
+        this.iframeCount = 0;
+        this.lastFrameTime = Date.now();
+        this.fps = 0;
+        this.bitrate = 0;
+        this.lastSecondBytes = 0;
+        this.lastBitrateUpdate = Date.now();
+        
+        this.createUI();
+      }
+
+      createUI() {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        card.innerHTML = `
+          <div class="video-header">
+            <div class="vehicle-name">📹 ${this.vehicleId} - Channel ${this.channel}</div>
+            <div class="stream-status">Waiting...</div>
+          </div>
+          <canvas width="1280" height="720"></canvas>
+          <div class="video-stats">
+            <div class="stat">
+              <span class="stat-label">Frames:</span>
+              <span class="stat-value frames">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">I-Frames:</span>
+              <span class="stat-value iframe-indicator iframes">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">FPS:</span>
+              <span class="stat-value fps">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Bitrate:</span>
+              <span class="stat-value bitrate">0 kbps</span>
+            </div>
+          </div>
+        `;
+        
+        document.getElementById('video-grid').appendChild(card);
+        
+        this.card = card;
+        this.canvas = card.querySelector('canvas');
+        this.ctx = this.canvas.getContext('2d');
+        this.statusEl = card.querySelector('.stream-status');
+        this.framesEl = card.querySelector('.frames');
+        this.iframesEl = card.querySelector('.iframes');
+        this.fpsEl = card.querySelector('.fps');
+        this.bitrateEl = card.querySelector('.bitrate');
+      }
+
+      processFrame(frameData, isIFrame, frameSize) {
+        this.frameCount++;
+        if (isIFrame) this.iframeCount++;
+        
+        // Calculate FPS
+        const now = Date.now();
+        const elapsed = (now - this.lastFrameTime) / 1000;
+        if (elapsed > 0) {
+          this.fps = Math.round(1 / elapsed);
+        }
+        this.lastFrameTime = now;
+        
+        // Calculate bitrate
+        this.lastSecondBytes += frameSize;
+        if (now - this.lastBitrateUpdate >= 1000) {
+          this.bitrate = Math.round((this.lastSecondBytes * 8) / 1024); // kbps
+          this.lastSecondBytes = 0;
+          this.lastBitrateUpdate = now;
+        }
+        
+        // Render frame visualization
+        this.renderFrame(isIFrame);
+        
+        // Update UI
+        this.statusEl.textContent = 'Streaming';
+        this.statusEl.className = 'stream-status active';
+        this.framesEl.textContent = this.frameCount;
+        this.iframesEl.textContent = this.iframeCount;
+        this.fpsEl.textContent = this.fps;
+        this.bitrateEl.textContent = `${this.bitrate} kbps`;
+      }
+
+      renderFrame(isIFrame) {
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        
+        // Clear with black
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(0, 0, w, h);
+        
+        // Draw frame type indicator
+        this.ctx.fillStyle = isIFrame ? '#4ec9b0' : '#0e639c';
+        this.ctx.fillRect(0, 0, w, 8);
+        
+        // Draw center content
+        this.ctx.textAlign = 'center';
+        this.ctx.textBaseline = 'middle';
+        
+        // Frame type
+        this.ctx.fillStyle = isIFrame ? '#4ec9b0' : '#888';
+        this.ctx.font = 'bold 72px Arial';
+        this.ctx.fillText(
+          isIFrame ? '🎬 I-FRAME' : '📹 P-FRAME',
+          w / 2,
+          h / 2 - 80
+        );
+        
+        // Frame number
+        this.ctx.fillStyle = '#fff';
+        this.ctx.font = '36px Arial';
+        this.ctx.fillText(
+          `Frame #${this.frameCount}`,
+          w / 2,
+          h / 2
+        );
+        
+        // Vehicle info
+        this.ctx.fillStyle = '#888';
+        this.ctx.font = '24px Arial';
+        this.ctx.fillText(
+          `${this.vehicleId} - Channel ${this.channel}`,
+          w / 2,
+          h / 2 + 60
+        );
+        
+        // FPS
+        this.ctx.fillStyle = '#4ec9b0';
+        this.ctx.font = 'bold 28px Arial';
+        this.ctx.fillText(
+          `${this.fps} FPS`,
+          w / 2,
+          h / 2 + 110
+        );
+        
+        // Timestamp
+        this.ctx.fillStyle = '#666';
+        this.ctx.font = '16px monospace';
+        this.ctx.textAlign = 'right';
+        this.ctx.fillText(
+          new Date().toLocaleTimeString(),
+          w - 20,
+          h - 20
+        );
+      }
+    }
+
+    function connectSSE() {
+      const url = '/api/stream/sse';
+      console.log('Connecting to SSE:', url);
+      
+      document.getElementById('global-status').textContent = 'Connecting...';
+      
+      eventSource = new EventSource(url);
+
+      eventSource.onopen = () => {
+        console.log('✅ SSE Connected');
+        document.getElementById('global-status').textContent = `Connected - ${players.size} streams active`;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'connected') {
+            console.log('SSE connection established');
+            return;
+          }
+          
+          if (data.type === 'frame') {
+            totalFrames++;
+            
+            const key = `${data.vehicleId}_${data.channel}`;
+            
+            if (!players.has(key)) {
+              console.log(`📹 New stream: ${data.vehicleId} Ch${data.channel}`);
+              players.set(key, new VideoPlayer(data.vehicleId, data.channel));
+            }
+            
+            const player = players.get(key);
+            player.processFrame(data.data, data.isIFrame, data.size);
+            
+            // Update global status
+            document.getElementById('global-status').textContent = 
+              `Connected - ${players.size} streams - ${totalFrames} total frames`;
+          }
+        } catch (error) {
+          console.error('Parse error:', error);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error('SSE Error:', error);
+        document.getElementById('global-status').textContent = 'Disconnected - Reconnecting...';
+        
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        setTimeout(connectSSE, 3000);
+      };
+    }
+
+    window.onload = () => {
+      console.log('Page loaded - connecting to video stream...');
+      connectSSE();
+    };
+
+    window.onbeforeunload = () => {
+      if (eventSource) eventSource.close();
+    };
+  </script>
+</body>
+</html>
