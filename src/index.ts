@@ -186,7 +186,7 @@ async function startServer() {
   
   const wsServer = new AlertWebSocketServer(httpServer, alertManager);
   
-  httpServer.listen(API_PORT, () => {
+  httpServer.listen(API_PORT, '0.0.0.0', () => {
     console.log(`REST API server listening on port ${API_PORT}`);
     console.log(`WebSocket - Alerts: ws://localhost:${API_PORT}/ws/alerts`);
     console.log(`WebSocket - Data: ws://localhost:${API_PORT}/ws/data`);
