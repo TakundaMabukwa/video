@@ -59,11 +59,17 @@ export class SSEVideoStream {
   }
 
   broadcastFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) {
+    console.log(`📡 SSE broadcastFrame called: ${vehicleId}_${channel}, clients=${this.clients.length}`);
+    
     const clients = this.clients.filter(c => 
       c.vehicleId === vehicleId && c.channel === channel
     );
 
-    if (clients.length === 0) return;
+    console.log(`   Matching clients: ${clients.length}`);
+    if (clients.length === 0) {
+      console.log(`   Available clients:`, this.clients.map(c => `${c.vehicleId}_${c.channel}`));
+      return;
+    }
 
     const data = JSON.stringify({
       type: 'frame',
@@ -78,8 +84,9 @@ export class SSEVideoStream {
     for (const client of clients) {
       try {
         client.res.write(`data: ${data}\n\n`);
+        console.log(`   ✅ Sent frame to client`);
       } catch (error) {
-        console.error('SSE write error:', error);
+        console.error('   ❌ SSE write error:', error);
       }
     }
   }

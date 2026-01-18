@@ -10,6 +10,7 @@
     #log { height: 400px; overflow-y: auto; background: #252526; padding: 10px; font-family: monospace; font-size: 12px; }
     .frame { color: #4ec9b0; }
     .iframe { color: #ce9178; font-weight: bold; }
+    .error { color: #f48771; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -87,12 +88,17 @@
             updateStatus(`Streaming | Frames: ${frameCount} | I-Frames: ${iframeCount}`);
           }
         } catch (error) {
-          log(`Parse error: ${error}`, 'error');
+          log(`Parse error: ${error.message}`, 'error');
+          console.error('Full parse error:', error);
+          console.error('Event data:', event.data);
         }
       };
 
       eventSource.onerror = (error) => {
-        log('❌ SSE Error', 'error');
+        log(`❌ SSE Error: ${JSON.stringify(error)}`, 'error');
+        log(`Error details - readyState: ${eventSource?.readyState}, type: ${error.type}`, 'error');
+        console.error('SSE Error object:', error);
+        console.error('EventSource state:', eventSource);
         updateStatus('Error', '#f48771');
         stopStream();
       };

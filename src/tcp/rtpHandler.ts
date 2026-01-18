@@ -18,6 +18,7 @@ export class TCPRTPHandler {
   handleRTPPacket(buffer: Buffer, vehicleId: string): void {
     const parsed = JTT1078RTPParser.parseRTPPacket(buffer);
     if (!parsed) {
+      console.log(`⚠️ Failed to parse RTP packet from ${vehicleId}`);
       return;
     }
 
@@ -37,9 +38,14 @@ export class TCPRTPHandler {
       
       const isIFrame = this.isIFrame(completeFrame);
       
+      console.log(`📦 Frame #${this.frameCount} assembled: ${vehicleId}_ch${header.channelNumber}, size=${completeFrame.length}, isIFrame=${isIFrame}, hasCallback=${!!this.onFrameCallback}`);
+      
       // Broadcast to SSE/WebSocket
       if (this.onFrameCallback) {
         this.onFrameCallback(vehicleId, header.channelNumber, completeFrame, isIFrame);
+        console.log(`✅ Frame broadcasted to SSE/WebSocket`);
+      } else {
+        console.log(`⚠️ No frame callback registered!`);
       }
       
       this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame);
@@ -47,10 +53,6 @@ export class TCPRTPHandler {
       
       if (this.frameCount === 1) {
         console.log(`First video frame received from ${vehicleId}, channel ${header.channelNumber}`);
-      }
-      
-      if (this.frameCount % 100 === 0) {
-        console.log(`Frames received: ${this.frameCount}`);
       }
     }
   }
