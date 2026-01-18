@@ -4,8 +4,6 @@
   <title>SSE Video Stream</title>
   <style>
     body { font-family: Arial; padding: 20px; background: #1e1e1e; color: #fff; }
-    .controls { margin: 20px 0; }
-    input, button { padding: 10px; margin: 5px; font-size: 14px; }
     #status { padding: 10px; margin: 10px 0; background: #333; border-radius: 5px; }
     #log { height: 400px; overflow-y: auto; background: #252526; padding: 10px; font-family: monospace; font-size: 12px; }
     .frame { color: #4ec9b0; }
@@ -14,16 +12,8 @@
   </style>
 </head>
 <body>
-  <h2>🎥 SSE Video Stream Viewer</h2>
-  
-  <div class="controls">
-    <input type="text" id="vehicleId" placeholder="Vehicle ID" value="221083633486">
-    <input type="number" id="channel" placeholder="Channel" value="1" min="1" max="8">
-    <button onclick="startStream()">Start Stream</button>
-    <button onclick="stopStream()">Stop Stream</button>
-  </div>
-
-  <div id="status">Status: Disconnected</div>
+  <h2>🎥 SSE Video Stream Viewer (Auto-Connect)</h2>
+  <div id="status">Status: Connecting...</div>
   <div id="log"></div>
 
   <script>
@@ -45,27 +35,14 @@
     }
 
     function startStream() {
-      if (eventSource) {
-        log('Already connected', 'error');
-        return;
-      }
-
-      const vehicleId = document.getElementById('vehicleId').value;
-      const channel = document.getElementById('channel').value;
-
-      if (!vehicleId) {
-        alert('Please enter Vehicle ID');
-        return;
-      }
-
-      const url = `/api/stream/sse?vehicleId=${vehicleId}&channel=${channel}`;
-      log(`Connecting to: ${url}`);
+      const url = `/api/stream/sse?vehicleId=all&channel=1`;
+      log(`Auto-connecting to: ${url}`);
       updateStatus('Connecting...', '#ffa500');
 
       eventSource = new EventSource(url);
 
       eventSource.onopen = () => {
-        log('✅ SSE Connected', 'iframe');
+        log('✅ SSE Connected - Receiving ALL vehicles/channels', 'iframe');
         updateStatus('Connected', '#4ec9b0');
         frameCount = 0;
         iframeCount = 0;
@@ -81,9 +58,9 @@
             frameCount++;
             if (data.isIFrame) {
               iframeCount++;
-              log(`I-Frame #${iframeCount} | Size: ${data.size}B | Total: ${frameCount}`, 'iframe');
+              log(`I-Frame #${iframeCount} | ${data.vehicleId}_ch${data.channel} | ${data.size}B | Total: ${frameCount}`, 'iframe');
             } else if (frameCount % 30 === 0) {
-              log(`Frame #${frameCount} | Size: ${data.size}B`, 'frame');
+              log(`Frame #${frameCount} | ${data.vehicleId}_ch${data.channel} | ${data.size}B`, 'frame');
             }
             updateStatus(`Streaming | Frames: ${frameCount} | I-Frames: ${iframeCount}`);
           }
@@ -99,22 +76,27 @@
         log(`Error details - readyState: ${eventSource?.readyState}, type: ${error.type}`, 'error');
         console.error('SSE Error object:', error);
         console.error('EventSource state:', eventSource);
-        updateStatus('Error', '#f48771');
-        stopStream();
+        updateStatus('Error - Reconnecting in 3s...', '#f48771');
+        
+        if (eventSource) {
+          eventSource.close();
+          eventSource = null;
+        }
+        
+        setTimeout(startStream, 3000);
       };
     }
 
-    function stopStream() {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
-        log('Disconnected');
-        updateStatus('Disconnected', '#f48771');
-      }
-    }
+    // Auto-start on page load
+    window.onload = () => {
+      log('Page loaded - auto-connecting...');
+      startStream();
+    };
 
     window.onbeforeunload = () => {
-      stopStream();
+      if (eventSource) {
+        eventSource.close();
+      }
     };
   </script>
 </body>
