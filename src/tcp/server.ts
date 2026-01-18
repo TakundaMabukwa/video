@@ -13,6 +13,7 @@ export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
   private connections = new Map<string, net.Socket>();
+  private socketToVehicle = new Map<net.Socket, string>();
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
   private alertStorage = new AlertStorageDB();
@@ -172,17 +173,11 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    let vehicleId = 'unknown';
-    for (const [phone, conn] of this.connections.entries()) {
-      if (conn === socket) {
-        vehicleId = phone;
-        break;
-      }
-    }
+    const vehicleId = this.socketToVehicle.get(socket) || 'unknown';
     
     console.log(`📦 RTP packet from vehicle ${vehicleId}, size: ${buffer.length}`);
     
-    if (this.rtpHandler) {
+    if (this.rtpHandler && vehicleId !== 'unknown') {
       this.rtpHandler(buffer, vehicleId);
     }
   }
@@ -201,6 +196,7 @@ export class JTT808Server {
     
     this.vehicles.set(message.terminalPhone, vehicle);
     this.connections.set(message.terminalPhone, socket);
+    this.socketToVehicle.set(socket, message.terminalPhone);
     
     // Send proper 0x8100 registration response with auth token
     const authToken = Buffer.from('AUTH123456', 'ascii');
@@ -283,6 +279,7 @@ export class JTT808Server {
       };
       this.vehicles.set(message.terminalPhone, vehicle);
       this.connections.set(message.terminalPhone, socket);
+      this.socketToVehicle.set(socket, message.terminalPhone);
       
       console.log(`✅ Camera authenticated: ${message.terminalPhone}`);
       
@@ -451,16 +448,15 @@ export class JTT808Server {
   }
 
   private handleDisconnection(socket: net.Socket): void {
-    for (const [phone, conn] of this.connections.entries()) {
-      if (conn === socket) {
-        const vehicle = this.vehicles.get(phone);
-        if (vehicle) {
-          vehicle.connected = false;
-          vehicle.activeStreams.clear();
-        }
-        this.connections.delete(phone);
-        break;
+    const vehicleId = this.socketToVehicle.get(socket);
+    if (vehicleId) {
+      const vehicle = this.vehicles.get(vehicleId);
+      if (vehicle) {
+        vehicle.connected = false;
+        vehicle.activeStreams.clear();
       }
+      this.connections.delete(vehicleId);
+      this.socketToVehicle.delete(socket);
     }
   }
 
