@@ -192,6 +192,14 @@ async function startServer() {
     sseVideoStream.handleConnection(req, res);
   });
   
+  // Test endpoint to check if SSE broadcast works
+  app.get('/api/stream/test', (req, res) => {
+    const testFrame = Buffer.from('TEST_FRAME_DATA');
+    console.log('🧪 Manual test broadcast triggered');
+    sseVideoStream.broadcastFrame('TEST_VEHICLE', 1, testFrame, true);
+    res.json({ message: 'Test frame broadcasted', clients: sseVideoStream.getStats() });
+  });
+  
   app.get('/api/vehicles/connected', (req, res) => {
     const vehicles = tcpServer.getVehicles().filter(v => v.connected);
     res.json(vehicles.map(v => ({
@@ -214,6 +222,7 @@ async function startServer() {
   console.log('\n=== JT/T 1078 Video Server Started ===');
   console.log(`TCP: ${TCP_PORT} | UDP: ${UDP_PORT} | API: ${API_PORT}`);
   console.log(`Live Stream: ws://localhost:${API_PORT}/ws/video`);
+  console.log(`SSE Test: http://localhost:${API_PORT}/api/stream/test`);
   console.log('==========================================\n');
   
   // Graceful shutdown
