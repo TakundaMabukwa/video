@@ -173,17 +173,18 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    // Parse RTP to get vehicle ID from header
-    const parsed = require('../udp/rtpParser').JTT1078RTPParser.parseRTPPacket(buffer);
-    const vehicleId = parsed?.header.simCard || 'unknown';
+    // Get vehicle ID from socket mapping (RTP comes on same socket as registration)
+    const vehicleId = this.socketToVehicle.get(socket);
     
-    console.log(`📹 RTP data received: vehicleId=${vehicleId}, size=${buffer.length}, hasHandler=${!!this.rtpHandler}`);
+    if (!vehicleId) {
+      console.log(`⚠️ RTP packet from unmapped socket ${socket.remoteAddress}:${socket.remotePort}`);
+      return;
+    }
     
-    if (this.rtpHandler && vehicleId !== 'unknown') {
+    console.log(`📹 RTP data received: vehicleId=${vehicleId}, size=${buffer.length}`);
+    
+    if (this.rtpHandler) {
       this.rtpHandler(buffer, vehicleId);
-    } else {
-      if (vehicleId === 'unknown') console.log('   ⚠️ Vehicle ID is unknown - cannot process');
-      if (!this.rtpHandler) console.log('   ⚠️ No RTP handler registered');
     }
   }
 
