@@ -31,15 +31,19 @@ export class FrameAssembler {
     }
     
     const key = `${header.simCard}_${header.channelNumber}_${header.timestamp?.toString() || Date.now()}`;
+    
+    console.log(`📦 Frame assembler: simCard=${header.simCard}, ch=${header.channelNumber}, seq=${header.sequenceNumber}, flag=${header.subpackageFlag}, payloadSize=${payload.length}`);
 
     // Extract and cache SPS/PPS for proper H.264 decoding
     this.extractParameterSets(payload, `${header.simCard}_${header.channelNumber}`);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.ATOMIC) {
+      console.log(`   ✅ ATOMIC frame - returning immediately`);
       return this.prependParameterSets(payload, `${header.simCard}_${header.channelNumber}`);
     }
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.FIRST) {
+      console.log(`   🆕 FIRST packet - starting new frame buffer`);
       this.frameBuffers.set(key, {
         timestamp: header.timestamp?.toString() || Date.now().toString(),
         channelNumber: header.channelNumber,
@@ -52,17 +56,23 @@ export class FrameAssembler {
     }
 
     const frameBuffer = this.frameBuffers.get(key);
-    if (!frameBuffer) return null;
+    if (!frameBuffer) {
+      console.log(`   ⚠️ No frame buffer found for key: ${key}`);
+      return null;
+    }
 
     if (header.sequenceNumber !== frameBuffer.expectedSequence) {
+      console.log(`   ❌ Sequence mismatch: got ${header.sequenceNumber}, expected ${frameBuffer.expectedSequence}`);
       this.frameBuffers.delete(key);
       return null;
     }
 
     frameBuffer.parts.push(payload);
     frameBuffer.expectedSequence = header.sequenceNumber + 1;
+    console.log(`   🔗 Added part ${frameBuffer.parts.length}, expecting seq ${frameBuffer.expectedSequence}`);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.LAST) {
+      console.log(`   ✅ LAST packet - assembling complete frame from ${frameBuffer.parts.length} parts`);
       const completeFrame = Buffer.concat(frameBuffer.parts);
       this.frameBuffers.delete(key);
       return this.prependParameterSets(completeFrame, `${header.simCard}_${header.channelNumber}`);
