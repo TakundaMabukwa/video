@@ -101,6 +101,7 @@ import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
 import { DataWebSocketServer } from './api/dataWebsocket';
 import { LiveVideoStreamServer } from './streaming/liveStream';
+import { SSEVideoStream } from './streaming/sseStream';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
 
@@ -136,10 +137,12 @@ async function startServer() {
   const httpServer = createServer(app);
   const dataWsServer = new DataWebSocketServer(httpServer, '/ws/data');
   const liveVideoServer = new LiveVideoStreamServer(httpServer, tcpServer);
+  const sseVideoStream = new SSEVideoStream(tcpServer);
   
-  // Connect UDP frames to WebSocket broadcast
+  // Connect UDP frames to WebSocket and SSE broadcast
   udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
     liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
+    sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
   });
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
@@ -171,7 +174,14 @@ async function startServer() {
   });
   
   app.get('/api/stream/stats', (req, res) => {
-    res.json(liveVideoServer.getStats());
+    res.json({
+      websocket: liveVideoServer.getStats(),
+      sse: sseVideoStream.getStats()
+    });
+  });
+  
+  app.get('/api/stream/sse', (req, res) => {
+    sseVideoStream.handleConnection(req, res);
   });
   
   app.get('/api/vehicles/connected', (req, res) => {

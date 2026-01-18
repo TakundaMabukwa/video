@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>SSE Video Stream</title>
+  <style>
+    body { font-family: Arial; padding: 20px; background: #1e1e1e; color: #fff; }
+    .controls { margin: 20px 0; }
+    input, button { padding: 10px; margin: 5px; font-size: 14px; }
+    #status { padding: 10px; margin: 10px 0; background: #333; border-radius: 5px; }
+    #log { height: 400px; overflow-y: auto; background: #252526; padding: 10px; font-family: monospace; font-size: 12px; }
+    .frame { color: #4ec9b0; }
+    .iframe { color: #ce9178; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>🎥 SSE Video Stream Viewer</h2>
+  
+  <div class="controls">
+    <input type="text" id="vehicleId" placeholder="Vehicle ID" value="221083633486">
+    <input type="number" id="channel" placeholder="Channel" value="1" min="1" max="8">
+    <button onclick="startStream()">Start Stream</button>
+    <button onclick="stopStream()">Stop Stream</button>
+  </div>
+
+  <div id="status">Status: Disconnected</div>
+  <div id="log"></div>
+
+  <script>
+    let eventSource = null;
+    let frameCount = 0;
+    let iframeCount = 0;
+
+    function log(msg, className = '') {
+      const div = document.createElement('div');
+      div.className = className;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      document.getElementById('log').prepend(div);
+    }
+
+    function updateStatus(msg, color = '#4ec9b0') {
+      const status = document.getElementById('status');
+      status.textContent = `Status: ${msg}`;
+      status.style.color = color;
+    }
+
+    function startStream() {
+      if (eventSource) {
+        log('Already connected', 'error');
+        return;
+      }
+
+      const vehicleId = document.getElementById('vehicleId').value;
+      const channel = document.getElementById('channel').value;
+
+      if (!vehicleId) {
+        alert('Please enter Vehicle ID');
+        return;
+      }
+
+      const url = `/api/stream/sse?vehicleId=${vehicleId}&channel=${channel}`;
+      log(`Connecting to: ${url}`);
+      updateStatus('Connecting...', '#ffa500');
+
+      eventSource = new EventSource(url);
+
+      eventSource.onopen = () => {
+        log('✅ SSE Connected', 'iframe');
+        updateStatus('Connected', '#4ec9b0');
+        frameCount = 0;
+        iframeCount = 0;
+      };
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'connected') {
+            log('Stream ready');
+          } else if (data.type === 'frame') {
+            frameCount++;
+            if (data.isIFrame) {
+              iframeCount++;
+              log(`I-Frame #${iframeCount} | Size: ${data.size}B | Total: ${frameCount}`, 'iframe');
+            } else if (frameCount % 30 === 0) {
+              log(`Frame #${frameCount} | Size: ${data.size}B`, 'frame');
+            }
+            updateStatus(`Streaming | Frames: ${frameCount} | I-Frames: ${iframeCount}`);
+          }
+        } catch (error) {
+          log(`Parse error: ${error}`, 'error');
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        log('❌ SSE Error', 'error');
+        updateStatus('Error', '#f48771');
+        stopStream();
+      };
+    }
+
+    function stopStream() {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+        log('Disconnected');
+        updateStatus('Disconnected', '#f48771');
+      }
+    }
+
+    window.onbeforeunload = () => {
+      stopStream();
+    };
+  </script>
+</body>
+</html>
