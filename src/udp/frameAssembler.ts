@@ -1,7 +1,7 @@
 import { JTT1078RTPHeader, JTT1078SubpackageFlag } from '../types/jtt';
 
 interface FrameBuffer {
-  timestamp: number;
+  timestamp: string;
   channelNumber: number;
   parts: Buffer[];
   expectedSequence: number;
@@ -41,7 +41,7 @@ export class FrameAssembler {
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.FIRST) {
       this.frameBuffers.set(key, {
-        timestamp: header.timestamp,
+        timestamp: header.timestamp?.toString() || Date.now().toString(),
         channelNumber: header.channelNumber,
         parts: [payload],
         expectedSequence: header.sequenceNumber + 1,

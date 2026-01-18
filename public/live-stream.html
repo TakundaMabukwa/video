@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Video Stream - JT/T 1078</title>
+  <style>
+    body { font-family: Arial; margin: 20px; background: #1a1a1a; color: #fff; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
+    .video-card { background: #2a2a2a; border-radius: 8px; padding: 15px; }
+    .video-canvas { width: 100%; height: 300px; background: #000; border-radius: 4px; }
+    .stats { font-size: 12px; color: #888; margin-top: 10px; }
+    button { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }
+    button:hover { background: #45a049; }
+    button.stop { background: #f44336; }
+    button.stop:hover { background: #da190b; }
+    input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #333; color: #fff; margin: 5px; }
+    .status { padding: 10px; border-radius: 4px; margin: 10px 0; }
+    .status.connected { background: #4CAF50; }
+    .status.disconnected { background: #f44336; }
+    .frame-info { font-size: 11px; color: #666; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🎥 Live Video Stream - JT/T 1078</h1>
+    
+    <div class="controls">
+      <h3>Stream Controls</h3>
+      <div>
+        <input type="text" id="vehicleId" placeholder="Vehicle ID" value="013912345678">
+        <input type="number" id="channel" placeholder="Channel" value="1" min="1" max="16">
+        <button onclick="subscribe()">▶️ Start Stream</button>
+        <button class="stop" onclick="unsubscribe()">⏹️ Stop Stream</button>
+      </div>
+      <div id="status" class="status disconnected">Disconnected</div>
+      <div id="stats" class="stats"></div>
+    </div>
+
+    <div id="videoGrid" class="video-grid"></div>
+  </div>
+
+  <script>
+    let ws = null;
+    const streams = new Map();
+
+    function connect() {
+      ws = new WebSocket('ws://localhost:3000/ws/video');
+      
+      ws.onopen = () => {
+        document.getElementById('status').className = 'status connected';
+        document.getElementById('status').textContent = 'Connected to video server';
+        console.log('WebSocket connected');
+      };
+
+      ws.onclose = () => {
+        document.getElementById('status').className = 'status disconnected';
+        document.getElementById('status').textContent = 'Disconnected - Reconnecting...';
+        setTimeout(connect, 2000);
+      };
+
+      ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+      };
+
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleMessage(msg);
+      };
+    }
+
+    function handleMessage(msg) {
+      switch (msg.type) {
+        case 'subscribed':
+          console.log(`Subscribed to ${msg.vehicleId} channel ${msg.channel}`);
+          createVideoCard(msg.vehicleId, msg.channel);
+          break;
+        
+        case 'frame':
+          displayFrame(msg);
+          break;
+      }
+    }
+
+    function createVideoCard(vehicleId, channel) {
+      const key = `${vehicleId}_${channel}`;
+      if (streams.has(key)) return;
+
+      const card = document.createElement('div');
+      card.className = 'video-card';
+      card.id = `card_${key}`;
+      card.innerHTML = `
+        <h3>Vehicle: ${vehicleId} - Channel ${channel}</h3>
+        <canvas id="canvas_${key}" class="video-canvas"></canvas>
+        <div class="stats">
+          <div>Frames: <span id="frames_${key}">0</span></div>
+          <div>I-Frames: <span id="iframes_${key}">0</span></div>
+          <div>Data Rate: <span id="rate_${key}">0</span> KB/s</div>
+          <div class="frame-info">Last: <span id="last_${key}">-</span></div>
+        </div>
+      `;
+      
+      document.getElementById('videoGrid').appendChild(card);
+      
+      const canvas = document.getElementById(`canvas_${key}`);
+      const ctx = canvas.getContext('2d');
+      
+      streams.set(key, {
+        vehicleId,
+        channel,
+        canvas,
+        ctx,
+        frameCount: 0,
+        iFrameCount: 0,
+        totalBytes: 0,
+        lastUpdate: Date.now()
+      });
+    }
+
+    function displayFrame(msg) {
+      const key = `${msg.vehicleId}_${msg.channel}`;
+      const stream = streams.get(key);
+      
+      if (!stream) return;
+
+      stream.frameCount++;
+      if (msg.isIFrame) stream.iFrameCount++;
+      stream.totalBytes += msg.size;
+
+      // Update stats
+      document.getElementById(`frames_${key}`).textContent = stream.frameCount;
+      document.getElementById(`iframes_${key}`).textContent = stream.iFrameCount;
+      document.getElementById(`last_${key}`).textContent = new Date(msg.timestamp).toLocaleTimeString();
+
+      // Calculate data rate
+      const now = Date.now();
+      const elapsed = (now - stream.lastUpdate) / 1000;
+      if (elapsed >= 1) {
+        const rate = (stream.totalBytes / 1024 / elapsed).toFixed(2);
+        document.getElementById(`rate_${key}`).textContent = rate;
+        stream.totalBytes = 0;
+        stream.lastUpdate = now;
+      }
+
+      // Display frame info (for debugging - actual video decoding needs JSMpeg or similar)
+      stream.ctx.fillStyle = '#000';
+      stream.ctx.fillRect(0, 0, stream.canvas.width, stream.canvas.height);
+      stream.ctx.fillStyle = msg.isIFrame ? '#4CAF50' : '#2196F3';
+      stream.ctx.font = '20px Arial';
+      stream.ctx.fillText(`Frame ${stream.frameCount}`, 20, 40);
+      stream.ctx.fillText(msg.isIFrame ? 'I-FRAME' : 'P/B-FRAME', 20, 70);
+      stream.ctx.fillText(`${(msg.size / 1024).toFixed(2)} KB`, 20, 100);
+    }
+
+    function subscribe() {
+      const vehicleId = document.getElementById('vehicleId').value;
+      const channel = parseInt(document.getElementById('channel').value);
+      
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected to server');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        vehicleId,
+        channel
+      }));
+    }
+
+    function unsubscribe() {
+      const vehicleId = document.getElementById('vehicleId').value;
+      const channel = parseInt(document.getElementById('channel').value);
+      
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected to server');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'unsubscribe',
+        vehicleId,
+        channel
+      }));
+
+      const key = `${vehicleId}_${channel}`;
+      const card = document.getElementById(`card_${key}`);
+      if (card) card.remove();
+      streams.delete(key);
+    }
+
+    // Auto-connect on load
+    connect();
+
+    // Update stats every second
+    setInterval(() => {
+      const stats = Array.from(streams.values()).map(s => 
+        `${s.vehicleId}:${s.channel} - ${s.frameCount} frames (${s.iFrameCount} I-frames)`
+      ).join(' | ');
+      document.getElementById('stats').textContent = stats || 'No active streams';
+    }, 1000);
+  </script>
+</body>
+</html>

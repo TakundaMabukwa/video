@@ -15,6 +15,7 @@ export class UDPRTPServer {
   private packetCount = 0;
   private lastLogTime = Date.now();
   private alertManager?: AlertManager;
+  private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -22,6 +23,10 @@ export class UDPRTPServer {
 
   setAlertManager(alertManager: AlertManager): void {
     this.alertManager = alertManager;
+  }
+
+  setFrameCallback(callback: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void): void {
+    this.onFrameCallback = callback;
   }
 
   start(): Promise<void> {
@@ -44,7 +49,6 @@ export class UDPRTPServer {
   private handleRTPPacket(buffer: Buffer, rinfo: dgram.RemoteInfo): void {
     this.packetCount++;
     
-    // Rate limit logging - only log every 5 seconds
     const now = Date.now();
     if (now - this.lastLogTime > 5000) {
       console.log(`Processed ${this.packetCount} packets in last 5s`);
@@ -60,7 +64,6 @@ export class UDPRTPServer {
     const { header, payload, dataType } = parsed;
     const streamKey = `${rinfo.address}_${header.channelNumber}`;
     
-    // Update stream info
     let streamInfo = this.streams.get(streamKey);
     if (!streamInfo) {
       streamInfo = {
@@ -74,7 +77,6 @@ export class UDPRTPServer {
       console.log(`New stream started: ${streamKey}, dataType: ${dataType === 0 ? 'I-frame' : dataType === 1 ? 'P-frame' : dataType === 2 ? 'B-frame' : 'Audio'}`);
     }
 
-    // Attempt frame assembly
     const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
     if (completeFrame) {
       streamInfo.frameCount++;
@@ -82,7 +84,6 @@ export class UDPRTPServer {
       
       const isIFrame = this.isIFrame(completeFrame);
       
-      // Add to circular buffer for alert system
       if (this.alertManager) {
         this.alertManager.addFrameToBuffer(
           streamInfo.vehicleId,
@@ -93,10 +94,12 @@ export class UDPRTPServer {
         );
       }
       
-      // Write to HLS stream
-      this.hlsStreamer.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
+      // Broadcast to WebSocket clients
+      if (this.onFrameCallback) {
+        this.onFrameCallback(streamInfo.vehicleId, header.channelNumber, completeFrame, isIFrame);
+      }
       
-      // Write all frames to disk for proper playback (not just I-frames)
+      this.hlsStreamer.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
       this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
     }
   }

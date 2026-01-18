@@ -16,7 +16,7 @@ export class TCPRTPHandler {
       return;
     }
 
-    const { header, payload } = parsed;
+    const { header, payload, dataType } = parsed;
     const streamKey = `${vehicleId}_${header.channelNumber}`;
     
     // Start HLS stream on first packet
@@ -26,7 +26,7 @@ export class TCPRTPHandler {
       console.log(`🎬 HLS stream started: ${streamKey}`);
     }
     
-    const completeFrame = this.frameAssembler.assembleFrame(header, payload);
+    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
     if (completeFrame) {
       this.frameCount++;
       this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame);

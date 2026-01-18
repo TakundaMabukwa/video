@@ -133,13 +133,20 @@ export class JTT808Server {
         this.handleLocationReport(message, socket);
         break;
       case 0x0001:
-        console.log(`✅ Terminal general response from ${message.terminalPhone}:`);
+        console.log(`Terminal general response from ${message.terminalPhone}:`);
         if (message.body.length >= 5) {
           const replySerial = message.body.readUInt16BE(0);
           const replyMsgId = message.body.readUInt16BE(2);
           const result = message.body.readUInt8(4);
           console.log(`   Reply to: 0x${replyMsgId.toString(16).padStart(4, '0')} (serial ${replySerial})`);
-          console.log(`   Result: ${result === 0 ? '✅ Success' : result === 1 ? '❌ Failure' : result === 2 ? '⚠️ Message error' : '🚫 Not supported'}`);\n          \n          // Log specific responses\n          if (replyMsgId === 0x9101) {\n            console.log(`   🎬 Video stream request acknowledged - waiting for RTP data...`);\n          } else if (replyMsgId === 0x9003) {\n            console.log(`   📋 Capabilities query acknowledged`);\n          }\n        }
+          console.log(`   Result: ${result === 0 ? 'Success' : result === 1 ? 'Failure' : result === 2 ? 'Message error' : 'Not supported'}`);
+          
+          if (replyMsgId === 0x9101) {
+            console.log(`   Video stream request acknowledged - waiting for RTP data...`);
+          } else if (replyMsgId === 0x9003) {
+            console.log(`   Capabilities query acknowledged`);
+          }
+        }
         break;
       case 0x1003: // Audio/video capabilities response
         console.log(`📋 Capabilities response from ${message.terminalPhone}`);

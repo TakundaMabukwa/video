@@ -103,44 +103,6 @@ export class JTT1078RTPParser {
     return result;
   }
 
-      const header: JTT1078RTPHeader = {
-        frameHeader,
-        version,
-        padding,
-        extension,
-        csrcCount,
-        marker,
-        payloadType,
-        sequenceNumber,
-        simCard,
-        channelNumber,
-        dataType,
-        subpackageFlag,
-        timestamp,
-        lastIFrameInterval,
-        lastFrameInterval,
-        payloadLength
-      };
-
-      const payload = buffer.slice(offset, offset + payloadLength);
-
-      return { header, payload, dataType };
-    } catch (error) {
-      console.error('Failed to parse JT/T 1078 RTP packet:', error);
-      return null;
-    }
-  }
-
-  private static parseBCD(buffer: Buffer): string {
-    let result = '';
-    for (let i = 0; i < buffer.length; i++) {
-      const high = (buffer[i] >> 4) & 0x0F;
-      const low = buffer[i] & 0x0F;
-      result += high.toString() + low.toString();
-    }
-    return result;
-  }
-
   static isFirstSubpackage(subpackageFlag: number): boolean {
     return subpackageFlag === JTT1078SubpackageFlag.FIRST || subpackageFlag === JTT1078SubpackageFlag.ATOMIC;
   }
