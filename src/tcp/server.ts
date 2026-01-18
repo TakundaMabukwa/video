@@ -676,7 +676,7 @@ export class JTT808Server {
     // Initialize circular buffer for this channel
     this.alertManager.initializeBuffer(vehicleId, channel);
 
-    const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+    const serverIp = process.env.SERVER_IP || socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
@@ -689,7 +689,7 @@ export class JTT808Server {
       0               // 0 = Main stream
     );
     
-    console.log(`📡 Sending 0x9101: TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
+    console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     

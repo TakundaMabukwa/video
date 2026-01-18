@@ -62,19 +62,22 @@ export class UDPRTPServer {
     }
 
     const { header, payload, dataType } = parsed;
-    const streamKey = `${rinfo.address}_${header.channelNumber}`;
+    
+    // Use SIM card number from RTP header as vehicle ID
+    const vehicleId = header.simCardNumber || rinfo.address;
+    const streamKey = `${vehicleId}_${header.channelNumber}`;
     
     let streamInfo = this.streams.get(streamKey);
     if (!streamInfo) {
       streamInfo = {
-        vehicleId: rinfo.address,
+        vehicleId: vehicleId,
         channel: header.channelNumber,
         active: true,
         frameCount: 0,
         lastFrame: null
       };
       this.streams.set(streamKey, streamInfo);
-      console.log(`New stream started: ${streamKey}, dataType: ${dataType === 0 ? 'I-frame' : dataType === 1 ? 'P-frame' : dataType === 2 ? 'B-frame' : 'Audio'}`);
+      console.log(`📹 New stream: ${vehicleId} ch${header.channelNumber} from ${rinfo.address}`);
     }
 
     const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
@@ -86,7 +89,7 @@ export class UDPRTPServer {
       
       if (this.alertManager) {
         this.alertManager.addFrameToBuffer(
-          streamInfo.vehicleId,
+          vehicleId,
           header.channelNumber,
           completeFrame,
           new Date(),
@@ -94,13 +97,13 @@ export class UDPRTPServer {
         );
       }
       
-      // Broadcast to WebSocket clients
+      // Broadcast to SSE/WebSocket clients
       if (this.onFrameCallback) {
-        this.onFrameCallback(streamInfo.vehicleId, header.channelNumber, completeFrame, isIFrame);
+        this.onFrameCallback(vehicleId, header.channelNumber, completeFrame, isIFrame);
       }
       
-      this.hlsStreamer.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
-      this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
+      this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame);
+      this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame);
     }
   }
 
