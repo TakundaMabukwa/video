@@ -4,37 +4,72 @@
   <title>WebSocket Test</title>
 </head>
 <body>
-  <h1>WebSocket Data Stream Test</h1>
-  <div id="status">Disconnected</div>
-  <div id="messages" style="margin-top:20px; font-family:monospace; white-space:pre;"></div>
+  <h1>WebSocket Connection Test</h1>
+  <div id="status">Testing...</div>
+  <div id="log" style="font-family: monospace; white-space: pre;"></div>
   
   <script>
-    const ws = new WebSocket('ws://164.90.182.2:3000/ws/data');
+    const log = document.getElementById('log');
     const status = document.getElementById('status');
-    const messages = document.getElementById('messages');
+    
+    function addLog(msg) {
+      console.log(msg);
+      log.textContent += msg + '\n';
+    }
+    
+    addLog('Page loaded');
+    addLog('Protocol: ' + window.location.protocol);
+    addLog('Hostname: ' + window.location.hostname);
+    addLog('Port: ' + (window.location.port || '3000'));
+    
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const host = window.location.hostname;
+    const port = window.location.port || '3000';
+    const wsUrl = `${protocol}//${host}:${port}/ws/video`;
+    
+    addLog('\nAttempting connection to: ' + wsUrl);
+    
+    const ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {
-      status.textContent = 'Connected ✅';
+      status.textContent = '✅ CONNECTED';
       status.style.color = 'green';
+      addLog('✅ WebSocket OPEN');
+      addLog('ReadyState: ' + ws.readyState);
+      
+      // Test subscribe
+      addLog('\nSending test subscribe...');
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        vehicleId: '013912345678',
+        channel: 1
+      }));
     };
     
     ws.onmessage = (event) => {
-      const msg = document.createElement('div');
-      msg.textContent = new Date().toISOString() + ' - ' + event.data;
-      messages.appendChild(msg);
-      messages.scrollTop = messages.scrollHeight;
+      addLog('📨 Message received: ' + event.data);
     };
     
     ws.onerror = (error) => {
-      status.textContent = 'Error ❌';
+      status.textContent = '❌ ERROR';
       status.style.color = 'red';
-      console.error('WebSocket error:', error);
+      addLog('❌ WebSocket ERROR');
+      addLog('Error: ' + JSON.stringify(error));
     };
     
-    ws.onclose = () => {
-      status.textContent = 'Disconnected';
-      status.style.color = 'gray';
+    ws.onclose = (event) => {
+      status.textContent = '❌ CLOSED';
+      status.style.color = 'red';
+      addLog('❌ WebSocket CLOSED');
+      addLog('Code: ' + event.code);
+      addLog('Reason: ' + event.reason);
+      addLog('Clean: ' + event.wasClean);
     };
+    
+    // Check state every second
+    setInterval(() => {
+      addLog('State check - ReadyState: ' + ws.readyState + ' (0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
+    }, 5000);
   </script>
 </body>
 </html>

@@ -57,26 +57,29 @@
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.hostname;
       const port = window.location.port || '3000';
+      const wsUrl = `${protocol}//${host}:${port}/ws/video`;
       
-      ws = new WebSocket(`${protocol}//${host}:${port}/ws/video`);
+      console.log('Connecting to:', wsUrl);
+      ws = new WebSocket(wsUrl);
       
       ws.onopen = () => {
         document.getElementById('status').className = 'status connected';
         document.getElementById('status').textContent = '✅ Connected to video server';
-        console.log('WebSocket connected');
+        console.log('✅ WebSocket connected');
         refreshVehicles();
       };
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         document.getElementById('status').className = 'status disconnected';
         document.getElementById('status').textContent = '❌ Disconnected - Reconnecting...';
-        console.log('WebSocket disconnected, reconnecting...');
+        console.log('❌ WebSocket closed:', event.code, event.reason);
         setTimeout(connect, 2000);
       };
 
       ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
-        document.getElementById('status').textContent = '❌ Connection error - check server is running';
+        console.error('❌ WebSocket error:', error);
+        console.error('Check that server is running on port', port);
+        document.getElementById('status').textContent = '❌ Connection failed - Is server running?';
       };
 
       ws.onmessage = (event) => {
@@ -182,12 +185,19 @@
     }
 
     function subscribe(vehicleId, channel) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server');
+      if (!ws) {
+        console.error('WebSocket is null');
+        alert('WebSocket not initialized. Refresh the page.');
+        return;
+      }
+      
+      if (ws.readyState !== WebSocket.OPEN) {
+        console.error('WebSocket not open. State:', ws.readyState, '(0=CONNECTING, 1=OPEN, 2=CLOSING, 3=CLOSED)');
+        alert('Not connected to server. Wait for connection or check console.');
         return;
       }
 
-      console.log(`Subscribing to ${vehicleId} channel ${channel}`);
+      console.log(`▶️ Subscribing to ${vehicleId} channel ${channel}`);
       ws.send(JSON.stringify({
         type: 'subscribe',
         vehicleId,
