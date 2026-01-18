@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Live Video - HLS Player</title>
+  <style>
+    body { font-family: Arial; padding: 20px; background: #1e1e1e; color: #fff; margin: 0; }
+    .container { max-width: 1600px; margin: 0 auto; }
+    h2 { margin: 0 0 20px 0; }
+    .controls { background: #252526; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(640px, 1fr)); gap: 20px; }
+    .video-container { background: #252526; border-radius: 8px; padding: 15px; }
+    .video-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .video-title { font-size: 16px; font-weight: bold; color: #4ec9b0; }
+    .video-status { font-size: 12px; }
+    .streaming { color: #4ec9b0; }
+    .error { color: #f48771; }
+    video { width: 100%; height: auto; background: #000; border-radius: 4px; }
+    button { background: #0e639c; color: #fff; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-right: 10px; }
+    button:hover { background: #1177bb; }
+    .stats { font-size: 11px; color: #888; margin-top: 8px; font-family: monospace; }
+    #log { height: 150px; overflow-y: auto; background: #1e1e1e; padding: 10px; font-family: monospace; font-size: 11px; margin-top: 20px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>🎥 Live Video Player - HLS Streams</h2>
+    
+    <div class="controls">
+      <button onclick="loadVehicles()">🔄 Refresh Vehicles</button>
+      <button onclick="startAllStreams()">▶️ Start All Streams</button>
+      <span id="vehicle-count" style="margin-left: 20px; color: #888;">Loading...</span>
+    </div>
+    
+    <div class="video-grid" id="video-grid"></div>
+    
+    <div id="log"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <script>
+    const players = new Map();
+
+    function log(msg) {
+      const div = document.createElement('div');
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      document.getElementById('log').prepend(div);
+    }
+
+    class HLSPlayer {
+      constructor(vehicleId, channel) {
+        this.vehicleId = vehicleId;
+        this.channel = channel;
+        this.container = this.createContainer();
+        this.video = this.container.querySelector('video');
+        this.statusEl = this.container.querySelector('.video-status');
+        this.statsEl = this.container.querySelector('.stats');
+        
+        this.initHLS();
+      }
+
+      createContainer() {
+        const container = document.createElement('div');
+        container.className = 'video-container';
+        container.innerHTML = `
+          <div class="video-header">
+            <div class="video-title">📹 ${this.vehicleId} - Channel ${this.channel}</div>
+            <div class="video-status">Loading...</div>
+          </div>
+          <video controls autoplay muted playsinline></video>
+          <div class="stats">Waiting for stream...</div>
+        `;
+        document.getElementById('video-grid').appendChild(container);
+        return container;
+      }
+
+      initHLS() {
+        const hlsUrl = `/hls/${this.vehicleId}/channel_${this.channel}/playlist.m3u8`;
+        log(`Loading HLS: ${hlsUrl}`);
+
+        if (Hls.isSupported()) {
+          this.hls = new Hls({
+            enableWorker: true,
+            lowLatencyMode: true,
+            backBufferLength: 90
+          });
+
+          this.hls.loadSource(hlsUrl);
+          this.hls.attachMedia(this.video);
+
+          this.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            log(`✅ HLS ready: ${this.vehicleId} Ch${this.channel}`);
+            this.statusEl.textContent = 'Streaming';
+            this.statusEl.className = 'video-status streaming';
+            this.video.play().catch(e => log(`Autoplay blocked: ${e.message}`));
+          });
+
+          this.hls.on(Hls.Events.ERROR, (event, data) => {
+            if (data.fatal) {
+              log(`❌ HLS Error: ${this.vehicleId} Ch${this.channel} - ${data.type}`);
+              this.statusEl.textContent = 'Error';
+              this.statusEl.className = 'video-status error';
+              
+              // Retry after 5 seconds
+              setTimeout(() => this.initHLS(), 5000);
+            }
+          });
+
+          // Update stats
+          this.video.addEventListener('timeupdate', () => {
+            if (this.video.buffered.length > 0) {
+              const buffered = this.video.buffered.end(0) - this.video.currentTime;
+              this.statsEl.textContent = `Buffer: ${buffered.toFixed(1)}s | Time: ${this.video.currentTime.toFixed(1)}s`;
+            }
+          });
+
+        } else if (this.video.canPlayType('application/vnd.apple.mpegurl')) {
+          // Native HLS support (Safari)
+          this.video.src = hlsUrl;
+          this.video.addEventListener('loadedmetadata', () => {
+            log(`✅ Native HLS ready: ${this.vehicleId} Ch${this.channel}`);
+            this.statusEl.textContent = 'Streaming';
+            this.statusEl.className = 'video-status streaming';
+          });
+        } else {
+          log(`❌ HLS not supported in this browser`);
+          this.statusEl.textContent = 'Not Supported';
+          this.statusEl.className = 'video-status error';
+        }
+      }
+
+      destroy() {
+        if (this.hls) {
+          this.hls.destroy();
+        }
+        this.container.remove();
+      }
+    }
+
+    async function loadVehicles() {
+      try {
+        log('Loading connected vehicles...');
+        const response = await fetch('/api/vehicles/connected');
+        const vehicles = await response.json();
+        
+        log(`Found ${vehicles.length} connected vehicles`);
+        document.getElementById('vehicle-count').textContent = `${vehicles.length} vehicles connected`;
+        
+        // Clear existing players
+        players.forEach(player => player.destroy());
+        players.clear();
+        
+        // Create player for each vehicle/channel
+        vehicles.forEach(vehicle => {
+          const channels = vehicle.channels || [{ logicalChannel: 1 }];
+          channels.forEach(ch => {
+            const key = `${vehicle.id}_${ch.logicalChannel}`;
+            const player = new HLSPlayer(vehicle.id, ch.logicalChannel);
+            players.set(key, player);
+          });
+        });
+        
+        if (vehicles.length === 0) {
+          log('⚠️ No vehicles connected. Waiting for cameras...');
+        }
+        
+      } catch (error) {
+        log(`❌ Error loading vehicles: ${error.message}`);
+        console.error(error);
+      }
+    }
+
+    async function startAllStreams() {
+      try {
+        const response = await fetch('/api/vehicles/connected');
+        const vehicles = await response.json();
+        
+        for (const vehicle of vehicles) {
+          const channels = vehicle.channels || [{ logicalChannel: 1 }];
+          for (const ch of channels) {
+            try {
+              await fetch(`/api/vehicles/${vehicle.id}/start-live`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel: ch.logicalChannel })
+              });
+              log(`▶️ Started stream: ${vehicle.id} Ch${ch.logicalChannel}`);
+            } catch (error) {
+              log(`❌ Failed to start: ${vehicle.id} Ch${ch.logicalChannel}`);
+            }
+          }
+        }
+      } catch (error) {
+        log(`❌ Error starting streams: ${error.message}`);
+      }
+    }
+
+    // Auto-load on page load
+    window.onload = () => {
+      log('Page loaded');
+      loadVehicles();
+      
+      // Auto-refresh every 10 seconds
+      setInterval(loadVehicles, 10000);
+    };
+  </script>
+</body>
+</html>

@@ -133,6 +133,7 @@ async function startServer() {
   const app = express();
   app.use(express.json());
   app.use(express.static('public'));
+  app.use('/hls', express.static('hls'));
   
   const httpServer = createServer(app);
   const dataWsServer = new DataWebSocketServer(httpServer, '/ws/data');
