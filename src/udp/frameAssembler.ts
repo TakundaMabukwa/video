@@ -18,32 +18,30 @@ export class FrameAssembler {
   private ppsCache = new Map<string, Buffer>();
 
   assembleFrame(header: JTT1078RTPHeader, payload: Buffer, dataType: number): Buffer | null {
-    // Periodic cleanup every 10 seconds
     if (Date.now() - this.lastCleanup > 10000) {
       this.cleanupOldFrames();
       this.lastCleanup = Date.now();
     }
 
-    // Hard limit on buffers
     if (this.frameBuffers.size > this.MAX_BUFFERS) {
       const oldestKey = this.frameBuffers.keys().next().value;
       if (oldestKey) this.frameBuffers.delete(oldestKey);
     }
     
-    const key = `${header.simCard}_${header.channelNumber}_${header.timestamp?.toString() || Date.now()}`;
+    // Use only simCard + channel as key (timestamp changes per packet!)
+    const key = `${header.simCard}_${header.channelNumber}`;
     
-    console.log(`📦 Frame assembler: simCard=${header.simCard}, ch=${header.channelNumber}, seq=${header.sequenceNumber}, flag=${header.subpackageFlag}, payloadSize=${payload.length}`);
+    console.log(`📦 RTP: ${header.simCard}_ch${header.channelNumber}, seq=${header.sequenceNumber}, flag=${header.subpackageFlag}, size=${payload.length}`);
 
-    // Extract and cache SPS/PPS for proper H.264 decoding
-    this.extractParameterSets(payload, `${header.simCard}_${header.channelNumber}`);
+    this.extractParameterSets(payload, key);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.ATOMIC) {
-      console.log(`   ✅ ATOMIC frame - returning immediately`);
-      return this.prependParameterSets(payload, `${header.simCard}_${header.channelNumber}`);
+      console.log(`   ✅ ATOMIC - complete frame`);
+      return this.prependParameterSets(payload, key);
     }
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.FIRST) {
-      console.log(`   🆕 FIRST packet - starting new frame buffer`);
+      console.log(`   🆕 FIRST - new frame`);
       this.frameBuffers.set(key, {
         timestamp: header.timestamp?.toString() || Date.now().toString(),
         channelNumber: header.channelNumber,
@@ -57,25 +55,19 @@ export class FrameAssembler {
 
     const frameBuffer = this.frameBuffers.get(key);
     if (!frameBuffer) {
-      console.log(`   ⚠️ No frame buffer found for key: ${key}`);
+      console.log(`   ⚠️ No FIRST packet - ignoring`);
       return null;
     }
 
-    if (header.sequenceNumber !== frameBuffer.expectedSequence) {
-      console.log(`   ❌ Sequence mismatch: got ${header.sequenceNumber}, expected ${frameBuffer.expectedSequence}`);
-      this.frameBuffers.delete(key);
-      return null;
-    }
-
+    // Accept MIDDLE/LAST packets (don't enforce strict sequence)
     frameBuffer.parts.push(payload);
-    frameBuffer.expectedSequence = header.sequenceNumber + 1;
-    console.log(`   🔗 Added part ${frameBuffer.parts.length}, expecting seq ${frameBuffer.expectedSequence}`);
+    console.log(`   🔗 Added part ${frameBuffer.parts.length}`);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.LAST) {
-      console.log(`   ✅ LAST packet - assembling complete frame from ${frameBuffer.parts.length} parts`);
+      console.log(`   ✅ LAST - assembling ${frameBuffer.parts.length} parts`);
       const completeFrame = Buffer.concat(frameBuffer.parts);
       this.frameBuffers.delete(key);
-      return this.prependParameterSets(completeFrame, `${header.simCard}_${header.channelNumber}`);
+      return this.prependParameterSets(completeFrame, key);
     }
 
     return null;

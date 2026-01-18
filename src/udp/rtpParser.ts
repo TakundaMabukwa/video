@@ -29,11 +29,8 @@ export class JTT1078RTPParser {
       const simCard = this.parseBCD(simCardBytes);
       
       if (!simCard || simCard.length === 0) {
-        console.error(`❌ Failed to parse SIM card from bytes: ${simCardBytes.toString('hex')}`);
         return null;
       }
-      
-      console.log(`✅ RTP parsed: seq=${sequenceNumber}, sim=${simCard}, ch=${buffer.readUInt8(14)}`);
 
       // Logical channel number at byte 14
       const channelNumber = buffer.readUInt8(14);

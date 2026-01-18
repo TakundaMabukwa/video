@@ -73,20 +73,31 @@ export class JTT808Server {
       while (buffer.length > 0) {
         // Check for RTP video data first (0x30316364)
         if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0x30316364) {
-          console.log(`🎥 RTP packet detected! Length: ${buffer.length}`);
-          // Find RTP packet length from header
-          if (buffer.length >= 20) {
-            const payloadLength = buffer.readUInt16BE(18);
-            const totalLength = 20 + payloadLength;
-            
-            
-            
-            if (buffer.length >= totalLength) {
-              const rtpPacket = buffer.slice(0, totalLength);
-              buffer = buffer.slice(totalLength);
-              this.handleRTPData(rtpPacket, socket);
-              continue;
+          // Parse data type at offset 15 to determine header size
+          if (buffer.length < 16) break; // Need at least 16 bytes
+          
+          const dataTypeByte = buffer.readUInt8(15);
+          const dataType = (dataTypeByte >> 4) & 0x0F;
+          
+          // Calculate payload length offset based on data type
+          let payloadLengthOffset = 16;
+          if (dataType !== 0x04) {
+            payloadLengthOffset += 8; // timestamp
+            if (dataType <= 0x02) {
+              payloadLengthOffset += 4; // I-frame + frame intervals
             }
+          }
+          
+          if (buffer.length < payloadLengthOffset + 2) break; // Need payload length field
+          
+          const payloadLength = buffer.readUInt16BE(payloadLengthOffset);
+          const totalLength = payloadLengthOffset + 2 + payloadLength;
+          
+          if (buffer.length >= totalLength) {
+            const rtpPacket = buffer.slice(0, totalLength);
+            buffer = buffer.slice(totalLength);
+            this.handleRTPData(rtpPacket, socket);
+            continue;
           }
           break; // Wait for more data
         }
