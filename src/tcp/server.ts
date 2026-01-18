@@ -173,7 +173,9 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    const vehicleId = this.socketToVehicle.get(socket) || 'unknown';
+    // Parse RTP to get vehicle ID from header
+    const parsed = require('../udp/rtpParser').JTT1078RTPParser.parseRTPPacket(buffer);
+    const vehicleId = parsed?.header.simCard || 'unknown';
     
     console.log(`📦 RTP packet from vehicle ${vehicleId}, size: ${buffer.length}`);
     
