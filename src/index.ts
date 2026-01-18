@@ -174,6 +174,16 @@ async function startServer() {
     res.json(liveVideoServer.getStats());
   });
   
+  app.get('/api/vehicles/connected', (req, res) => {
+    const vehicles = tcpServer.getVehicles().filter(v => v.connected);
+    res.json(vehicles.map(v => ({
+      id: v.id,
+      phone: v.phone,
+      channels: v.channels || [],
+      activeStreams: Array.from(v.activeStreams)
+    })));
+  });
+  
   const wsServer = new AlertWebSocketServer(httpServer, alertManager);
   
   httpServer.listen(API_PORT, () => {

@@ -4,37 +4,45 @@
   <title>Live Video Stream - JT/T 1078</title>
   <style>
     body { font-family: Arial; margin: 20px; background: #1a1a1a; color: #fff; }
-    .container { max-width: 1200px; margin: 0 auto; }
-    .controls { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
-    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px; }
-    .video-card { background: #2a2a2a; border-radius: 8px; padding: 15px; }
-    .video-canvas { width: 100%; height: 300px; background: #000; border-radius: 4px; }
-    .stats { font-size: 12px; color: #888; margin-top: 10px; }
-    button { background: #4CAF50; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }
-    button:hover { background: #45a049; }
-    button.stop { background: #f44336; }
-    button.stop:hover { background: #da190b; }
-    input { padding: 8px; border-radius: 4px; border: 1px solid #444; background: #333; color: #fff; margin: 5px; }
-    .status { padding: 10px; border-radius: 4px; margin: 10px 0; }
+    .container { max-width: 1400px; margin: 0 auto; }
+    h1 { color: #4CAF50; }
+    .status { padding: 10px; border-radius: 4px; margin: 10px 0; font-weight: bold; }
     .status.connected { background: #4CAF50; }
     .status.disconnected { background: #f44336; }
-    .frame-info { font-size: 11px; color: #666; }
+    
+    .vehicles-section { background: #2a2a2a; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+    .vehicle-card { background: #333; padding: 15px; margin: 10px 0; border-radius: 8px; border-left: 4px solid #4CAF50; }
+    .vehicle-card.offline { border-left-color: #666; opacity: 0.6; }
+    .vehicle-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .vehicle-id { font-size: 18px; font-weight: bold; color: #4CAF50; }
+    .vehicle-info { font-size: 12px; color: #888; }
+    .channel-buttons { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 10px; }
+    
+    button { background: #4CAF50; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+    button:hover { background: #45a049; }
+    button:disabled { background: #666; cursor: not-allowed; }
+    button.stop { background: #f44336; }
+    button.stop:hover { background: #da190b; }
+    button.channel { background: #2196F3; padding: 6px 12px; font-size: 12px; }
+    button.channel.active { background: #4CAF50; }
+    
+    .video-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 15px; margin-top: 20px; }
+    .video-card { background: #2a2a2a; border-radius: 8px; padding: 15px; }
+    .video-canvas { width: 100%; height: 250px; background: #000; border-radius: 4px; }
+    .stats { font-size: 11px; color: #888; margin-top: 8px; }
+    .frame-info { color: #4CAF50; }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>🎥 Live Video Stream - JT/T 1078</h1>
     
-    <div class="controls">
-      <h3>Stream Controls</h3>
-      <div>
-        <input type="text" id="vehicleId" placeholder="Vehicle ID" value="013912345678">
-        <input type="number" id="channel" placeholder="Channel" value="1" min="1" max="16">
-        <button onclick="subscribe()">▶️ Start Stream</button>
-        <button class="stop" onclick="unsubscribe()">⏹️ Stop Stream</button>
-      </div>
-      <div id="status" class="status disconnected">Disconnected</div>
-      <div id="stats" class="stats"></div>
+    <div id="status" class="status disconnected">Connecting...</div>
+
+    <div class="vehicles-section">
+      <h2>Connected Vehicles</h2>
+      <button onclick="refreshVehicles()">🔄 Refresh</button>
+      <div id="vehiclesList"></div>
     </div>
 
     <div id="videoGrid" class="video-grid"></div>
@@ -43,24 +51,32 @@
   <script>
     let ws = null;
     const streams = new Map();
+    let vehicles = [];
 
     function connect() {
-      ws = new WebSocket('ws://localhost:3000/ws/video');
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.hostname;
+      const port = window.location.port || '3000';
+      
+      ws = new WebSocket(`${protocol}//${host}:${port}/ws/video`);
       
       ws.onopen = () => {
         document.getElementById('status').className = 'status connected';
-        document.getElementById('status').textContent = 'Connected to video server';
+        document.getElementById('status').textContent = '✅ Connected to video server';
         console.log('WebSocket connected');
+        refreshVehicles();
       };
 
       ws.onclose = () => {
         document.getElementById('status').className = 'status disconnected';
-        document.getElementById('status').textContent = 'Disconnected - Reconnecting...';
+        document.getElementById('status').textContent = '❌ Disconnected - Reconnecting...';
+        console.log('WebSocket disconnected, reconnecting...');
         setTimeout(connect, 2000);
       };
 
       ws.onerror = (error) => {
         console.error('WebSocket error:', error);
+        document.getElementById('status').textContent = '❌ Connection error - check server is running';
       };
 
       ws.onmessage = (event) => {
@@ -72,13 +88,149 @@
     function handleMessage(msg) {
       switch (msg.type) {
         case 'subscribed':
-          console.log(`Subscribed to ${msg.vehicleId} channel ${msg.channel}`);
+          console.log(`✅ Subscribed to ${msg.vehicleId} channel ${msg.channel}`);
           createVideoCard(msg.vehicleId, msg.channel);
+          updateChannelButton(msg.vehicleId, msg.channel, true);
           break;
         
         case 'frame':
           displayFrame(msg);
           break;
+      }
+    }
+
+    async function refreshVehicles() {
+      try {
+        const response = await fetch('/api/vehicles/connected');
+        vehicles = await response.json();
+        
+        const list = document.getElementById('vehiclesList');
+        
+        if (vehicles.length === 0) {
+          list.innerHTML = '<p style="color: #888;">No vehicles connected. Waiting for cameras...</p>';
+          return;
+        }
+        
+        list.innerHTML = '';
+        vehicles.forEach(v => {
+          const card = document.createElement('div');
+          card.className = 'vehicle-card';
+          card.id = `vehicle_${v.id}`;
+          
+          const channelCount = v.channels?.length || 0;
+          const channelButtons = [];
+          
+          if (channelCount > 0) {
+            for (let i = 0; i < channelCount; i++) {
+              const ch = v.channels[i].logicalChannel;
+              channelButtons.push(`
+                <button class="channel" id="btn_${v.id}_${ch}" onclick="toggleChannel('${v.id}', ${ch})">
+                  Ch ${ch}
+                </button>
+              `);
+            }
+          } else {
+            // Default to 4 channels if not discovered yet
+            for (let ch = 1; ch <= 4; ch++) {
+              channelButtons.push(`
+                <button class="channel" id="btn_${v.id}_${ch}" onclick="toggleChannel('${v.id}', ${ch})">
+                  Ch ${ch}
+                </button>
+              `);
+            }
+          }
+          
+          card.innerHTML = `
+            <div class="vehicle-header">
+              <div>
+                <div class="vehicle-id">🚗 ${v.id}</div>
+                <div class="vehicle-info">
+                  ${channelCount > 0 ? channelCount + ' channels' : 'Discovering channels...'}
+                  | Active: ${v.activeStreams?.length || 0}
+                </div>
+              </div>
+              <div>
+                <button onclick="startAllChannels('${v.id}', ${channelCount || 4})">▶️ Start All</button>
+                <button class="stop" onclick="stopAllChannels('${v.id}', ${channelCount || 4})">⏹️ Stop All</button>
+              </div>
+            </div>
+            <div class="channel-buttons">
+              ${channelButtons.join('')}
+            </div>
+          `;
+          
+          list.appendChild(card);
+        });
+        
+        console.log(`Found ${vehicles.length} connected vehicles`);
+      } catch (error) {
+        console.error('Failed to fetch vehicles:', error);
+        document.getElementById('vehiclesList').innerHTML = 
+          '<p style="color: #f44336;">Error loading vehicles. Check server connection.</p>';
+      }
+    }
+
+    function toggleChannel(vehicleId, channel) {
+      const key = `${vehicleId}_${channel}`;
+      const isActive = streams.has(key);
+      
+      if (isActive) {
+        unsubscribe(vehicleId, channel);
+      } else {
+        subscribe(vehicleId, channel);
+      }
+    }
+
+    function subscribe(vehicleId, channel) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected to server');
+        return;
+      }
+
+      console.log(`Subscribing to ${vehicleId} channel ${channel}`);
+      ws.send(JSON.stringify({
+        type: 'subscribe',
+        vehicleId,
+        channel
+      }));
+    }
+
+    function unsubscribe(vehicleId, channel) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        alert('Not connected to server');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        type: 'unsubscribe',
+        vehicleId,
+        channel
+      }));
+
+      const key = `${vehicleId}_${channel}`;
+      const card = document.getElementById(`card_${key}`);
+      if (card) card.remove();
+      streams.delete(key);
+      updateChannelButton(vehicleId, channel, false);
+    }
+
+    function startAllChannels(vehicleId, channelCount) {
+      for (let ch = 1; ch <= channelCount; ch++) {
+        setTimeout(() => subscribe(vehicleId, ch), ch * 200);
+      }
+    }
+
+    function stopAllChannels(vehicleId, channelCount) {
+      for (let ch = 1; ch <= channelCount; ch++) {
+        unsubscribe(vehicleId, ch);
+      }
+    }
+
+    function updateChannelButton(vehicleId, channel, active) {
+      const btn = document.getElementById(`btn_${vehicleId}_${channel}`);
+      if (btn) {
+        btn.className = active ? 'channel active' : 'channel';
+        btn.textContent = active ? `Ch ${channel} ✓` : `Ch ${channel}`;
       }
     }
 
@@ -90,13 +242,11 @@
       card.className = 'video-card';
       card.id = `card_${key}`;
       card.innerHTML = `
-        <h3>Vehicle: ${vehicleId} - Channel ${channel}</h3>
+        <h3>🚗 ${vehicleId} - Channel ${channel}</h3>
         <canvas id="canvas_${key}" class="video-canvas"></canvas>
         <div class="stats">
-          <div>Frames: <span id="frames_${key}">0</span></div>
-          <div>I-Frames: <span id="iframes_${key}">0</span></div>
-          <div>Data Rate: <span id="rate_${key}">0</span> KB/s</div>
-          <div class="frame-info">Last: <span id="last_${key}">-</span></div>
+          <div>Frames: <span id="frames_${key}">0</span> | I-Frames: <span id="iframes_${key}">0</span></div>
+          <div>Rate: <span id="rate_${key}">0</span> KB/s | Last: <span id="last_${key}" class="frame-info">-</span></div>
         </div>
       `;
       
@@ -127,12 +277,10 @@
       if (msg.isIFrame) stream.iFrameCount++;
       stream.totalBytes += msg.size;
 
-      // Update stats
       document.getElementById(`frames_${key}`).textContent = stream.frameCount;
       document.getElementById(`iframes_${key}`).textContent = stream.iFrameCount;
       document.getElementById(`last_${key}`).textContent = new Date(msg.timestamp).toLocaleTimeString();
 
-      // Calculate data rate
       const now = Date.now();
       const elapsed = (now - stream.lastUpdate) / 1000;
       if (elapsed >= 1) {
@@ -142,63 +290,23 @@
         stream.lastUpdate = now;
       }
 
-      // Display frame info (for debugging - actual video decoding needs JSMpeg or similar)
+      // Visual feedback
       stream.ctx.fillStyle = '#000';
       stream.ctx.fillRect(0, 0, stream.canvas.width, stream.canvas.height);
       stream.ctx.fillStyle = msg.isIFrame ? '#4CAF50' : '#2196F3';
-      stream.ctx.font = '20px Arial';
+      stream.ctx.font = 'bold 24px Arial';
       stream.ctx.fillText(`Frame ${stream.frameCount}`, 20, 40);
+      stream.ctx.font = '18px Arial';
       stream.ctx.fillText(msg.isIFrame ? 'I-FRAME' : 'P/B-FRAME', 20, 70);
       stream.ctx.fillText(`${(msg.size / 1024).toFixed(2)} KB`, 20, 100);
+      stream.ctx.font = '14px Arial';
+      stream.ctx.fillStyle = '#888';
+      stream.ctx.fillText(`${stream.iFrameCount} I-frames received`, 20, 130);
     }
 
-    function subscribe() {
-      const vehicleId = document.getElementById('vehicleId').value;
-      const channel = parseInt(document.getElementById('channel').value);
-      
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server');
-        return;
-      }
-
-      ws.send(JSON.stringify({
-        type: 'subscribe',
-        vehicleId,
-        channel
-      }));
-    }
-
-    function unsubscribe() {
-      const vehicleId = document.getElementById('vehicleId').value;
-      const channel = parseInt(document.getElementById('channel').value);
-      
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        alert('Not connected to server');
-        return;
-      }
-
-      ws.send(JSON.stringify({
-        type: 'unsubscribe',
-        vehicleId,
-        channel
-      }));
-
-      const key = `${vehicleId}_${channel}`;
-      const card = document.getElementById(`card_${key}`);
-      if (card) card.remove();
-      streams.delete(key);
-    }
-
-    // Auto-connect on load
+    // Auto-connect and refresh
     connect();
-
-    // Update stats every second
-    setInterval(() => {
-      const stats = Array.from(streams.values()).map(s => 
-        `${s.vehicleId}:${s.channel} - ${s.frameCount} frames (${s.iFrameCount} I-frames)`
-      ).join(' | ');
-      document.getElementById('stats').textContent = stats || 'No active streams';
-    }, 1000);
+    setInterval(refreshVehicles, 5000); // Refresh every 5 seconds
   </script>
 </body>
 </html>
