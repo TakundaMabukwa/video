@@ -14,6 +14,7 @@ export class JTT808Server {
   private vehicles = new Map<string, Vehicle>();
   private connections = new Map<string, net.Socket>();
   private socketToVehicle = new Map<net.Socket, string>();
+  private ipToVehicle = new Map<string, string>(); // Map IP to vehicle ID
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
   private alertStorage = new AlertStorageDB();
@@ -173,15 +174,9 @@ export class JTT808Server {
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
-    // Get vehicle ID from socket mapping (RTP comes on same socket as registration)
-    const vehicleId = this.socketToVehicle.get(socket);
-    
-    if (!vehicleId) {
-      console.log(`⚠️ RTP packet from unmapped socket ${socket.remoteAddress}:${socket.remotePort}`);
-      return;
-    }
-    
-    console.log(`📹 RTP data received: vehicleId=${vehicleId}, size=${buffer.length}`);
+    // Use IP address as vehicle ID (cameras use multiple sockets)
+    const clientIp = socket.remoteAddress?.replace('::ffff:', '') || '';
+    const vehicleId = this.ipToVehicle.get(clientIp) || clientIp; // Fallback to IP if not registered
     
     if (this.rtpHandler) {
       this.rtpHandler(buffer, vehicleId);
@@ -189,7 +184,7 @@ export class JTT808Server {
   }
 
   private handleTerminalRegister(message: any, socket: net.Socket): void {
-    const ipAddress = socket.remoteAddress || 'unknown';
+    const ipAddress = socket.remoteAddress?.replace('::ffff:', '') || 'unknown';
     this.deviceStorage.upsertDevice(message.terminalPhone, ipAddress);
     
     const vehicle: Vehicle = {
@@ -203,6 +198,9 @@ export class JTT808Server {
     this.vehicles.set(message.terminalPhone, vehicle);
     this.connections.set(message.terminalPhone, socket);
     this.socketToVehicle.set(socket, message.terminalPhone);
+    this.ipToVehicle.set(ipAddress, message.terminalPhone); // Map IP to vehicle
+    
+    console.log(`✅ Vehicle registered: ${message.terminalPhone} from ${ipAddress}`);
     
     // Send proper 0x8100 registration response with auth token
     const authToken = Buffer.from('AUTH123456', 'ascii');
@@ -212,12 +210,7 @@ export class JTT808Server {
     authToken.copy(responseBody, 3);
     
     const response = this.buildMessage(0x8100, message.terminalPhone, this.getNextSerial(), responseBody);
-    
-    
     socket.write(response);
-    
-    
-    // Keep connection alive
     socket.setKeepAlive(true, 30000);
   }
 
@@ -270,7 +263,7 @@ export class JTT808Server {
   }
 
   private handleTerminalAuth(message: any, socket: net.Socket): void {
-    const ipAddress = socket.remoteAddress || 'unknown';
+    const ipAddress = socket.remoteAddress?.replace('::ffff:', '') || 'unknown';
     
     // If vehicle doesn't exist, create it (camera skipped registration)
     if (!this.vehicles.has(message.terminalPhone)) {
@@ -286,8 +279,9 @@ export class JTT808Server {
       this.vehicles.set(message.terminalPhone, vehicle);
       this.connections.set(message.terminalPhone, socket);
       this.socketToVehicle.set(socket, message.terminalPhone);
+      this.ipToVehicle.set(ipAddress, message.terminalPhone); // Map IP to vehicle
       
-      console.log(`✅ Camera authenticated: ${message.terminalPhone}`);
+      console.log(`✅ Camera authenticated: ${message.terminalPhone} from ${ipAddress}`);
       
       // Query capabilities to discover channels
       setTimeout(() => {
