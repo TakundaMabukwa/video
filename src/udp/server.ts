@@ -63,8 +63,8 @@ export class UDPRTPServer {
 
     const { header, payload, dataType } = parsed;
     
-    // Use SIM card number from RTP header as vehicle ID
-    const vehicleId = header.simCardNumber || rinfo.address;
+    // Use IP address as vehicle ID for UDP (no SIM in header)
+    const vehicleId = rinfo.address;
     const streamKey = `${vehicleId}_${header.channelNumber}`;
     
     let streamInfo = this.streams.get(streamKey);
