@@ -16,49 +16,40 @@ export class SSEVideoStream {
   }
 
   handleConnection(req: Request, res: Response) {
-    const { vehicleId, channel = '1' } = req.query;
-    
-    console.log(`📡 SSE connection request: vehicleId=${vehicleId}, channel=${channel}`);
-    
-    if (!vehicleId) {
-      console.log('❌ SSE rejected: no vehicleId');
-      return res.status(400).json({ error: 'vehicleId required' });
-    }
-
-    const channelNum = parseInt(channel as string);
+    console.log(`📡 SSE connection request from ${req.ip}`);
     
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
       'Access-Control-Allow-Origin': '*'
     });
 
     res.write('data: {"type":"connected"}\n\n');
 
     const client: SSEClient = {
-      vehicleId: vehicleId as string,
-      channel: channelNum,
+      vehicleId: 'all',
+      channel: 0,
       res
     };
 
     this.clients.push(client);
-    console.log(`✅ SSE client registered: ${vehicleId}_${channelNum}, total clients: ${this.clients.length}`);
+    console.log(`✅ SSE client connected, total: ${this.clients.length}`);
     
-    const started = this.tcpServer.startVideo(vehicleId as string, channelNum);
-    console.log(`   Video start result: ${started}`);
+    // Keep connection alive with heartbeat
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(':heartbeat\n\n');
+      } catch (error) {
+        clearInterval(heartbeat);
+      }
+    }, 15000);
 
     req.on('close', () => {
+      clearInterval(heartbeat);
       this.clients = this.clients.filter(c => c.res !== res);
-      console.log(`SSE client disconnected: ${vehicleId}_${channelNum}`);
-      
-      const remaining = this.clients.filter(c => 
-        c.vehicleId === vehicleId && c.channel === channelNum
-      );
-      
-      if (remaining.length === 0) {
-        this.tcpServer.stopVideo(vehicleId as string, channelNum);
-      }
+      console.log(`SSE client disconnected, remaining: ${this.clients.length}`);
     });
   }
 
