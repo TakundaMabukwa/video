@@ -57,7 +57,7 @@ export class UDPRTPServer {
       return;
     }
 
-    const { header, payload } = parsed;
+    const { header, payload, dataType } = parsed;
     const streamKey = `${rinfo.address}_${header.channelNumber}`;
     
     // Update stream info
@@ -71,11 +71,11 @@ export class UDPRTPServer {
         lastFrame: null
       };
       this.streams.set(streamKey, streamInfo);
-      console.log(`New stream started: ${streamKey}`);
+      console.log(`New stream started: ${streamKey}, dataType: ${dataType === 0 ? 'I-frame' : dataType === 1 ? 'P-frame' : dataType === 2 ? 'B-frame' : 'Audio'}`);
     }
 
     // Attempt frame assembly
-    const completeFrame = this.frameAssembler.assembleFrame(header, payload);
+    const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);
     if (completeFrame) {
       streamInfo.frameCount++;
       streamInfo.lastFrame = new Date();
@@ -96,10 +96,8 @@ export class UDPRTPServer {
       // Write to HLS stream
       this.hlsStreamer.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
       
-      // Only write I-frames to disk to reduce I/O
-      if (isIFrame) {
-        this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
-      }
+      // Write all frames to disk for proper playback (not just I-frames)
+      this.videoWriter.writeFrame(streamInfo.vehicleId, header.channelNumber, completeFrame);
     }
   }
 

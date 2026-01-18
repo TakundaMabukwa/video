@@ -1,20 +1,17 @@
 import { JTT1078RTPHeader, JTT1078SubpackageFlag } from '../types/jtt';
 
 export class JTT1078RTPParser {
-  // JT/T 1078 RTP packet structure validation
-  static parseRTPPacket(buffer: Buffer): { header: JTT1078RTPHeader; payload: Buffer } | null {
-    if (buffer.length < 16) {
+  static parseRTPPacket(buffer: Buffer): { header: JTT1078RTPHeader; payload: Buffer; dataType: number } | null {
+    if (buffer.length < 30) {
       return null;
     }
 
     try {
-      // Validate frame header (0x30316364)
       const frameHeader = buffer.readUInt32BE(0);
       if (frameHeader !== 0x30316364) {
         return null;
       }
 
-      // Parse RTP header fields
       const rtpByte = buffer.readUInt8(4);
       const version = (rtpByte >> 6) & 0x03;
       const padding = ((rtpByte >> 5) & 0x01) === 1;
@@ -26,32 +23,46 @@ export class JTT1078RTPParser {
       const payloadType = markerAndPT & 0x7F;
 
       const sequenceNumber = buffer.readUInt16BE(6);
-      const timestamp = buffer.readUInt32BE(8);
-      const ssrc = buffer.readUInt32BE(12);
 
-      // JT/T 1078 specific fields
+      // Parse SIM card (BCD encoded, 6 bytes at offset 8)
+      const simCard = this.parseBCD(buffer.slice(8, 14));
+
+      // Logical channel number at byte 14
+      const channelNumber = buffer.readUInt8(14);
+
+      // Data type (upper 4 bits) and subpackage flag (lower 4 bits) at byte 15
+      const dataTypeByte = buffer.readUInt8(15);
+      const dataType = (dataTypeByte >> 4) & 0x0F;
+      const subpackageFlag = dataTypeByte & 0x0F;
+
       let offset = 16;
-      
-      // Skip CSRC list if present
-      offset += csrcCount * 4;
-      
-      if (offset + 4 > buffer.length) {
-        return null;
+      let timestamp: bigint | undefined;
+      let lastIFrameInterval: number | undefined;
+      let lastFrameInterval: number | undefined;
+
+      // Timestamp (8 bytes) - only if NOT transparent data (0x04)
+      if (dataType !== 0x04) {
+        if (offset + 8 > buffer.length) return null;
+        timestamp = buffer.readBigUInt64BE(offset);
+        offset += 8;
+
+        // Last I-frame interval and last frame interval - only for video frames
+        if (dataType <= 0x02) {
+          if (offset + 4 > buffer.length) return null;
+          lastIFrameInterval = buffer.readUInt16BE(offset);
+          lastFrameInterval = buffer.readUInt16BE(offset + 2);
+          offset += 4;
+        }
       }
 
-      // Channel number and subpackage info
-      const channelByte = buffer.readUInt8(offset);
-      const channelNumber = channelByte & 0x1F; // Lower 5 bits
-      
-      const subpackageByte = buffer.readUInt8(offset + 1);
-      const subpackageFlag = (subpackageByte >> 6) & 0x03; // Upper 2 bits
-      
-      const payloadLength = buffer.readUInt16BE(offset + 2);
-      offset += 4;
+      // Data body length at current offset
+      if (offset + 2 > buffer.length) return null;
+      const payloadLength = buffer.readUInt16BE(offset);
+      offset += 2;
 
-      // Validate payload length
-      if (offset + payloadLength > buffer.length) {
-        console.warn(`Invalid payload length: ${payloadLength}, available: ${buffer.length - offset}`);
+      // Validate payload length (max 950 bytes per spec)
+      if (payloadLength > 950 || offset + payloadLength > buffer.length) {
+        console.warn(`Invalid payload: ${payloadLength} bytes, available: ${buffer.length - offset}`);
         return null;
       }
 
@@ -64,20 +75,70 @@ export class JTT1078RTPParser {
         marker,
         payloadType,
         sequenceNumber,
-        timestamp,
-        ssrc,
+        simCard,
         channelNumber,
+        dataType,
         subpackageFlag,
+        timestamp,
+        lastIFrameInterval,
+        lastFrameInterval,
+        payloadLength
+      };
+
+      const payload = buffer.slice(offset, offset + payloadLength);
+      return { header, payload, dataType };
+    } catch (error) {
+      console.error('Failed to parse JT/T 1078 RTP packet:', error);
+      return null;
+    }
+  }
+
+  private static parseBCD(buffer: Buffer): string {
+    let result = '';
+    for (let i = 0; i < buffer.length; i++) {
+      const high = (buffer[i] >> 4) & 0x0F;
+      const low = buffer[i] & 0x0F;
+      result += high.toString() + low.toString();
+    }
+    return result;
+  }
+
+      const header: JTT1078RTPHeader = {
+        frameHeader,
+        version,
+        padding,
+        extension,
+        csrcCount,
+        marker,
+        payloadType,
+        sequenceNumber,
+        simCard,
+        channelNumber,
+        dataType,
+        subpackageFlag,
+        timestamp,
+        lastIFrameInterval,
+        lastFrameInterval,
         payloadLength
       };
 
       const payload = buffer.slice(offset, offset + payloadLength);
 
-      return { header, payload };
+      return { header, payload, dataType };
     } catch (error) {
       console.error('Failed to parse JT/T 1078 RTP packet:', error);
       return null;
     }
+  }
+
+  private static parseBCD(buffer: Buffer): string {
+    let result = '';
+    for (let i = 0; i < buffer.length; i++) {
+      const high = (buffer[i] >> 4) & 0x0F;
+      const low = buffer[i] & 0x0F;
+      result += high.toString() + low.toString();
+    }
+    return result;
   }
 
   static isFirstSubpackage(subpackageFlag: number): boolean {

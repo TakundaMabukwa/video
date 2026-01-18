@@ -133,11 +133,17 @@ export class JTT808Server {
         this.handleLocationReport(message, socket);
         break;
       case 0x0001:
-        
+        console.log(`✅ Terminal general response from ${message.terminalPhone}:`);
+        if (message.body.length >= 5) {
+          const replySerial = message.body.readUInt16BE(0);
+          const replyMsgId = message.body.readUInt16BE(2);
+          const result = message.body.readUInt8(4);
+          console.log(`   Reply to: 0x${replyMsgId.toString(16).padStart(4, '0')} (serial ${replySerial})`);
+          console.log(`   Result: ${result === 0 ? '✅ Success' : result === 1 ? '❌ Failure' : result === 2 ? '⚠️ Message error' : '🚫 Not supported'}`);\n          \n          // Log specific responses\n          if (replyMsgId === 0x9101) {\n            console.log(`   🎬 Video stream request acknowledged - waiting for RTP data...`);\n          } else if (replyMsgId === 0x9003) {\n            console.log(`   📋 Capabilities query acknowledged`);\n          }\n        }
         break;
       case 0x1003: // Audio/video capabilities response
-        
-        this.parseCapabilities(message.body);
+        console.log(`📋 Capabilities response from ${message.terminalPhone}`);
+        this.parseCapabilities(message.body, message.terminalPhone);
         break;
       case 0x1205: // Resource list response
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
@@ -271,6 +277,13 @@ export class JTT808Server {
       this.vehicles.set(message.terminalPhone, vehicle);
       this.connections.set(message.terminalPhone, socket);
       
+      console.log(`✅ Camera authenticated: ${message.terminalPhone}`);
+      
+      // Query capabilities to discover channels
+      setTimeout(() => {
+        console.log(`🔍 Querying capabilities for ${message.terminalPhone}...`);
+        this.queryCapabilities(message.terminalPhone);
+      }, 1000);
     }
     
     const response = JTT1078Commands.buildGeneralResponse(
@@ -282,7 +295,6 @@ export class JTT808Server {
     );
     
     socket.write(response);
-    
   }
 
   private handleHeartbeat(message: any, socket: net.Socket): void {
@@ -445,49 +457,58 @@ export class JTT808Server {
     }
   }
 
-  private parseCapabilities(body: Buffer): void {
-    if (body.length < 2) return;
+  private parseCapabilities(body: Buffer, vehiclePhone: string): void {
+    if (body.length < 10) {
+      console.log(`⚠️ Capabilities body too short: ${body.length} bytes`);
+      return;
+    }
     
-    const channelCount = body.readUInt8(0);
+    // Parse according to Table 11 in spec
+    const inputAudioEncoding = body.readUInt8(0);
+    const inputAudioChannels = body.readUInt8(1);
+    const inputAudioSampleRate = body.readUInt8(2);
+    const inputAudioSampleBits = body.readUInt8(3);
+    const audioFrameLength = body.readUInt16BE(4);
+    const supportsAudioOutput = body.readUInt8(6) === 1;
+    const videoEncoding = body.readUInt8(7);
+    const maxAudioChannels = body.readUInt8(8);
+    const maxVideoChannels = body.readUInt8(9);
     
+    console.log(`
+📊 Camera Capabilities for ${vehiclePhone}:`);
+    console.log(`   Audio: encoding=${inputAudioEncoding}, channels=${inputAudioChannels}, rate=${inputAudioSampleRate}`);
+    console.log(`   Video: encoding=${videoEncoding}, max channels=${maxVideoChannels}`);
+    console.log(`   Max audio channels: ${maxAudioChannels}`);
+    console.log(`   Max video channels: ${maxVideoChannels}`);
     
+    const vehicle = this.vehicles.get(vehiclePhone);
+    if (!vehicle) {
+      console.log(`⚠️ Vehicle ${vehiclePhone} not found`);
+      return;
+    }
+    
+    // Create channel list based on max video channels
     const channels: VehicleChannel[] = [];
-    let offset = 1;
-    
-    for (let i = 0; i < channelCount && offset + 2 < body.length; i++) {
-      const physicalChannel = body.readUInt8(offset);
-      const logicalChannel = body.readUInt8(offset + 1);
-      const channelType = body.readUInt8(offset + 2);
-      const hasGimbal = offset + 3 < body.length ? body.readUInt8(offset + 3) === 1 : false;
-      
-      const typeMap = { 0: 'audio_video', 1: 'audio', 2: 'video' } as const;
-      
+    for (let i = 1; i <= maxVideoChannels; i++) {
       channels.push({
-        physicalChannel,
-        logicalChannel,
-        type: typeMap[channelType as keyof typeof typeMap] || 'video',
-        hasGimbal
+        physicalChannel: i,
+        logicalChannel: i,
+        type: 'video',
+        hasGimbal: false
       });
-      
-      
-      offset += 4;
     }
     
-    // Store channels in vehicle data
-    const phoneFromBody = this.extractPhoneFromContext();
-    if (phoneFromBody) {
-      const vehicle = this.vehicles.get(phoneFromBody);
-      if (vehicle) {
-        vehicle.channels = channels;
-      }
+    vehicle.channels = channels;
+    console.log(`✅ Discovered ${channels.length} video channels`);
+    
+    // Auto-start video streaming on all channels
+    console.log(`\n🎬 Auto-starting video streams on all channels...`);
+    for (const channel of channels) {
+      setTimeout(() => {
+        console.log(`▶️ Starting stream on channel ${channel.logicalChannel}`);
+        this.startVideo(vehiclePhone, channel.logicalChannel);
+      }, 500 * channel.logicalChannel); // Stagger by 500ms
     }
-  }
-  
-  private extractPhoneFromContext(): string | null {
-    // This would need to be passed from the message context
-    // For now, return the most recently connected vehicle
-    const connectedVehicles = Array.from(this.vehicles.values()).filter(v => v.connected);
-    return connectedVehicles.length > 0 ? connectedVehicles[connectedVehicles.length - 1].phone : null;
   }
 
   private parseResourceList(body: Buffer): void {
@@ -640,8 +661,6 @@ export class JTT808Server {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
     
-    
-    
     if (!vehicle || !socket || !vehicle.connected) {
       console.log(`  ❌ Cannot start video: vehicle=${!!vehicle}, socket=${!!socket}, connected=${vehicle?.connected}`);
       return false;
@@ -656,16 +675,16 @@ export class JTT808Server {
       vehicleId,
       this.getNextSerial(),
       serverIp,
-      this.port, // Use TCP port 7611 instead of UDP port
+      this.port,      // TCP port for signaling
+      this.udpPort,   // UDP port for RTP video stream
       channel,
-      1, // Video only
-      0  // Main stream
+      1,              // 1 = Video only
+      0               // 0 = Main stream
     );
     
-    
+    console.log(`📡 Sending 0x9101: TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
-    
     
     return true;
   }

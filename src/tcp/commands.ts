@@ -10,39 +10,44 @@ export class JTT1078Commands {
     return this.buildMessage(0x9003, terminalPhone, serialNumber, body);
   }
 
-  // Build 0x9101 command - Start real-time audio/video transmission
+  // Build 0x9101 command - Start real-time audio/video transmission (Table 17)
   static buildStartVideoCommand(
     terminalPhone: string,
     serialNumber: number,
     serverIp: string,
-    serverPort: number,
+    tcpPort: number,
+    udpPort: number,
     channelNumber: number = 1,
-    dataType: number = 0, // 0=audio/video, 1=video, 2=bidirectional audio, 3=audio
+    dataType: number = 0, // 0=audio/video, 1=video, 2=bidirectional, 3=monitor, 4=broadcast, 5=transparent
     streamType: number = 0 // 0=main stream, 1=sub stream
   ): Buffer {
-    const body = Buffer.alloc(16);
+    const ipLength = serverIp.length;
+    const body = Buffer.alloc(1 + ipLength + 2 + 2 + 1 + 1 + 1);
+    let offset = 0;
     
-    // Server IP (4 bytes)
-    const ipParts = serverIp.split('.').map(Number);
-    body.writeUInt8(ipParts[0], 0);
-    body.writeUInt8(ipParts[1], 1);
-    body.writeUInt8(ipParts[2], 2);
-    body.writeUInt8(ipParts[3], 3);
+    // Server IP address length (1 byte)
+    body.writeUInt8(ipLength, offset++);
     
-    // Server port (2 bytes)
-    body.writeUInt16BE(serverPort, 4);
+    // Server IP address (STRING)
+    body.write(serverIp, offset, 'ascii');
+    offset += ipLength;
     
-    // Channel number (1 byte)
-    body.writeUInt8(channelNumber, 6);
+    // Server TCP port (2 bytes)
+    body.writeUInt16BE(tcpPort, offset);
+    offset += 2;
+    
+    // Server UDP port (2 bytes)
+    body.writeUInt16BE(udpPort, offset);
+    offset += 2;
+    
+    // Logical channel number (1 byte)
+    body.writeUInt8(channelNumber, offset++);
     
     // Data type (1 byte)
-    body.writeUInt8(dataType, 7);
+    body.writeUInt8(dataType, offset++);
     
-    // Stream type (1 byte) 
-    body.writeUInt8(streamType, 8);
-    
-    // Reserved bytes (7 bytes)
-    body.fill(0, 9, 16);
+    // Stream type (1 byte)
+    body.writeUInt8(streamType, offset++);
     
     return this.buildMessage(JTT808MessageType.START_VIDEO_REQUEST, terminalPhone, serialNumber, body);
   }

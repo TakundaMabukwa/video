@@ -34,11 +34,22 @@ export interface JTT1078RTPHeader {
   marker: boolean;
   payloadType: number;
   sequenceNumber: number;
-  timestamp: number;
-  ssrc: number;
+  simCard: string;        // BCD[6] SIM card number
   channelNumber: number;
+  dataType: number;       // 4 bits: 0=I-frame, 1=P-frame, 2=B-frame, 3=Audio, 4=Transparent
   subpackageFlag: JTT1078SubpackageFlag;
+  timestamp?: bigint;     // 8 bytes milliseconds (not present for transparent data)
+  lastIFrameInterval?: number;  // WORD, only for video frames
+  lastFrameInterval?: number;   // WORD, only for video frames
   payloadLength: number;
+}
+
+export enum JTT1078DataType {
+  VIDEO_I_FRAME = 0x00,
+  VIDEO_P_FRAME = 0x01,
+  VIDEO_B_FRAME = 0x02,
+  AUDIO_FRAME = 0x03,
+  TRANSPARENT_DATA = 0x04
 }
 
 export interface Vehicle {
