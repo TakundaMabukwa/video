@@ -147,11 +147,13 @@ async function startServer() {
   
   // Connect TCP RTP frames to WebSocket and SSE broadcast
   tcpRTPHandler.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
+    console.log(`🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`);
     liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
     sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
   });
   
   tcpServer.setRTPHandler((buffer, vehicleId) => {
+    console.log(`📦 TCP RTP handler called: vehicleId=${vehicleId}, size=${buffer.length}`);
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
     dataWsServer.broadcast({
       type: 'RTP_PACKET',

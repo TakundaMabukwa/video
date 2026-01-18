@@ -18,7 +18,10 @@ export class SSEVideoStream {
   handleConnection(req: Request, res: Response) {
     const { vehicleId, channel = '1' } = req.query;
     
+    console.log(`📡 SSE connection request: vehicleId=${vehicleId}, channel=${channel}`);
+    
     if (!vehicleId) {
+      console.log('❌ SSE rejected: no vehicleId');
       return res.status(400).json({ error: 'vehicleId required' });
     }
 
@@ -40,9 +43,10 @@ export class SSEVideoStream {
     };
 
     this.clients.push(client);
-    this.tcpServer.startVideo(vehicleId as string, channelNum);
-
-    console.log(`SSE client connected: ${vehicleId}_${channelNum}`);
+    console.log(`✅ SSE client registered: ${vehicleId}_${channelNum}, total clients: ${this.clients.length}`);
+    
+    const started = this.tcpServer.startVideo(vehicleId as string, channelNum);
+    console.log(`   Video start result: ${started}`);
 
     req.on('close', () => {
       this.clients = this.clients.filter(c => c.res !== res);
@@ -61,13 +65,9 @@ export class SSEVideoStream {
   broadcastFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) {
     console.log(`📡 SSE broadcastFrame called: ${vehicleId}_${channel}, clients=${this.clients.length}`);
     
-    const clients = this.clients.filter(c => 
-      c.vehicleId === vehicleId && c.channel === channel
-    );
-
-    console.log(`   Matching clients: ${clients.length}`);
-    if (clients.length === 0) {
-      console.log(`   Available clients:`, this.clients.map(c => `${c.vehicleId}_${c.channel}`));
+    // BROADCAST TO ALL CLIENTS (ignore filter for testing)
+    if (this.clients.length === 0) {
+      console.log('   ⚠️ No SSE clients connected');
       return;
     }
 
@@ -81,10 +81,11 @@ export class SSEVideoStream {
       timestamp: Date.now()
     });
 
-    for (const client of clients) {
+    console.log(`   📤 Broadcasting to ALL ${this.clients.length} clients`);
+    for (const client of this.clients) {
       try {
         client.res.write(`data: ${data}\n\n`);
-        console.log(`   ✅ Sent frame to client`);
+        console.log(`   ✅ Sent to client ${client.vehicleId}_${client.channel}`);
       } catch (error) {
         console.error('   ❌ SSE write error:', error);
       }

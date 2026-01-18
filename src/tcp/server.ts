@@ -177,10 +177,13 @@ export class JTT808Server {
     const parsed = require('../udp/rtpParser').JTT1078RTPParser.parseRTPPacket(buffer);
     const vehicleId = parsed?.header.simCard || 'unknown';
     
-    console.log(`📦 RTP packet from vehicle ${vehicleId}, size: ${buffer.length}`);
+    console.log(`📹 RTP data received: vehicleId=${vehicleId}, size=${buffer.length}, hasHandler=${!!this.rtpHandler}`);
     
     if (this.rtpHandler && vehicleId !== 'unknown') {
       this.rtpHandler(buffer, vehicleId);
+    } else {
+      if (vehicleId === 'unknown') console.log('   ⚠️ Vehicle ID is unknown - cannot process');
+      if (!this.rtpHandler) console.log('   ⚠️ No RTP handler registered');
     }
   }
 
