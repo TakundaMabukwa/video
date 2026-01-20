@@ -15,6 +15,13 @@ export class ImageStorage {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${deviceId}/ch${channel}/${timestamp}.jpg`;
     
+    // Check file size (Supabase limit: 50MB)
+    const maxSize = 50 * 1024 * 1024; // 50MB
+    if (imageData.length > maxSize) {
+      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 50MB)`);
+      throw new Error(`Image size ${(imageData.length / 1024 / 1024).toFixed(2)}MB exceeds 50MB limit`);
+    }
+    
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
       .from(bucketName)
