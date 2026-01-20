@@ -3,6 +3,7 @@ import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
 import { AlertParser } from './alertParser';
 import { MultimediaParser } from './multimediaParser';
+import { AlertVideoCommands } from './alertVideoCommands';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { DeviceStorage } from '../storage/deviceStorage';
 import { ImageStorage } from '../storage/imageStorage';
@@ -37,10 +38,10 @@ export class JTT808Server {
       this.requestScreenshot(vehicleId, channel);
     });
     
-    // Listen for alert video requests (30s before + 30s after)
-    this.alertManager.on('request-alert-video', ({ vehicleId, channel, alertTime, alertId }) => {
-      console.log(`🎥 Alert ${alertId}: Requesting 30s pre/post video from ${vehicleId} channel ${channel}`);
-      this.requestAlertVideo(vehicleId, channel, alertTime);
+    // Listen for camera video requests from alert manager
+    this.alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
+      console.log(`🎥 Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${channel}`);
+      this.requestCameraVideo(vehicleId, channel, startTime, endTime);
     });
   }
 
@@ -617,7 +618,7 @@ export class JTT808Server {
     return true;
   }
 
-  requestAlertVideo(vehicleId: string, channel: number, alertTime: Date): boolean {
+  requestCameraVideo(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
     
@@ -627,22 +628,19 @@ export class JTT808Server {
 
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
-    // Request 30s before and 30s after alert
-    const startTime = new Date(alertTime.getTime() - 30000);
-    const endTime = new Date(alertTime.getTime() + 30000);
-
-    const command = JTT1078Commands.buildPlaybackCommand(
+    // Use JTT 1078-2016 compliant video request (0x9201)
+    const commandBody = AlertVideoCommands.createAlertVideoRequest(
       vehicleId,
-      this.getNextSerial(),
-      serverIp,
-      this.port,
       channel,
       startTime,
       endTime,
-      0 // Normal playback
+      serverIp,
+      this.port
     );
     
-    console.log(`🎥 Alert video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    const command = this.buildMessage(0x9201, vehicleId, this.getNextSerial(), commandBody);
+    
+    console.log(`🎥 Camera video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
     socket.write(command);
     return true;
   }

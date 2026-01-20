@@ -129,6 +129,7 @@ async function startServer() {
   
   const alertManager = tcpServer.getAlertManager();
   udpServer.setAlertManager(alertManager);
+  tcpRTPHandler.setAlertManager(alertManager);  // *** CRITICAL: Enable 30s pre/post video capture for TCP streams ***
   
   const app = express();
   app.use(express.json());
@@ -212,6 +213,32 @@ async function startServer() {
   });
   
   const wsServer = new AlertWebSocketServer(httpServer, alertManager);
+  
+  // Alert reminder scheduler - Check for unattended alerts every 5 minutes
+  setInterval(async () => {
+    try {
+      const { AlertStorageDB } = require('./storage/alertStorageDB');
+      const alertStorage = new AlertStorageDB();
+      const unattended = await alertStorage.getUnattendedAlerts(30);
+      
+      if (unattended.length > 0) {
+        console.log(`⏰ REMINDER: ${unattended.length} unattended alerts`);
+        wsServer.broadcast({
+          type: 'alert-reminder',
+          count: unattended.length,
+          alerts: unattended.map((a: any) => ({
+            id: a.id,
+            type: a.alert_type,
+            priority: a.priority,
+            timestamp: a.timestamp,
+            vehicleId: a.device_id
+          }))
+        });
+      }
+    } catch (error) {
+      console.error('Alert reminder error:', error);
+    }
+  }, 5 * 60 * 1000); // Every 5 minutes
   
   httpServer.listen(API_PORT, '0.0.0.0', () => {
     console.log(`REST API server listening on port ${API_PORT}`);

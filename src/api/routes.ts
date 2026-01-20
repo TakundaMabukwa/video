@@ -1,10 +1,12 @@
 import express from 'express';
 import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
+import { SpeedingManager } from '../services/speedingManager';
 import * as path from 'path';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
+  const speedingManager = new SpeedingManager();
 
   // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
@@ -571,6 +573,359 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       success,
       message: success ? 'Playback request sent, check logs for RTP data' : 'Failed to send request'
     });
+  });
+
+  // TEST: Simulate alert to test 30s video capture
+  router.post('/test/simulate-alert', async (req, res) => {
+    const { vehicleId, channel = 1, alertType = 'fatigue', fatigueLevel = 85 } = req.body;
+    
+    if (!vehicleId) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'vehicleId is required. Use a vehicleId that is currently streaming video.' 
+      });
+    }
+    
+    const alertManager = tcpServer.getAlertManager();
+    const bufferStats = alertManager.getBufferStats();
+    const bufferKey = `${vehicleId}_${channel}`;
+    
+    if (!bufferStats[bufferKey] || bufferStats[bufferKey].totalFrames === 0) {
+      return res.status(400).json({
+        success: false,
+        message: `No video frames in buffer for ${bufferKey}. Start video streaming first and wait 30s for buffer to fill.`,
+        bufferStats
+      });
+    }
+    
+    // Create a simulated location alert
+    const simulatedAlert = {
+      vehicleId,
+      timestamp: new Date(),
+      latitude: 0,
+      longitude: 0,
+      drivingBehavior: {
+        fatigue: alertType === 'fatigue',
+        phoneCall: alertType === 'phone',
+        smoking: alertType === 'smoking',
+        custom: 0,
+        fatigueLevel: alertType === 'fatigue' ? fatigueLevel : 0
+      }
+    };
+    
+    // Process through alert manager
+    await alertManager.processAlert(simulatedAlert as any);
+    
+    res.json({
+      success: true,
+      message: `Alert simulated for ${vehicleId} channel ${channel}. Check recordings/${vehicleId}/alerts/ for video clips.`,
+      bufferBefore: bufferStats[bufferKey],
+      note: 'Pre-event video saved immediately. Post-event video will be saved in ~35 seconds.'
+    });
+  });
+
+  // Check buffer status for all streams
+  router.get('/buffers/status', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const stats = alertManager.getBufferStats();
+    
+    const summary = Object.entries(stats).map(([key, value]: [string, any]) => ({
+      stream: key,
+      frames: value.totalFrames,
+      duration: `${value.bufferDuration?.toFixed(1) || 0}s`,
+      oldest: value.oldestFrame,
+      newest: value.newestFrame,
+      isRecordingPostEvent: value.isRecordingPostEvent,
+      postEventAlertId: value.postEventAlertId
+    }));
+    
+    res.json({
+      success: true,
+      totalBuffers: Object.keys(stats).length,
+      data: summary
+    });
+  });
+
+  // === NEW REQUIREMENTS ENDPOINTS ===
+
+  // Resolve alert with required notes
+  router.post('/alerts/:id/resolve-with-notes', async (req, res) => {
+    const { id } = req.params;
+    const { notes, resolvedBy } = req.body;
+    
+    if (!notes || notes.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Resolution notes required (minimum 10 characters)'
+      });
+    }
+    
+    const alertManager = tcpServer.getAlertManager();
+    const success = await alertManager.resolveAlert(id, notes, resolvedBy);
+    
+    if (success) {
+      res.json({
+        success: true,
+        message: `Alert ${id} resolved with notes`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Alert ${id} not found`
+      });
+    }
+  });
+
+  // Mark alert as false alert
+  router.post('/alerts/:id/mark-false', async (req, res) => {
+    const { id } = req.params;
+    const { reason, markedBy } = req.body;
+    
+    if (!reason || reason.trim().length < 10) {
+      return res.status(400).json({
+        success: false,
+        message: 'Reason required (minimum 10 characters)'
+      });
+    }
+    
+    try {
+      const alertStorage = require('../storage/alertStorageDB');
+      await new alertStorage.AlertStorageDB().markAsFalseAlert(id, reason, markedBy);
+      
+      res.json({
+        success: true,
+        message: `Alert ${id} marked as false alert`
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to mark alert as false'
+      });
+    }
+  });
+
+  // Get unattended alerts
+  router.get('/alerts/unattended', async (req, res) => {
+    const minutesThreshold = parseInt(req.query.minutes as string) || 30;
+    
+    try {
+      const alertStorage = require('../storage/alertStorageDB');
+      const alerts = await new alertStorage.AlertStorageDB().getUnattendedAlerts(minutesThreshold);
+      
+      res.json({
+        success: true,
+        threshold: `${minutesThreshold} minutes`,
+        total: alerts.length,
+        data: alerts
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch unattended alerts'
+      });
+    }
+  });
+
+  // Get alerts grouped by priority
+  router.get('/alerts/by-priority', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const alerts = alertManager.getActiveAlerts();
+    
+    const grouped = {
+      critical: alerts.filter(a => a.priority === 'critical'),
+      high: alerts.filter(a => a.priority === 'high'),
+      medium: alerts.filter(a => a.priority === 'medium'),
+      low: alerts.filter(a => a.priority === 'low')
+    };
+    
+    res.json({
+      success: true,
+      data: grouped,
+      counts: {
+        critical: grouped.critical.length,
+        high: grouped.high.length,
+        medium: grouped.medium.length,
+        low: grouped.low.length
+      }
+    });
+  });
+
+  // Get screenshots for review (auto-refresh endpoint)
+  router.get('/screenshots/recent', async (req, res) => {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const alertsOnly = req.query.alertsOnly === 'true';
+    
+    try {
+      const query = alertsOnly
+        ? `SELECT * FROM images WHERE alert_id IS NOT NULL ORDER BY timestamp DESC LIMIT $1`
+        : `SELECT * FROM images ORDER BY timestamp DESC LIMIT $1`;
+      
+      const result = await require('../storage/database').query(query, [limit]);
+      
+      res.json({
+        success: true,
+        total: result.rows.length,
+        data: result.rows,
+        lastUpdate: new Date()
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch screenshots'
+      });
+    }
+  });
+
+  // Executive Dashboard - Analytics
+  router.get('/dashboard/executive', async (req, res) => {
+    const days = parseInt(req.query.days as string) || 30;
+    
+    try {
+      const db = require('../storage/database');
+      
+      const alertsByPriority = await db.query(
+        `SELECT priority, COUNT(*) as count 
+         FROM alerts 
+         WHERE timestamp > NOW() - INTERVAL '${days} days'
+         GROUP BY priority`
+      );
+      
+      const alertsByType = await db.query(
+        `SELECT alert_type, COUNT(*) as count 
+         FROM alerts 
+         WHERE timestamp > NOW() - INTERVAL '${days} days'
+         GROUP BY alert_type
+         ORDER BY count DESC
+         LIMIT 10`
+      );
+      
+      const avgResponseTime = await db.query(
+        `SELECT AVG(EXTRACT(EPOCH FROM (acknowledged_at - timestamp))) as avg_seconds
+         FROM alerts 
+         WHERE acknowledged_at IS NOT NULL
+         AND timestamp > NOW() - INTERVAL '${days} days'`
+      );
+      
+      const escalationRate = await db.query(
+        `SELECT 
+           COUNT(CASE WHEN escalation_level > 0 THEN 1 END)::FLOAT / NULLIF(COUNT(*), 0) * 100 as rate
+         FROM alerts
+         WHERE timestamp > NOW() - INTERVAL '${days} days'`
+      );
+      
+      const resolutionRate = await db.query(
+        `SELECT 
+           COUNT(CASE WHEN status = 'resolved' THEN 1 END)::FLOAT / NULLIF(COUNT(*), 0) * 100 as rate
+         FROM alerts
+         WHERE timestamp > NOW() - INTERVAL '${days} days'`
+      );
+      
+      res.json({
+        success: true,
+        period: `Last ${days} days`,
+        data: {
+          alertsByPriority: alertsByPriority.rows,
+          alertsByType: alertsByType.rows,
+          avgResponseTimeSeconds: parseFloat(avgResponseTime.rows[0]?.avg_seconds || 0).toFixed(2),
+          escalationRate: parseFloat(escalationRate.rows[0]?.rate || 0).toFixed(2) + '%',
+          resolutionRate: parseFloat(resolutionRate.rows[0]?.rate || 0).toFixed(2) + '%'
+        }
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch dashboard data'
+      });
+    }
+  });
+
+  // Record speeding event
+  router.post('/speeding/record', async (req, res) => {
+    const { vehicleId, driverId, speed, speedLimit, latitude, longitude } = req.body;
+    
+    if (!vehicleId || !speed || !speedLimit) {
+      return res.status(400).json({
+        success: false,
+        message: 'vehicleId, speed, and speedLimit are required'
+      });
+    }
+    
+    try {
+      const eventId = await speedingManager.recordSpeedingEvent(
+        vehicleId,
+        driverId || null,
+        speed,
+        speedLimit,
+        { latitude: latitude || 0, longitude: longitude || 0 }
+      );
+      
+      res.json({
+        success: true,
+        eventId,
+        message: 'Speeding event recorded'
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to record speeding event'
+      });
+    }
+  });
+
+  // Get driver rating
+  router.get('/drivers/:driverId/rating', async (req, res) => {
+    const { driverId } = req.params;
+    
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT * FROM drivers WHERE driver_id = $1`,
+        [driverId]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Driver not found'
+        });
+      }
+      
+      res.json({
+        success: true,
+        data: result.rows[0]
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch driver rating'
+      });
+    }
+  });
+
+  // Get speeding events for driver
+  router.get('/drivers/:driverId/speeding-events', async (req, res) => {
+    const { driverId } = req.params;
+    const days = parseInt(req.query.days as string) || 7;
+    
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT * FROM speeding_events 
+         WHERE driver_id = $1 AND timestamp > NOW() - INTERVAL '${days} days'
+         ORDER BY timestamp DESC`,
+        [driverId]
+      );
+      
+      res.json({
+        success: true,
+        period: `Last ${days} days`,
+        total: result.rows.length,
+        data: result.rows
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch speeding events'
+      });
+    }
   });
 
   return router;

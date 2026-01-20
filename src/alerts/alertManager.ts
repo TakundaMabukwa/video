@@ -20,10 +20,20 @@ export interface AlertEvent {
   type: string;
   timestamp: Date;
   location: { latitude: number; longitude: number };
-  videoClipPath?: string;
+  videoClipPath?: string;  // Legacy: pre-event clip path
   status: 'new' | 'acknowledged' | 'escalated' | 'resolved';
   escalationLevel: number;
-  metadata: any;
+  metadata: any & {
+    videoClips?: {
+      pre?: string;      // Pre-event (30s before) clip path
+      post?: string;     // Post-event (30s after) clip path
+      preFrameCount?: number;
+      postFrameCount?: number;
+      preDuration?: number;
+      postDuration?: number;
+      cameraVideo?: string;  // Video retrieved from camera SD card
+    };
+  };
 }
 
 export class AlertManager extends EventEmitter {
@@ -53,13 +63,43 @@ export class AlertManager extends EventEmitter {
   initializeBuffer(vehicleId: string, channel: number): void {
     const key = `${vehicleId}_${channel}`;
     if (!this.videoBuffers.has(key)) {
-      this.videoBuffers.set(key, new CircularVideoBuffer(vehicleId, channel, 30));
+      const buffer = new CircularVideoBuffer(vehicleId, channel, 30);
+      
+      // Listen for post-event clip completion
+      buffer.on('post-event-complete', async ({ alertId, clipPath, frameCount, duration }) => {
+        const alert = this.activeAlerts.get(alertId);
+        if (alert) {
+          // Update alert with post-event video path
+          if (!alert.metadata.videoClips) {
+            alert.metadata.videoClips = {};
+          }
+          alert.metadata.videoClips.post = clipPath;
+          alert.metadata.videoClips.postFrameCount = frameCount;
+          alert.metadata.videoClips.postDuration = duration;
+          
+          console.log(`✅ Alert ${alertId}: Post-event video linked (${frameCount} frames, ${duration.toFixed(1)}s)`);
+          
+          // Update in database
+          await this.alertStorage.saveAlert(alert);
+          
+          // Emit event for any listeners
+          this.emit('alert-video-complete', { alertId, type: 'post', clipPath });
+        }
+      });
+      
+      this.videoBuffers.set(key, buffer);
       console.log(`📹 Circular buffer initialized: ${key}`);
     }
   }
 
   addFrameToBuffer(vehicleId: string, channel: number, frameData: Buffer, timestamp: Date, isIFrame: boolean): void {
     const key = `${vehicleId}_${channel}`;
+    
+    // Auto-initialize buffer if it doesn't exist (ensures we capture video even before startVideo is called)
+    if (!this.videoBuffers.has(key)) {
+      this.initializeBuffer(vehicleId, channel);
+    }
+    
     const buffer = this.videoBuffers.get(key);
     if (buffer) {
       buffer.addFrame(frameData, timestamp, isIFrame);
@@ -92,20 +132,16 @@ export class AlertManager extends EventEmitter {
     // Save alert to database
     await this.alertStorage.saveAlert(alertEvent);
 
+    // For driver-related alerts, request 30s before/after from camera SD card
+    if (this.isDriverRelatedAlert(alert)) {
+      await this.requestAlertVideoFromCamera(alertEvent);
+    }
+
     // Request immediate screenshot for alert evidence
     console.log(`📸 Requesting screenshot for alert ${alertId}`);
     this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
 
-    // Request 30s before + 30s after video from camera's SD card
-    console.log(`🎥 Requesting 30s pre/post video for alert ${alertId}`);
-    this.emit('request-alert-video', { 
-      vehicleId: alert.vehicleId, 
-      channel, 
-      alertTime: alert.timestamp,
-      alertId 
-    });
-
-    // Capture 30s pre + 30s post video (if buffer exists)
+    // Capture from circular buffer as backup
     await this.captureEventVideo(alertEvent);
 
     // Send bell notification
@@ -129,11 +165,22 @@ export class AlertManager extends EventEmitter {
     }
 
     const clipPath = await buffer.captureEventClip(alert.id, 30);
-    alert.videoClipPath = clipPath;
+    
+    // Store pre-event video path in alert metadata
+    if (!alert.metadata.videoClips) {
+      alert.metadata.videoClips = {};
+    }
+    alert.metadata.videoClips.pre = clipPath;
+    alert.videoClipPath = clipPath; // Keep for backwards compatibility
+    
+    // Update in database with pre-event clip info
+    await this.alertStorage.saveAlert(alert);
+    
+    console.log(`✅ Alert ${alert.id}: Pre-event video captured, post-event recording started (30s)`);
   }
 
   private determinePriority(alert: LocationAlert): AlertPriority {
-    // CRITICAL: Fatigue > 80
+    // CRITICAL: Fatigue level > 80 (per JTT 1078-2016 Table 15)
     if (alert.drivingBehavior?.fatigueLevel && alert.drivingBehavior.fatigueLevel > 80) {
       return AlertPriority.CRITICAL;
     }
@@ -150,6 +197,14 @@ export class AlertManager extends EventEmitter {
     if (alert.videoAlarms?.videoSignalLoss ||
         alert.videoAlarms?.videoSignalBlocking ||
         alert.videoAlarms?.busOvercrowding) {
+      return AlertPriority.MEDIUM;
+    }
+
+    // Add speed-based alerts if speed data available
+    if (alert.speed && alert.speed > 100) { // Example: 100+ km/h = HIGH priority
+      return AlertPriority.HIGH;
+    }
+    if (alert.speed && alert.speed > 80) { // Example: 80+ km/h = MEDIUM priority  
       return AlertPriority.MEDIUM;
     }
 
@@ -198,11 +253,11 @@ export class AlertManager extends EventEmitter {
     return false;
   }
 
-  async resolveAlert(id: string): Promise<boolean> {
+  async resolveAlert(id: string, notes?: string, resolvedBy?: string): Promise<boolean> {
     const alert = this.activeAlerts.get(id);
     if (alert) {
       alert.status = 'resolved';
-      await this.alertStorage.updateAlertStatus(id, 'resolved', undefined, new Date());
+      await this.alertStorage.updateAlertStatus(id, 'resolved', undefined, new Date(), notes, resolvedBy);
       this.escalation.stopMonitoring(id);
       this.emit('alert-resolved', alert);
       return true;
@@ -246,5 +301,34 @@ export class AlertManager extends EventEmitter {
       stats[key] = buffer.getStats();
     }
     return stats;
+  }
+
+  private isDriverRelatedAlert(alert: LocationAlert): boolean {
+    return !!(alert.drivingBehavior?.fatigue || 
+             alert.drivingBehavior?.phoneCall || 
+             alert.drivingBehavior?.smoking ||
+             (alert.speed && alert.speed > 80)); // Include speeding
+  }
+
+  private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {
+    // Calculate 30s before and after alert time
+    const alertTime = alert.timestamp;
+    const startTime = new Date(alertTime.getTime() - 30 * 1000); // 30s before
+    const endTime = new Date(alertTime.getTime() + 30 * 1000);   // 30s after
+
+    console.log(`🎥 Requesting 30s pre/post video from camera SD card for alert ${alert.id}`);
+    
+    // Emit request for camera video retrieval (0x9201 command)
+    this.emit('request-camera-video', {
+      vehicleId: alert.vehicleId,
+      channel: alert.channel,
+      startTime,
+      endTime,
+      alertId: alert.id,
+      audioVideoType: 2, // Video only
+      streamType: 1,     // Main stream
+      memoryType: 1,     // Main storage
+      playbackMethod: 0  // Normal playback
+    });
   }
 }

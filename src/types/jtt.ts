@@ -110,6 +110,9 @@ export interface LocationAlert {
   timestamp: Date;
   latitude: number;
   longitude: number;
+  speed?: number;        // km/h from location report
+  direction?: number;    // degrees
+  altitude?: number;     // meters
   videoAlarms?: VideoAlarmStatus;
   signalLossChannels?: number[]; // channels 1-32
   blockingChannels?: number[]; // channels 1-32

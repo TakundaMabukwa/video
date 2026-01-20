@@ -2,6 +2,7 @@ import { JTT1078RTPParser } from '../udp/rtpParser';
 import { FrameAssembler } from '../udp/frameAssembler';
 import { VideoWriter } from '../video/writer';
 import { HLSStreamer } from '../streaming/hls';
+import { AlertManager } from '../alerts/alertManager';
 
 export class TCPRTPHandler {
   private frameAssembler = new FrameAssembler();
@@ -10,9 +11,14 @@ export class TCPRTPHandler {
   private frameCount = 0;
   private activeStreams = new Set<string>();
   private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
+  private alertManager?: AlertManager;
 
   setFrameCallback(callback: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void): void {
     this.onFrameCallback = callback;
+  }
+
+  setAlertManager(alertManager: AlertManager): void {
+    this.alertManager = alertManager;
   }
 
   handleRTPPacket(buffer: Buffer, vehicleId: string): void {
@@ -39,6 +45,17 @@ export class TCPRTPHandler {
       const isIFrame = this.isIFrame(completeFrame);
       
       console.log(`📦 Frame #${this.frameCount} assembled: ${vehicleId}_ch${header.channelNumber}, size=${completeFrame.length}, isIFrame=${isIFrame}, hasCallback=${!!this.onFrameCallback}`);
+      
+      // *** CRITICAL: Add frame to AlertManager's circular buffer for 30s pre/post capture ***
+      if (this.alertManager) {
+        this.alertManager.addFrameToBuffer(
+          vehicleId,
+          header.channelNumber,
+          completeFrame,
+          new Date(),
+          isIFrame
+        );
+      }
       
       // Broadcast to SSE/WebSocket
       if (this.onFrameCallback) {

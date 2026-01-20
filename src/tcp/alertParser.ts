@@ -10,7 +10,7 @@ export class AlertParser {
     const latitude = body.readUInt32BE(8) / 1000000;
     const longitude = body.readUInt32BE(12) / 1000000;
     const altitude = body.readUInt16BE(16);
-    const speed = body.readUInt16BE(18);
+    const speed = body.readUInt16BE(18) / 10; // Convert from 0.1 km/h to km/h
     const direction = body.readUInt16BE(20);
     const timestamp = this.parseTimestamp(body.slice(22, 28));
 
@@ -18,7 +18,10 @@ export class AlertParser {
       vehicleId,
       timestamp,
       latitude,
-      longitude
+      longitude,
+      speed,
+      direction,
+      altitude
     };
 
     // Parse additional information (after byte 28)
@@ -113,14 +116,14 @@ export class AlertParser {
     if (data.length < 3) return {} as AbnormalDrivingBehavior;
     
     const behaviorFlags = data.readUInt16BE(0);
-    const fatigueLevel = data.readUInt8(2);
+    const fatigueLevel = data.readUInt8(2); // Byte 2: Fatigue level 0-100
     
     return {
-      fatigue: !!(behaviorFlags & (1 << 0)),
-      phoneCall: !!(behaviorFlags & (1 << 1)),
-      smoking: !!(behaviorFlags & (1 << 2)),
-      custom: (behaviorFlags >> 11) & 0x1F, // bits 11-15
-      fatigueLevel // 0-100 scale per Table 15
+      fatigue: !!(behaviorFlags & (1 << 0)),     // bit0: fatigue
+      phoneCall: !!(behaviorFlags & (1 << 1)),   // bit1: call  
+      smoking: !!(behaviorFlags & (1 << 2)),     // bit2: smoking
+      custom: (behaviorFlags >> 11) & 0x1F,      // bits 11-15: custom
+      fatigueLevel                                // 0-100 scale per Table 15
     };
   }
 

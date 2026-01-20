@@ -297,5 +297,116 @@ export function createAlertRoutes(): express.Router {
     }
   });
 
+  // Download 30s video clip (pre or post event)
+  router.get('/:id/video/:type', async (req, res) => {
+    try {
+      const { id, type } = req.params;
+      const fs = require('fs');
+      const path = require('path');
+      
+      if (type !== 'pre' && type !== 'post' && type !== 'combined') {
+        return res.status(400).json({ 
+          success: false, 
+          message: 'Invalid video type. Use "pre", "post", or "combined"' 
+        });
+      }
+      
+      // Get alert from database to find video paths
+      const result = await require('../storage/database').query(
+        'SELECT * FROM alerts WHERE id = $1',
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Alert not found' });
+      }
+      
+      const alert = result.rows[0];
+      const metadata = typeof alert.metadata === 'string' ? JSON.parse(alert.metadata) : alert.metadata;
+      
+      if (!metadata?.videoClips) {
+        // Try to find video files by alert ID pattern
+        const recordingsDir = path.join(process.cwd(), 'recordings', alert.device_id, 'alerts');
+        if (!fs.existsSync(recordingsDir)) {
+          return res.status(404).json({ success: false, message: 'No video clips found for this alert' });
+        }
+        
+        const files = fs.readdirSync(recordingsDir).filter((f: string) => f.startsWith(id));
+        if (files.length === 0) {
+          return res.status(404).json({ success: false, message: 'No video clips found for this alert' });
+        }
+        
+        // Return list of available clips
+        return res.json({
+          success: true,
+          data: {
+            alertId: id,
+            availableClips: files.map((f: string) => ({
+              filename: f,
+              type: f.includes('_pre_') ? 'pre' : 'post',
+              path: `/api/alerts/${id}/download/${f}`
+            }))
+          }
+        });
+      }
+      
+      const clipPath = type === 'pre' ? metadata.videoClips.pre : metadata.videoClips.post;
+      
+      if (!clipPath || !fs.existsSync(clipPath)) {
+        return res.status(404).json({ 
+          success: false, 
+          message: `${type}-event video not found or not yet captured` 
+        });
+      }
+      
+      // Stream the H.264 file
+      res.setHeader('Content-Type', 'video/h264');
+      res.setHeader('Content-Disposition', `attachment; filename="${id}_${type}_event.h264"`);
+      
+      const fileStream = fs.createReadStream(clipPath);
+      fileStream.pipe(res);
+      
+    } catch (error) {
+      console.error('Error fetching video:', error);
+      res.status(500).json({ success: false, message: 'Failed to fetch video clip' });
+    }
+  });
+
+  // Download specific video file
+  router.get('/:id/download/:filename', async (req, res) => {
+    try {
+      const { id, filename } = req.params;
+      const fs = require('fs');
+      const path = require('path');
+      
+      // Get alert to find device_id
+      const result = await require('../storage/database').query(
+        'SELECT device_id FROM alerts WHERE id = $1',
+        [id]
+      );
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({ success: false, message: 'Alert not found' });
+      }
+      
+      const deviceId = result.rows[0].device_id;
+      const filePath = path.join(process.cwd(), 'recordings', deviceId, 'alerts', filename);
+      
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ success: false, message: 'Video file not found' });
+      }
+      
+      res.setHeader('Content-Type', 'video/h264');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+      
+    } catch (error) {
+      console.error('Error downloading video:', error);
+      res.status(500).json({ success: false, message: 'Failed to download video' });
+    }
+  });
+
   return router;
 }

@@ -27,11 +27,29 @@ export class AlertStorageDB {
     );
   }
 
-  async updateAlertStatus(alertId: string, status: string, acknowledgedAt?: Date, resolvedAt?: Date) {
+  async updateAlertStatus(alertId: string, status: string, acknowledgedAt?: Date, resolvedAt?: Date, notes?: string, resolvedBy?: string) {
     await query(
-      `UPDATE alerts SET status = $1, acknowledged_at = $2, resolved_at = $3 WHERE id = $4`,
-      [status, acknowledgedAt, resolvedAt, alertId]
+      `UPDATE alerts SET status = $1, acknowledged_at = $2, resolved_at = $3, resolution_notes = $4, resolved_by = $5 WHERE id = $6`,
+      [status, acknowledgedAt, resolvedAt, notes, resolvedBy, alertId]
     );
+  }
+
+  async markAsFalseAlert(alertId: string, reason: string, markedBy: string) {
+    await query(
+      `UPDATE alerts SET is_false_alert = TRUE, false_alert_reason = $1, resolved_by = $2, resolved_at = NOW(), status = 'resolved' WHERE id = $3`,
+      [reason, markedBy, alertId]
+    );
+  }
+
+  async getUnattendedAlerts(minutesThreshold: number = 30) {
+    const cutoff = new Date(Date.now() - minutesThreshold * 60000);
+    const result = await query(
+      `SELECT * FROM alerts 
+       WHERE status = 'new' AND timestamp < $1 
+       ORDER BY priority DESC, timestamp ASC`,
+      [cutoff]
+    );
+    return result.rows;
   }
 
   async getActiveAlerts() {
