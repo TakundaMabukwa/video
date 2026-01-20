@@ -14,14 +14,14 @@ export class ImageStorage {
     const bucketName = await this.bucketReady;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${deviceId}/ch${channel}/${timestamp}.jpg`;
-    
-    // Check file size (Supabase limit: 50MB)
-    const maxSize = 50 * 1024 * 1024; // 50MB
+
+    // Check file size (Supabase limit: 150MB)
+    const maxSize = 150 * 1024 * 1024; // 150MB
     if (imageData.length > maxSize) {
-      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 50MB)`);
-      throw new Error(`Image size ${(imageData.length / 1024 / 1024).toFixed(2)}MB exceeds 50MB limit`);
+      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 150MB)`);
+      throw new Error(`Image size ${(imageData.length / 1024 / 1024).toFixed(2)}MB exceeds 150MB limit`);
     }
-    
+
     // Upload to Supabase Storage
     const { data, error } = await supabase.storage
       .from(bucketName)
@@ -29,19 +29,19 @@ export class ImageStorage {
         contentType: 'image/jpeg',
         upsert: false
       });
-    
+
     if (error) {
       console.error('Supabase upload failed:', error);
       throw error;
     }
-    
+
     // Get public URL
     const { data: urlData } = supabase.storage
       .from(bucketName)
       .getPublicUrl(filename);
-    
+
     const storageUrl = urlData.publicUrl;
-    
+
     // Save to database
     const result = await query(
       `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
@@ -49,7 +49,7 @@ export class ImageStorage {
        RETURNING id`,
       [deviceId, channel, filename, storageUrl, imageData.length, new Date(), alertId || null]
     );
-    
+
     console.log(`📸 Image uploaded: ${storageUrl}`);
     return result.rows[0].id;
   }
