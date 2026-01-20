@@ -525,6 +525,83 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Get all videos for alert (pre-event, post-event, camera SD)
+  router.get('/alerts/:id/videos', async (req, res) => {
+    const { id } = req.params;
+    
+    try {
+      const db = require('../storage/database');
+      
+      // Get alert with metadata
+      const alertResult = await db.query(
+        `SELECT id, device_id, channel, alert_type, timestamp, metadata 
+         FROM alerts WHERE id = $1`,
+        [id]
+      );
+      
+      if (alertResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+      
+      const alert = alertResult.rows[0];
+      
+      // Get linked videos from videos table
+      const videosResult = await db.query(
+        `SELECT id, file_path, storage_url, file_size, start_time, end_time, 
+                duration_seconds, video_type, created_at
+         FROM videos 
+         WHERE alert_id = $1 
+         ORDER BY video_type, start_time`,
+        [id]
+      );
+      
+      // Extract video paths from metadata
+      const videoClips = alert.metadata?.videoClips || {};
+      
+      res.json({
+        success: true,
+        alert_id: id,
+        device_id: alert.device_id,
+        channel: alert.channel,
+        alert_type: alert.alert_type,
+        timestamp: alert.timestamp,
+        videos: {
+          // From metadata (immediate paths)
+          pre_event: {
+            path: videoClips.pre || null,
+            frames: videoClips.preFrameCount || 0,
+            duration: videoClips.preDuration || 0,
+            description: '30 seconds before alert (from circular buffer)'
+          },
+          post_event: {
+            path: videoClips.post || null,
+            frames: videoClips.postFrameCount || 0,
+            duration: videoClips.postDuration || 0,
+            description: '30 seconds after alert (recorded live)'
+          },
+          camera_sd: {
+            path: videoClips.cameraVideo || null,
+            description: 'Retrieved from camera SD card (most reliable)'
+          },
+          // From videos table (database records)
+          database_records: videosResult.rows
+        },
+        total_videos: videosResult.rows.length,
+        has_pre_event: !!videoClips.pre,
+        has_post_event: !!videoClips.post,
+        has_camera_video: !!videoClips.cameraVideo
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert videos'
+      });
+    }
+  });
+
   // Get buffer statistics
   router.get('/alerts/buffers/stats', (req, res) => {
     const alertManager = tcpServer.getAlertManager();
