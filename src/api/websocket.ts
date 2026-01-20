@@ -7,8 +7,8 @@ export class AlertWebSocketServer {
   private clients = new Set<WebSocket>();
 
   constructor(httpServer: HTTPServer, alertManager: AlertManager) {
-    this.wss = new WebSocketServer({ 
-      server: httpServer, 
+    this.wss = new WebSocketServer({
+      server: httpServer,
       path: '/ws/alerts',
       perMessageDeflate: {
         zlibDeflateOptions: { chunkSize: 1024, memLevel: 7, level: 3 },
@@ -75,9 +75,9 @@ export class AlertWebSocketServer {
     console.log('🔔 WebSocket alert notification server initialized');
   }
 
-  private broadcast(message: any): void {
+  public broadcast(message: any): void {
     const payload = JSON.stringify(message);
-    
+
     this.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(payload);

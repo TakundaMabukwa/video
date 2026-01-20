@@ -28,17 +28,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/start-all-streams', (req, res) => {
     const { id } = req.params;
     const vehicle = tcpServer.getVehicle(id);
-    
+
     if (!vehicle || !vehicle.connected) {
       return res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
       });
     }
-    
+
     const videoChannels = vehicle.channels?.filter(ch => ch.type === 'video' || ch.type === 'audio_video') || [];
     const results = [];
-    
+
     for (const channel of videoChannels) {
       const success = tcpServer.startVideo(id, channel.logicalChannel);
       results.push({
@@ -47,7 +47,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success
       });
     }
-    
+
     res.json({
       success: true,
       message: `Started ${results.filter(r => r.success).length}/${results.length} video streams`,
@@ -59,23 +59,23 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/stop-all-streams', (req, res) => {
     const { id } = req.params;
     const vehicle = tcpServer.getVehicle(id);
-    
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found`
       });
     }
-    
+
     const activeChannels = Array.from(vehicle.activeStreams);
     const results = [];
-    
+
     for (const channel of activeChannels) {
       const success = tcpServer.stopVideo(id, channel);
       udpServer.stopStream(id, channel);
       results.push({ channel, success });
     }
-    
+
     res.json({
       success: true,
       message: `Stopped ${results.length} video streams`,
@@ -87,9 +87,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/start-live', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.body;
-    
+
     console.log(`📡 API: start-live called for vehicle ${id}, channel ${channel}`);
-    
+
     const success = tcpServer.startVideo(id, channel);
     if (success) {
       udpServer.startHLSStream(id, channel);
@@ -109,16 +109,16 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/stop-live', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.body;
-    
+
     const success = tcpServer.stopVideo(id, channel);
     udpServer.stopStream(id, channel);
-    
+
     // Also stop TCP RTP handler stream
     const tcpRTPHandler = (tcpServer as any).rtpHandler;
     if (tcpRTPHandler?.stopStream) {
       tcpRTPHandler.stopStream(id, channel);
     }
-    
+
     if (success) {
       res.json({
         success: true,
@@ -136,9 +136,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/screenshot', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.body;
-    
+
     const success = tcpServer.requestScreenshot(id, channel);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -156,10 +156,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/vehicles/:id/stream-info', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.query;
-    
+
     const vehicle = tcpServer.getVehicle(id);
     const streamInfo = udpServer.getStreamInfo(id, Number(channel));
-    
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
@@ -190,19 +190,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/vehicles/:id/streams', (req, res) => {
     const { id } = req.params;
     const vehicle = tcpServer.getVehicle(id);
-    
+
     if (!vehicle) {
       return res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found`
       });
     }
-    
+
     const streams = [];
     for (const channel of vehicle.activeStreams) {
       const streamInfo = udpServer.getStreamInfo(id, channel);
       const channelInfo = vehicle.channels?.find(ch => ch.logicalChannel === channel);
-      
+
       streams.push({
         channel,
         type: channelInfo?.type || 'unknown',
@@ -217,7 +217,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         playlistUrl: `/api/stream/${id}/${channel}/playlist.m3u8`
       });
     }
-    
+
     res.json({
       success: true,
       data: {
@@ -232,9 +232,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Query camera capabilities
   router.post('/vehicles/:id/query-capabilities', (req, res) => {
     const { id } = req.params;
-    
+
     const success = tcpServer.queryCapabilities(id);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -252,7 +252,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/stats', (req, res) => {
     const vehicles = tcpServer.getVehicles();
     const udpStats = udpServer.getStats();
-    
+
     res.json({
       success: true,
       data: {
@@ -292,7 +292,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/vehicles/:id/images', async (req, res) => {
     const { id } = req.params;
     const limit = parseInt(req.query.limit as string) || 50;
-    
+
     try {
       const result = await require('../storage/database').query(
         `SELECT id, device_id, channel, storage_url, file_size, timestamp 
@@ -302,9 +302,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          LIMIT $2`,
         [id, limit]
       );
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         data: result.rows.map((img: any) => ({
           id: img.id,
           deviceId: img.device_id,
@@ -324,7 +324,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { vehicleId, filename } = req.params;
     const { download } = req.query;
     const filePath = path.join(process.cwd(), 'media', vehicleId, filename);
-    
+
     if (require('fs').existsSync(filePath)) {
       // Set proper content type for images
       if (filename.match(/\.(jpg|jpeg)$/i)) {
@@ -334,7 +334,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       } else if (filename.match(/\.mp4$/i)) {
         res.setHeader('Content-Type', 'video/mp4');
       }
-      
+
       if (download === 'true') {
         res.download(filePath, filename);
       } else {
@@ -356,9 +356,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          LIMIT $1`,
         [limit]
       );
-      
-      res.json({ 
-        success: true, 
+
+      res.json({
+        success: true,
         total: result.rows.length,
         data: result.rows.map((img: any) => ({
           id: img.id,
@@ -385,7 +385,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // === ALERT MANAGEMENT ENDPOINTS ===
-  
+
   // Get active alerts
   router.get('/alerts/active', (req, res) => {
     const alertManager = tcpServer.getAlertManager();
@@ -402,14 +402,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const alert = alertManager.getAlertById(id);
-    
+
     if (!alert) {
       return res.status(404).json({
         success: false,
         message: `Alert ${id} not found`
       });
     }
-    
+
     // Get associated screenshots
     try {
       const screenshots = await require('../storage/database').query(
@@ -419,7 +419,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          ORDER BY timestamp ASC`,
         [id]
       );
-      
+
       res.json({
         success: true,
         data: {
@@ -440,7 +440,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const success = await alertManager.acknowledgeAlert(id);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -459,7 +459,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const success = await alertManager.resolveAlert(id);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -478,7 +478,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const success = await alertManager.escalateAlert(id);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -507,14 +507,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
     const alert = alertManager.getAlertById(id);
-    
+
     if (!alert || !alert.videoClipPath) {
       return res.status(404).json({
         success: false,
         message: 'Video clip not found'
       });
     }
-    
+
     if (require('fs').existsSync(alert.videoClipPath)) {
       res.sendFile(path.resolve(alert.videoClipPath));
     } else {
@@ -528,26 +528,26 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Get all videos for alert (pre-event, post-event, camera SD)
   router.get('/alerts/:id/videos', async (req, res) => {
     const { id } = req.params;
-    
+
     try {
       const db = require('../storage/database');
-      
+
       // Get alert with metadata
       const alertResult = await db.query(
         `SELECT id, device_id, channel, alert_type, timestamp, metadata 
          FROM alerts WHERE id = $1`,
         [id]
       );
-      
+
       if (alertResult.rows.length === 0) {
         return res.status(404).json({
           success: false,
           message: `Alert ${id} not found`
         });
       }
-      
+
       const alert = alertResult.rows[0];
-      
+
       // Get linked videos from videos table
       const videosResult = await db.query(
         `SELECT id, file_path, storage_url, file_size, start_time, end_time, 
@@ -557,10 +557,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          ORDER BY video_type, start_time`,
         [id]
       );
-      
+
       // Extract video paths from metadata
       const videoClips = alert.metadata?.videoClips || {};
-      
+
       res.json({
         success: true,
         alert_id: id,
@@ -616,7 +616,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/test-query-resources', (req, res) => {
     const { id } = req.params;
     const { channel = 1, minutesBack = 5 } = req.body;
-    
+
     const vehicle = tcpServer.getVehicle(id);
     if (!vehicle || !vehicle.connected) {
       return res.status(404).json({ success: false, message: 'Vehicle not connected' });
@@ -624,7 +624,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     const endTime = new Date();
     const startTime = new Date(endTime.getTime() - minutesBack * 60000);
-    
+
     const success = tcpServer.queryResourceList(id, channel, startTime, endTime);
     res.json({
       success,
@@ -636,7 +636,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/test-playback', (req, res) => {
     const { id } = req.params;
     const { channel = 1, minutesBack = 1 } = req.body;
-    
+
     const vehicle = tcpServer.getVehicle(id);
     if (!vehicle || !vehicle.connected) {
       return res.status(404).json({ success: false, message: 'Vehicle not connected' });
@@ -644,8 +644,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     const endTime = new Date();
     const startTime = new Date(endTime.getTime() - minutesBack * 60000);
-    
-    const success = tcpServer.requestAlertVideo(id, channel, startTime);
+
+    const success = tcpServer.requestCameraVideo(id, channel, startTime, endTime);
     res.json({
       success,
       message: success ? 'Playback request sent, check logs for RTP data' : 'Failed to send request'
@@ -655,18 +655,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // TEST: Simulate alert to test 30s video capture
   router.post('/test/simulate-alert', async (req, res) => {
     const { vehicleId, channel = 1, alertType = 'fatigue', fatigueLevel = 85 } = req.body;
-    
+
     if (!vehicleId) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'vehicleId is required. Use a vehicleId that is currently streaming video.' 
+      return res.status(400).json({
+        success: false,
+        message: 'vehicleId is required. Use a vehicleId that is currently streaming video.'
       });
     }
-    
+
     const alertManager = tcpServer.getAlertManager();
     const bufferStats = alertManager.getBufferStats();
     const bufferKey = `${vehicleId}_${channel}`;
-    
+
     if (!bufferStats[bufferKey] || bufferStats[bufferKey].totalFrames === 0) {
       return res.status(400).json({
         success: false,
@@ -674,7 +674,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         bufferStats
       });
     }
-    
+
     // Create a simulated location alert
     const simulatedAlert = {
       vehicleId,
@@ -689,10 +689,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         fatigueLevel: alertType === 'fatigue' ? fatigueLevel : 0
       }
     };
-    
+
     // Process through alert manager
     await alertManager.processAlert(simulatedAlert as any);
-    
+
     res.json({
       success: true,
       message: `Alert simulated for ${vehicleId} channel ${channel}. Check recordings/${vehicleId}/alerts/ for video clips.`,
@@ -705,7 +705,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/buffers/status', (req, res) => {
     const alertManager = tcpServer.getAlertManager();
     const stats = alertManager.getBufferStats();
-    
+
     const summary = Object.entries(stats).map(([key, value]: [string, any]) => ({
       stream: key,
       frames: value.totalFrames,
@@ -715,7 +715,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       isRecordingPostEvent: value.isRecordingPostEvent,
       postEventAlertId: value.postEventAlertId
     }));
-    
+
     res.json({
       success: true,
       totalBuffers: Object.keys(stats).length,
@@ -729,17 +729,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/alerts/:id/resolve-with-notes', async (req, res) => {
     const { id } = req.params;
     const { notes, resolvedBy } = req.body;
-    
+
     if (!notes || notes.trim().length < 10) {
       return res.status(400).json({
         success: false,
         message: 'Resolution notes required (minimum 10 characters)'
       });
     }
-    
+
     const alertManager = tcpServer.getAlertManager();
     const success = await alertManager.resolveAlert(id, notes, resolvedBy);
-    
+
     if (success) {
       res.json({
         success: true,
@@ -757,18 +757,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/alerts/:id/mark-false', async (req, res) => {
     const { id } = req.params;
     const { reason, markedBy } = req.body;
-    
+
     if (!reason || reason.trim().length < 10) {
       return res.status(400).json({
         success: false,
         message: 'Reason required (minimum 10 characters)'
       });
     }
-    
+
     try {
       const alertStorage = require('../storage/alertStorageDB');
       await new alertStorage.AlertStorageDB().markAsFalseAlert(id, reason, markedBy);
-      
+
       res.json({
         success: true,
         message: `Alert ${id} marked as false alert`
@@ -784,11 +784,11 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Get unattended alerts
   router.get('/alerts/unattended', async (req, res) => {
     const minutesThreshold = parseInt(req.query.minutes as string) || 30;
-    
+
     try {
       const alertStorage = require('../storage/alertStorageDB');
       const alerts = await new alertStorage.AlertStorageDB().getUnattendedAlerts(minutesThreshold);
-      
+
       res.json({
         success: true,
         threshold: `${minutesThreshold} minutes`,
@@ -807,14 +807,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/alerts/by-priority', (req, res) => {
     const alertManager = tcpServer.getAlertManager();
     const alerts = alertManager.getActiveAlerts();
-    
+
     const grouped = {
       critical: alerts.filter(a => a.priority === 'critical'),
       high: alerts.filter(a => a.priority === 'high'),
       medium: alerts.filter(a => a.priority === 'medium'),
       low: alerts.filter(a => a.priority === 'low')
     };
-    
+
     res.json({
       success: true,
       data: grouped,
@@ -831,14 +831,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/screenshots/recent', async (req, res) => {
     const limit = parseInt(req.query.limit as string) || 50;
     const alertsOnly = req.query.alertsOnly === 'true';
-    
+
     try {
       const query = alertsOnly
         ? `SELECT * FROM images WHERE alert_id IS NOT NULL ORDER BY timestamp DESC LIMIT $1`
         : `SELECT * FROM images ORDER BY timestamp DESC LIMIT $1`;
-      
+
       const result = await require('../storage/database').query(query, [limit]);
-      
+
       res.json({
         success: true,
         total: result.rows.length,
@@ -856,17 +856,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Executive Dashboard - Analytics
   router.get('/dashboard/executive', async (req, res) => {
     const days = parseInt(req.query.days as string) || 30;
-    
+
     try {
       const db = require('../storage/database');
-      
+
       const alertsByPriority = await db.query(
         `SELECT priority, COUNT(*) as count 
          FROM alerts 
          WHERE timestamp > NOW() - INTERVAL '${days} days'
          GROUP BY priority`
       );
-      
+
       const alertsByType = await db.query(
         `SELECT alert_type, COUNT(*) as count 
          FROM alerts 
@@ -875,28 +875,28 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          ORDER BY count DESC
          LIMIT 10`
       );
-      
+
       const avgResponseTime = await db.query(
         `SELECT AVG(EXTRACT(EPOCH FROM (acknowledged_at - timestamp))) as avg_seconds
          FROM alerts 
          WHERE acknowledged_at IS NOT NULL
          AND timestamp > NOW() - INTERVAL '${days} days'`
       );
-      
+
       const escalationRate = await db.query(
         `SELECT 
            COUNT(CASE WHEN escalation_level > 0 THEN 1 END)::FLOAT / NULLIF(COUNT(*), 0) * 100 as rate
          FROM alerts
          WHERE timestamp > NOW() - INTERVAL '${days} days'`
       );
-      
+
       const resolutionRate = await db.query(
         `SELECT 
            COUNT(CASE WHEN status = 'resolved' THEN 1 END)::FLOAT / NULLIF(COUNT(*), 0) * 100 as rate
          FROM alerts
          WHERE timestamp > NOW() - INTERVAL '${days} days'`
       );
-      
+
       res.json({
         success: true,
         period: `Last ${days} days`,
@@ -919,14 +919,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Record speeding event
   router.post('/speeding/record', async (req, res) => {
     const { vehicleId, driverId, speed, speedLimit, latitude, longitude } = req.body;
-    
+
     if (!vehicleId || !speed || !speedLimit) {
       return res.status(400).json({
         success: false,
         message: 'vehicleId, speed, and speedLimit are required'
       });
     }
-    
+
     try {
       const eventId = await speedingManager.recordSpeedingEvent(
         vehicleId,
@@ -935,7 +935,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         speedLimit,
         { latitude: latitude || 0, longitude: longitude || 0 }
       );
-      
+
       res.json({
         success: true,
         eventId,
@@ -952,20 +952,20 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Get driver rating
   router.get('/drivers/:driverId/rating', async (req, res) => {
     const { driverId } = req.params;
-    
+
     try {
       const result = await require('../storage/database').query(
         `SELECT * FROM drivers WHERE driver_id = $1`,
         [driverId]
       );
-      
+
       if (result.rows.length === 0) {
         return res.status(404).json({
           success: false,
           message: 'Driver not found'
         });
       }
-      
+
       res.json({
         success: true,
         data: result.rows[0]
@@ -982,7 +982,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/drivers/:driverId/speeding-events', async (req, res) => {
     const { driverId } = req.params;
     const days = parseInt(req.query.days as string) || 7;
-    
+
     try {
       const result = await require('../storage/database').query(
         `SELECT * FROM speeding_events 
@@ -990,7 +990,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
          ORDER BY timestamp DESC`,
         [driverId]
       );
-      
+
       res.json({
         success: true,
         period: `Last ${days} days`,
