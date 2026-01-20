@@ -385,6 +385,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // === ALERT MANAGEMENT ENDPOINTS ===
+  // IMPORTANT: Specific routes MUST come BEFORE parameterized routes (/alerts/:id)
 
   // Get active alerts
   router.get('/alerts/active', (req, res) => {
@@ -394,6 +395,72 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       success: true,
       total: alerts.length,
       data: alerts
+    });
+  });
+
+  // Get alert statistics (moved before :id)
+  router.get('/alerts/stats', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const stats = alertManager.getAlertStats();
+    res.json({
+      success: true,
+      data: stats
+    });
+  });
+
+  // Get alerts grouped by priority (moved before :id)
+  router.get('/alerts/by-priority', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const alerts = alertManager.getActiveAlerts();
+
+    const grouped = {
+      critical: alerts.filter(a => a.priority === 'critical'),
+      high: alerts.filter(a => a.priority === 'high'),
+      medium: alerts.filter(a => a.priority === 'medium'),
+      low: alerts.filter(a => a.priority === 'low')
+    };
+
+    res.json({
+      success: true,
+      data: grouped,
+      counts: {
+        critical: grouped.critical.length,
+        high: grouped.high.length,
+        medium: grouped.medium.length,
+        low: grouped.low.length
+      }
+    });
+  });
+
+  // Get unattended alerts (moved before :id)
+  router.get('/alerts/unattended', async (req, res) => {
+    const minutesThreshold = parseInt(req.query.minutes as string) || 30;
+
+    try {
+      const alertStorage = require('../storage/alertStorageDB');
+      const alerts = await new alertStorage.AlertStorageDB().getUnattendedAlerts(minutesThreshold);
+
+      res.json({
+        success: true,
+        threshold: `${minutesThreshold} minutes`,
+        total: alerts.length,
+        data: alerts
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch unattended alerts'
+      });
+    }
+  });
+
+  // Get buffer statistics (moved before :id)
+  router.get('/alerts/buffers/stats', (req, res) => {
+    const alertManager = tcpServer.getAlertManager();
+    const stats = alertManager.getBufferStats();
+    res.json({
+      success: true,
+      data: stats
     });
   });
 
@@ -492,16 +559,6 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
-  // Get alert statistics
-  router.get('/alerts/stats', (req, res) => {
-    const alertManager = tcpServer.getAlertManager();
-    const stats = alertManager.getAlertStats();
-    res.json({
-      success: true,
-      data: stats
-    });
-  });
-
   // Get video clip for alert
   router.get('/alerts/:id/video', (req, res) => {
     const { id } = req.params;
@@ -521,6 +578,61 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       res.status(404).json({
         success: false,
         message: 'Video file not found on disk'
+      });
+    }
+  });
+
+  // Get alert history
+  router.get('/alerts/:id/history', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const db = require('../storage/database');
+
+      // Get alert and its history from database
+      const [alertResult, historyResult] = await Promise.all([
+        db.query('SELECT * FROM alerts WHERE id = $1', [id]),
+        db.query(
+          `SELECT action_type, action_by, action_at, notes 
+           FROM alert_history 
+           WHERE alert_id = $1 
+           ORDER BY action_at DESC`,
+          [id]
+        ).catch(() => ({ rows: [] })) // Table may not exist
+      ]);
+
+      if (alertResult.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      const alert = alertResult.rows[0];
+
+      // Build history from alert data if history table is empty
+      const history = historyResult.rows.length > 0 ? historyResult.rows : [
+        { action_type: 'created', action_at: alert.timestamp, notes: null },
+        ...(alert.acknowledged_at ? [{ action_type: 'acknowledged', action_at: alert.acknowledged_at, notes: null }] : []),
+        ...(alert.escalated_at ? [{ action_type: 'escalated', action_at: alert.escalated_at, notes: null }] : []),
+        ...(alert.resolved_at ? [{ action_type: 'resolved', action_at: alert.resolved_at, notes: alert.resolution_notes }] : [])
+      ];
+
+      res.json({
+        success: true,
+        data: {
+          alert_id: id,
+          device_id: alert.device_id,
+          alert_type: alert.alert_type,
+          priority: alert.priority,
+          status: alert.status,
+          history
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching alert history:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert history'
       });
     }
   });
@@ -600,16 +712,6 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         message: 'Failed to fetch alert videos'
       });
     }
-  });
-
-  // Get buffer statistics
-  router.get('/alerts/buffers/stats', (req, res) => {
-    const alertManager = tcpServer.getAlertManager();
-    const stats = alertManager.getBufferStats();
-    res.json({
-      success: true,
-      data: stats
-    });
   });
 
   // TEST: Query resource list (0x9205)
@@ -781,51 +883,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
-  // Get unattended alerts
-  router.get('/alerts/unattended', async (req, res) => {
-    const minutesThreshold = parseInt(req.query.minutes as string) || 30;
-
-    try {
-      const alertStorage = require('../storage/alertStorageDB');
-      const alerts = await new alertStorage.AlertStorageDB().getUnattendedAlerts(minutesThreshold);
-
-      res.json({
-        success: true,
-        threshold: `${minutesThreshold} minutes`,
-        total: alerts.length,
-        data: alerts
-      });
-    } catch (error) {
-      res.status(500).json({
-        success: false,
-        message: 'Failed to fetch unattended alerts'
-      });
-    }
-  });
-
-  // Get alerts grouped by priority
-  router.get('/alerts/by-priority', (req, res) => {
-    const alertManager = tcpServer.getAlertManager();
-    const alerts = alertManager.getActiveAlerts();
-
-    const grouped = {
-      critical: alerts.filter(a => a.priority === 'critical'),
-      high: alerts.filter(a => a.priority === 'high'),
-      medium: alerts.filter(a => a.priority === 'medium'),
-      low: alerts.filter(a => a.priority === 'low')
-    };
-
-    res.json({
-      success: true,
-      data: grouped,
-      counts: {
-        critical: grouped.critical.length,
-        high: grouped.high.length,
-        medium: grouped.medium.length,
-        low: grouped.low.length
-      }
-    });
-  });
+  // [REMOVED] /alerts/unattended - moved before /alerts/:id
+  // [REMOVED] /alerts/by-priority - moved before /alerts/:id
 
   // Get screenshots for review (auto-refresh endpoint)
   router.get('/screenshots/recent', async (req, res) => {
