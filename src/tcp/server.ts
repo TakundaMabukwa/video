@@ -222,8 +222,12 @@ export class JTT808Server {
     authToken.copy(responseBody, 3);
     
     const response = this.buildMessage(0x8100, message.terminalPhone, this.getNextSerial(), responseBody);
-    socket.write(response);
-    socket.setKeepAlive(true, 30000);
+    
+    // Check if socket is writable before sending
+    if (socket.writable) {
+      socket.write(response);
+      socket.setKeepAlive(true, 30000);
+    }
   }
 
   private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {

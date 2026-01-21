@@ -281,10 +281,30 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
   // Get alerts
   router.get('/alerts', (req, res) => {
-    const alerts = tcpServer.getAlerts();
+    const alertManager = tcpServer.getAlertManager();
+    const allAlerts = alertManager.getActiveAlerts();
+    
+    // Apply filters
+    const status = req.query.status as string;
+    const priority = req.query.priority as string;
+    const limit = parseInt(req.query.limit as string) || 100;
+    
+    let filtered = allAlerts;
+    
+    if (status) {
+      filtered = filtered.filter(a => a.status === status);
+    }
+    
+    if (priority) {
+      filtered = filtered.filter(a => a.priority === priority);
+    }
+    
+    filtered = filtered.slice(0, limit);
+    
     res.json({
       success: true,
-      data: alerts
+      alerts: filtered,
+      count: filtered.length
     });
   });
 
@@ -393,8 +413,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const alerts = alertManager.getActiveAlerts();
     res.json({
       success: true,
-      total: alerts.length,
-      data: alerts
+      alerts: alerts,
+      count: alerts.length
     });
   });
 
@@ -404,7 +424,16 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const stats = alertManager.getAlertStats();
     res.json({
       success: true,
-      data: stats
+      stats: {
+        total: stats.total,
+        byStatus: {
+          new: stats.new,
+          acknowledged: stats.acknowledged,
+          escalated: stats.escalated,
+          resolved: stats.resolved
+        },
+        byPriority: stats.byPriority
+      }
     });
   });
 
@@ -422,12 +451,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     res.json({
       success: true,
-      data: grouped,
+      alertsByPriority: grouped,
       counts: {
         critical: grouped.critical.length,
         high: grouped.high.length,
         medium: grouped.medium.length,
-        low: grouped.low.length
+        low: grouped.low.length,
+        total: alerts.length
       }
     });
   });
@@ -442,9 +472,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       res.json({
         success: true,
-        threshold: `${minutesThreshold} minutes`,
-        total: alerts.length,
-        data: alerts
+        unattendedAlerts: alerts,
+        count: alerts.length,
+        threshold_minutes: minutesThreshold
       });
     } catch (error) {
       res.status(500).json({
@@ -489,7 +519,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       res.json({
         success: true,
-        data: {
+        alert: {
           ...alert,
           screenshots: screenshots.rows
         }
@@ -497,7 +527,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     } catch (error) {
       res.json({
         success: true,
-        data: alert
+        alert: alert
       });
     }
   });
