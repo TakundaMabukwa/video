@@ -2,21 +2,21 @@
 
 ## Alert Types
 
-### Driver Behavior Alerts
+### Driver Behavior Alerts (JTT 1078-2016 Table 15 - Field 0x18)
 1. **Driver Fatigue** (Priority: CRITICAL if level > 80, else HIGH)
-   - Detected from 0x0200 location report field 0x18
-   - Includes fatigue level (0-100)
+   - Detected from 0x0200 location report field 0x18 bit0
+   - Includes fatigue level (0-100) from byte 2
    - Auto-captures screenshot + 30s pre/post video
 
 2. **Phone Call While Driving** (Priority: HIGH)
-   - Detected from 0x0200 location report field 0x18
+   - Detected from 0x0200 location report field 0x18 bit1
    - Auto-captures screenshot + 30s pre/post video
 
 3. **Smoking While Driving** (Priority: HIGH)
-   - Detected from 0x0200 location report field 0x18
+   - Detected from 0x0200 location report field 0x18 bit2
    - Auto-captures screenshot + 30s pre/post video
 
-### Video System Alerts
+### Video System Alerts (JTT 1078-2016 Table 14 - Field 0x14)
 4. **Video Signal Loss** (Priority: MEDIUM)
    - Detected from 0x0200 location report field 0x15
    - Lists affected channels
@@ -316,9 +316,40 @@ Bell notification
 ✅ Alerts grouped by priority  
 ✅ Alert reminder notifications (unresolved endpoint)  
 ✅ Complete alert history with timestamps  
-✅ 30s before + 30s after video recording  
+✅ 30s before + 30s after video recording (circular buffer)  
+✅ Camera SD card video request (0x9201 command)  
 ✅ Bell notifications for new/escalated alerts  
 ✅ Escalation process (5min → supervisor, 10min → management)  
+✅ Post-event video linked back to original alert  
+✅ Download endpoints for pre/post video clips
+
+## 30-Second Video Capture Implementation
+
+### Method 1: Circular Buffer (In-Memory)
+The system maintains a 30-second rolling buffer for each active video channel:
+- Pre-event: Immediately saves last 30s of buffered frames on alert
+- Post-event: Records next 30s of frames after alert
+- Files saved to: `recordings/{vehicleId}/alerts/{alertId}_ch{N}_{pre|post}_{timestamp}.h264`
+
+### Method 2: Camera SD Card Request (JTT 1078-2016 Section 5.6)
+For higher quality video, the system also requests video from the camera's SD card:
+- Uses 0x9201 (Remote Video Playback Request) command
+- Requests time range: alertTime - 30s to alertTime + 30s
+- Camera streams the recorded video back via RTP
+
+### API Endpoints for Video Retrieval
+
+```bash
+# Get video clip info for an alert
+GET /api/alerts/{alertId}/video/pre   # Download pre-event (30s before)
+GET /api/alerts/{alertId}/video/post  # Download post-event (30s after)
+
+# List available video clips
+GET /api/alerts/{alertId}/video/combined
+
+# Download specific video file
+GET /api/alerts/{alertId}/download/{filename}
+```  
 
 ## Usage Examples
 
