@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Connection Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+        .connecting { background: #fff3cd; color: #856404; }
+        #messages {
+            border: 1px solid #ddd;
+            padding: 10px;
+            height: 300px;
+            overflow-y: auto;
+            background: #f9f9f9;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        input {
+            padding: 8px;
+            width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Connection Test</h1>
+    
+    <div>
+        <label>WebSocket URL:</label><br>
+        <input type="text" id="wsUrl" value="ws://164.90.182.2:3000/ws/alerts">
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+    </div>
+    
+    <div id="status" class="status disconnected">Disconnected</div>
+    
+    <h3>Messages:</h3>
+    <div id="messages"></div>
+    
+    <div>
+        <button onclick="clearMessages()">Clear Messages</button>
+    </div>
+
+    <script>
+        let ws = null;
+        const statusDiv = document.getElementById('status');
+        const messagesDiv = document.getElementById('messages');
+        
+        function addMessage(msg, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'blue';
+            messagesDiv.innerHTML += `<div style="color: ${color}">[${time}] ${msg}</div>`;
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        function updateStatus(text, className) {
+            statusDiv.textContent = text;
+            statusDiv.className = 'status ' + className;
+        }
+        
+        function connect() {
+            const url = document.getElementById('wsUrl').value;
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                addMessage('Already connected!', 'error');
+                return;
+            }
+            
+            addMessage(`Connecting to ${url}...`, 'info');
+            updateStatus('Connecting...', 'connecting');
+            
+            try {
+                ws = new WebSocket(url);
+                
+                ws.onopen = () => {
+                    addMessage('✅ Connected successfully!', 'success');
+                    updateStatus('Connected', 'connected');
+                };
+                
+                ws.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        addMessage(`📨 Received: ${JSON.stringify(data, null, 2)}`, 'success');
+                    } catch (e) {
+                        addMessage(`📨 Received: ${event.data}`, 'success');
+                    }
+                };
+                
+                ws.onerror = (error) => {
+                    addMessage(`❌ WebSocket error: ${error}`, 'error');
+                    console.error('WebSocket error:', error);
+                };
+                
+                ws.onclose = (event) => {
+                    addMessage(`🔌 Connection closed (code: ${event.code}, reason: ${event.reason || 'none'})`, 'error');
+                    updateStatus('Disconnected', 'disconnected');
+                };
+                
+            } catch (error) {
+                addMessage(`❌ Failed to create WebSocket: ${error.message}`, 'error');
+                updateStatus('Error', 'disconnected');
+            }
+        }
+        
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                addMessage('Disconnecting...', 'info');
+            } else {
+                addMessage('Not connected', 'error');
+            }
+        }
+        
+        function clearMessages() {
+            messagesDiv.innerHTML = '';
+        }
+        
+        // Auto-connect on load
+        window.onload = () => {
+            addMessage('Page loaded. Click Connect to test WebSocket connection.', 'info');
+        };
+    </script>
+</body>
+</html>
