@@ -26,6 +26,13 @@ export class MultimediaParser {
       // Data starts at byte 8
       const imageData = body.slice(8);
       
+      // Check size limit (300MB)
+      const maxSize = 300 * 1024 * 1024;
+      if (imageData.length > maxSize) {
+        console.warn(`⚠️ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB, skipping`);
+        return null;
+      }
+      
       // Validate JPEG header (0xFFD8)
       if (imageData.length >= 2 && imageData[0] === 0xFF && imageData[1] === 0xD8) {
         // Find JPEG end marker (0xFFD9)

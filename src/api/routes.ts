@@ -437,6 +437,72 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Get unresolved alerts
+  router.get('/alerts/unresolved', async (req, res) => {
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT a.*, 
+                EXTRACT(EPOCH FROM (NOW() - a.timestamp))/60 as minutes_open
+         FROM alerts a
+         WHERE status IN ('new', 'acknowledged', 'escalated')
+         ORDER BY timestamp DESC`
+      );
+      res.json({ success: true, total: result.rows.length, data: result.rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch unresolved alerts' });
+    }
+  });
+
+  // Get driver behavior alerts
+  router.get('/alerts/driver-behavior', async (req, res) => {
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT * FROM alerts 
+         WHERE alert_type IN ('Driver Fatigue', 'Phone Call While Driving', 'Smoking While Driving')
+         ORDER BY timestamp DESC LIMIT 100`
+      );
+      res.json({ success: true, total: result.rows.length, data: result.rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch driver behavior alerts' });
+    }
+  });
+
+  // Get alerts by device
+  router.get('/alerts/by-device', async (req, res) => {
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT device_id, COUNT(*) as total_alerts,
+                COUNT(*) FILTER (WHERE status = 'new') as new_alerts,
+                COUNT(*) FILTER (WHERE priority = 'critical') as critical_alerts,
+                MAX(timestamp) as last_alert_time
+         FROM alerts
+         GROUP BY device_id
+         ORDER BY MAX(timestamp) DESC`
+      );
+      res.json({ success: true, total: result.rows.length, data: result.rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch alerts by device' });
+    }
+  });
+
+  // Get alert history
+  router.get('/alerts/history', async (req, res) => {
+    try {
+      const { device_id, days = 7 } = req.query;
+      let query = `SELECT * FROM alerts WHERE timestamp > NOW() - INTERVAL '${days} days'`;
+      const params: any[] = [];
+      if (device_id) {
+        query += ' AND device_id = $1';
+        params.push(device_id);
+      }
+      query += ' ORDER BY timestamp DESC';
+      const result = await require('../storage/database').query(query, params);
+      res.json({ success: true, total: result.rows.length, data: result.rows });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch alert history' });
+    }
+  });
+
   // Get alerts grouped by priority (moved before :id)
   router.get('/alerts/by-priority', (req, res) => {
     const alertManager = tcpServer.getAlertManager();

@@ -753,13 +753,19 @@ export class JTT808Server {
   }
 
   private async handleMultimediaData(message: any, socket: net.Socket): Promise<void> {
-    const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
-    
-    if (multimedia && multimedia.type === 'jpeg') {
-      // Save image to Supabase and database
-      await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data);
+    try {
+      const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
       
-      console.log(`📷 Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
+      if (multimedia && multimedia.type === 'jpeg') {
+        // Save image to Supabase and database (with error handling)
+        await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data).catch(err => {
+          console.error(`Failed to save image: ${err.message}`);
+        });
+        
+        console.log(`📷 Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
+      }
+    } catch (error) {
+      console.error('Error handling multimedia data:', error);
     }
     
     const response = JTT1078Commands.buildGeneralResponse(

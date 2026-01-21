@@ -15,11 +15,18 @@ export class ImageStorage {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `${deviceId}/ch${channel}/${timestamp}.jpg`;
 
-    // Check file size (Supabase limit: 150MB)
-    const maxSize = 150 * 1024 * 1024; // 150MB
+    // Check file size (Supabase limit: 300MB)
+    const maxSize = 300 * 1024 * 1024; // 300MB
     if (imageData.length > maxSize) {
-      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 150MB)`);
-      throw new Error(`Image size ${(imageData.length / 1024 / 1024).toFixed(2)}MB exceeds 150MB limit`);
+      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 300MB)`);
+      // Save to database without Supabase upload
+      const result = await query(
+        `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [deviceId, channel, filename, 'local-only', imageData.length, new Date(), alertId || null]
+      );
+      return result.rows[0].id;
     }
 
     // Upload to Supabase Storage
@@ -32,7 +39,14 @@ export class ImageStorage {
 
     if (error) {
       console.error('Supabase upload failed:', error);
-      throw error;
+      // Save to database anyway
+      const result = await query(
+        `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id`,
+        [deviceId, channel, filename, 'upload-failed', imageData.length, new Date(), alertId || null]
+      );
+      return result.rows[0].id;
     }
 
     // Get public URL
