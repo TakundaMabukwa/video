@@ -12,8 +12,7 @@ export class AlertEscalation {
   private floodingWindow = new Map<string, Date[]>(); // vehicleId -> timestamps
 
   private rules: EscalationRule[] = [
-    { delaySeconds: 300, level: 1, notifyRole: 'supervisor' },    // 5 min
-    { delaySeconds: 600, level: 2, notifyRole: 'management' }     // 10 min
+    { delaySeconds: 1800, level: 1, notifyRole: 'supervisor' }    // 30 min
   ];
 
   private floodingThreshold = 10; // alerts per minute
@@ -47,9 +46,20 @@ export class AlertEscalation {
     
     if (!alert) return;
     
-    // Only escalate if still unacknowledged
+    // Only escalate if still unacknowledged (new status)
     if (alert.status === 'new') {
-      console.log(`⚠️ Escalating alert ${alertId} to ${rule.notifyRole} (Level ${rule.level})`);
+      console.log(`⚠️ Alert ${alertId} unattended for 30 minutes - escalating priority and notifying ${rule.notifyRole}`);
+      
+      // Increase priority level
+      if (alert.priority === AlertPriority.LOW) {
+        alert.priority = AlertPriority.MEDIUM;
+      } else if (alert.priority === AlertPriority.MEDIUM) {
+        alert.priority = AlertPriority.HIGH;
+      } else if (alert.priority === AlertPriority.HIGH) {
+        alert.priority = AlertPriority.CRITICAL;
+      }
+      
+      // Escalate the alert
       this.alertManager.escalateAlert(alertId);
     }
   }

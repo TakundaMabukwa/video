@@ -52,6 +52,15 @@ export class CircularVideoBuffer extends EventEmitter {
     const cutoffTime = new Date(now.getTime() - preEventDuration * 1000);
     const preEventFrames = this.frames.filter(f => f.timestamp >= cutoffTime);
 
+    console.log(`📹 Capturing event clip for ${alertId}:`);
+    console.log(`   Total frames in buffer: ${this.frames.length}`);
+    console.log(`   Pre-event frames (last ${preEventDuration}s): ${preEventFrames.length}`);
+    console.log(`   Buffer duration: ${this.getClipDuration(this.frames).toFixed(1)}s`);
+    
+    if (preEventFrames.length === 0) {
+      console.warn(`⚠️ No pre-event frames available for ${alertId}! Buffer might be empty.`);
+    }
+
     // Start post-event recording with the same alertId
     // Use a timer as fallback in case frames stop arriving
     const postEventTimer = setTimeout(() => {
@@ -112,13 +121,26 @@ export class CircularVideoBuffer extends EventEmitter {
     const filename = `${alertId}_ch${this.channel}_${type}_${Date.now()}.h264`;
     const filepath = path.join(alertDir, filename);
     
-    const stream = fs.createWriteStream(filepath);
-    for (const frame of frames) {
-      stream.write(frame.data);
-    }
-    stream.end();
-
-    return filepath;
+    return new Promise((resolve, reject) => {
+      const stream = fs.createWriteStream(filepath);
+      
+      stream.on('error', (err) => {
+        console.error(`❌ Error writing ${type}-event clip:`, err);
+        reject(err);
+      });
+      
+      stream.on('finish', () => {
+        const stats = fs.statSync(filepath);
+        console.log(`✅ ${type}-event clip written: ${filepath} (${stats.size} bytes, ${frames.length} frames)`);
+        resolve(filepath);
+      });
+      
+      for (const frame of frames) {
+        stream.write(frame.data);
+      }
+      
+      stream.end();
+    });
   }
 
   getFrames(durationSeconds: number): FrameData[] {
