@@ -132,17 +132,18 @@ export class AlertManager extends EventEmitter {
     // Save alert to database
     await this.alertStorage.saveAlert(alertEvent);
 
-    // For driver-related alerts, request 30s before/after from camera SD card
-    if (this.isDriverRelatedAlert(alert)) {
-      await this.requestAlertVideoFromCamera(alertEvent);
-    }
-
-    // Request immediate screenshot for alert evidence
+    // Request immediate screenshot for alert evidence (ALL alerts)
     console.log(`📸 Requesting screenshot for alert ${alertId}`);
     this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
 
-    // Capture from circular buffer as backup
-    await this.captureEventVideo(alertEvent);
+    // For driver-related alerts ONLY: capture video from buffer + request from camera SD
+    if (this.isDriverRelatedAlert(alert)) {
+      // Capture from circular buffer (30s pre/post)
+      await this.captureEventVideo(alertEvent);
+      
+      // Request 30s before/after from camera SD card
+      await this.requestAlertVideoFromCamera(alertEvent);
+    }
 
     // Send bell notification
     this.notifier.sendAlertNotification(alertEvent);
