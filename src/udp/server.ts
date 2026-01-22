@@ -78,6 +78,10 @@ export class UDPRTPServer {
       };
       this.streams.set(streamKey, streamInfo);
       console.log(`📹 New stream: ${vehicleId} ch${header.channelNumber} from ${rinfo.address}`);
+      
+      // Auto-start HLS stream
+      this.hlsStreamer.startStream(vehicleId, header.channelNumber);
+      console.log(`🎬 HLS stream started: ${streamKey}`);
     }
 
     const completeFrame = this.frameAssembler.assembleFrame(header, payload, dataType);

@@ -92,6 +92,7 @@
 
 
 import express from 'express';
+import cors from 'cors';
 import { createServer } from 'http';
 import { JTT808Server } from './tcp/server';
 import { UDPRTPServer } from './udp/server';
@@ -132,6 +133,14 @@ async function startServer() {
   tcpRTPHandler.setAlertManager(alertManager);  // *** CRITICAL: Enable 30s pre/post video capture for TCP streams ***
   
   const app = express();
+  
+  // Enable CORS for Next.js frontend
+  app.use(cors({
+    origin: ['http://localhost:3000', 'http://localhost:3001', 'http://46.101.219.78:3000/'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  }));
+  
   app.use(express.json());
   app.use(express.static('public'));
   app.use('/hls', express.static('hls'));
