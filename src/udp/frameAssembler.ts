@@ -11,21 +11,25 @@ interface FrameBuffer {
 
 export class FrameAssembler {
   private frameBuffers = new Map<string, FrameBuffer>();
-  private readonly FRAME_TIMEOUT = 5000;
-  private readonly MAX_BUFFERS = 500;
+  private readonly FRAME_TIMEOUT = 3000; // Reduced from 5s
+  private readonly MAX_BUFFERS = 50; // Reduced from 500
+  private readonly CLEANUP_INTERVAL = 5000; // Cleanup every 5s
   private lastCleanup = Date.now();
   private spsCache = new Map<string, Buffer>();
   private ppsCache = new Map<string, Buffer>();
 
   assembleFrame(header: JTT1078RTPHeader, payload: Buffer, dataType: number): Buffer | null {
-    if (Date.now() - this.lastCleanup > 10000) {
+    // Aggressive cleanup
+    if (Date.now() - this.lastCleanup > this.CLEANUP_INTERVAL) {
       this.cleanupOldFrames();
       this.lastCleanup = Date.now();
     }
 
-    if (this.frameBuffers.size > this.MAX_BUFFERS) {
-      const oldestKey = this.frameBuffers.keys().next().value;
-      if (oldestKey) this.frameBuffers.delete(oldestKey);
+    // Hard limit on buffers
+    if (this.frameBuffers.size >= this.MAX_BUFFERS) {
+      const keysToDelete = Array.from(this.frameBuffers.keys()).slice(0, 10);
+      keysToDelete.forEach(k => this.frameBuffers.delete(k));
+      console.warn(`⚠️ Buffer limit reached, cleared ${keysToDelete.length} old frames`);
     }
     
     // Use only simCard + channel as key (timestamp changes per packet!)
@@ -125,10 +129,26 @@ export class FrameAssembler {
 
   private cleanupOldFrames(): void {
     const now = Date.now();
+    let cleaned = 0;
     for (const [key, frameBuffer] of this.frameBuffers.entries()) {
       if (now - frameBuffer.startTime > this.FRAME_TIMEOUT) {
         this.frameBuffers.delete(key);
+        cleaned++;
       }
+    }
+    
+    // Also limit SPS/PPS cache
+    if (this.spsCache.size > 20) {
+      const keys = Array.from(this.spsCache.keys()).slice(0, 10);
+      keys.forEach(k => this.spsCache.delete(k));
+    }
+    if (this.ppsCache.size > 20) {
+      const keys = Array.from(this.ppsCache.keys()).slice(0, 10);
+      keys.forEach(k => this.ppsCache.delete(k));
+    }
+    
+    if (cleaned > 0) {
+      console.log(`🧹 Cleaned ${cleaned} stale frames`);
     }
   }
 
