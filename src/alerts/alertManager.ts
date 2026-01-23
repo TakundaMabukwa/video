@@ -164,20 +164,29 @@ export class AlertManager extends EventEmitter {
       console.warn(`⚠️ No buffer for ${key}, cannot capture pre-event video`);
       return;
     }
+    
+    // Check buffer has enough data
+    const stats = buffer.getStats();
+    if (stats.totalFrames === 0) {
+      console.error(`❌ Buffer ${key} is empty - cannot capture alert video`);
+      return;
+    }
 
     const clipPath = await buffer.captureEventClip(alert.id, 30);
     
-    // Store pre-event video path in alert metadata
-    if (!alert.metadata.videoClips) {
-      alert.metadata.videoClips = {};
+    // Only store path if we got a valid clip
+    if (clipPath) {
+      if (!alert.metadata.videoClips) {
+        alert.metadata.videoClips = {};
+      }
+      alert.metadata.videoClips.pre = clipPath;
+      alert.videoClipPath = clipPath;
+      
+      await this.alertStorage.saveAlert(alert);
+      console.log(`✅ Alert ${alert.id}: Pre-event video captured, post-event recording started (30s)`);
+    } else {
+      console.warn(`⚠️ Alert ${alert.id}: No pre-event video available (buffer empty)`);
     }
-    alert.metadata.videoClips.pre = clipPath;
-    alert.videoClipPath = clipPath; // Keep for backwards compatibility
-    
-    // Update in database with pre-event clip info
-    await this.alertStorage.saveAlert(alert);
-    
-    console.log(`✅ Alert ${alert.id}: Pre-event video captured, post-event recording started (30s)`);
   }
 
   private determinePriority(alert: LocationAlert): AlertPriority {

@@ -47,7 +47,7 @@ export class CircularVideoBuffer extends EventEmitter {
     }
   }
 
-  async captureEventClip(alertId: string, preEventDuration: number = 30): Promise<string> {
+  async captureEventClip(alertId: string, preEventDuration: number = 30): Promise<string | null> {
     const now = new Date();
     const cutoffTime = new Date(now.getTime() - preEventDuration * 1000);
     const preEventFrames = this.frames.filter(f => f.timestamp >= cutoffTime);
@@ -58,14 +58,19 @@ export class CircularVideoBuffer extends EventEmitter {
     console.log(`   Buffer duration: ${this.getClipDuration(this.frames).toFixed(1)}s`);
     
     if (preEventFrames.length === 0) {
-      console.warn(`⚠️ No pre-event frames available for ${alertId}! Buffer might be empty.`);
+      console.error(`❌ No pre-event frames for ${alertId}! Buffer empty - video stream may not be active.`);
+      return null; // Don't save empty file
+    }
+    
+    const duration = this.getClipDuration(preEventFrames);
+    if (duration < 5) {
+      console.warn(`⚠️ Pre-event clip only ${duration.toFixed(1)}s (expected 30s) - buffer not fully filled yet`);
     }
 
-    // Start post-event recording with the same alertId
-    // Use a timer as fallback in case frames stop arriving
+    // Start post-event recording
     const postEventTimer = setTimeout(() => {
       this.finalizePostEventRecording();
-    }, (this.maxDuration + 5) * 1000); // 30s + 5s buffer
+    }, (this.maxDuration + 5) * 1000);
     
     this.postEventRecording = {
       alertId,
@@ -74,9 +79,9 @@ export class CircularVideoBuffer extends EventEmitter {
       timer: postEventTimer
     };
 
-    // Save pre-event frames immediately
+    // Save pre-event frames
     const clipPath = await this.saveClip(alertId, preEventFrames, 'pre');
-    console.log(`📹 Pre-event clip saved: ${clipPath} (${preEventFrames.length} frames, ${this.getClipDuration(preEventFrames).toFixed(1)}s)`);
+    console.log(`📹 Pre-event clip saved: ${clipPath} (${preEventFrames.length} frames, ${duration.toFixed(1)}s)`);
 
     return clipPath;
   }

@@ -520,8 +520,8 @@ export class JTT808Server {
     vehicle.channels = channels;
     console.log(`✅ Discovered ${channels.length} video channels`);
     
-    // Auto-start video streaming on all channels
-    console.log(`\n🎬 Auto-starting video streams on all channels...`);
+    // Auto-start video streaming on all channels to ensure circular buffer is always filled
+    console.log(`\n🎬 Auto-starting video streams on all channels for alert capture...`);
     for (const channel of channels) {
       setTimeout(() => {
         console.log(`▶️ Starting stream on channel ${channel.logicalChannel}`);
