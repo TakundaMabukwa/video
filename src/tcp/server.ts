@@ -526,7 +526,7 @@ export class JTT808Server {
       setTimeout(() => {
         console.log(`▶️ Starting stream on channel ${channel.logicalChannel}`);
         this.startVideo(vehiclePhone, channel.logicalChannel);
-      }, 500 * channel.logicalChannel); // Stagger by 500ms
+      }, 250 * channel.logicalChannel); // Stagger by 250ms (faster startup)
     }
   }
 
@@ -695,13 +695,35 @@ export class JTT808Server {
       this.udpPort,   // UDP port for RTP video stream
       channel,
       1,              // 1 = Video only
-      0               // 0 = Main stream
+      1               // 1 = Sub stream (lower bitrate, faster)
     );
     
     console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
     vehicle.activeStreams.add(channel);
     
+    return true;
+  }
+
+  switchStream(vehicleId: string, channel: number, streamType: 0 | 1): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildStreamControlCommand(
+      vehicleId,
+      this.getNextSerial(),
+      channel,
+      1, // Switch stream
+      0,
+      streamType
+    );
+    
+    console.log(`🔄 Switching to ${streamType === 0 ? 'MAIN' : 'SUB'} stream: ${vehicleId} channel ${channel}`);
+    socket.write(command);
     return true;
   }
 

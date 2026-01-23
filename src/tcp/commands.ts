@@ -144,6 +144,24 @@ export class JTT1078Commands {
     return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
   }
 
+  // Build 0x9102 command - Audio/video transmission control (switch stream, pause, resume)
+  static buildStreamControlCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    channelNumber: number,
+    controlInstruction: number, // 0=close, 1=switch stream, 2=pause, 3=resume, 4=close intercom
+    closeType: number = 0, // 0=close all, 1=close audio only, 2=close video only
+    switchStreamType: number = 1 // 0=main stream, 1=sub stream
+  ): Buffer {
+    const body = Buffer.alloc(4);
+    body.writeUInt8(channelNumber, 0);
+    body.writeUInt8(controlInstruction, 1);
+    body.writeUInt8(closeType, 2);
+    body.writeUInt8(switchStreamType, 3);
+    
+    return this.buildMessage(0x9102, terminalPhone, serialNumber, body);
+  }
+
   // Build general platform response (0x8001)
   static buildGeneralResponse(
     terminalPhone: string,

@@ -29,19 +29,24 @@ export class HLSStreamer {
 
     const ffmpeg = spawn('ffmpeg', [
       '-f', 'h264',
-      '-fflags', 'nobuffer',
+      '-fflags', 'nobuffer+genpts',
       '-flags', 'low_delay',
+      '-analyzeduration', '0',
+      '-probesize', '32',
       '-i', 'pipe:0',
       '-c:v', 'copy',
       '-c:a', 'copy',
+      '-copyts',
+      '-avoid_negative_ts', 'make_zero',
       '-f', 'hls',
-      '-hls_time', '4',
+      '-hls_time', '3',
       '-hls_list_size', '3',
-      '-hls_flags', 'delete_segments+append_list+omit_endlist',
+      '-hls_flags', 'delete_segments+append_list+omit_endlist+program_date_time',
       '-hls_segment_type', 'mpegts',
       '-hls_segment_filename', path.join(outputDir, 'segment%d.ts'),
       '-start_number', '0',
       '-threads', '1',
+      '-max_muxing_queue_size', '1024',
       playlistPath
     ], {
       stdio: ['pipe', 'ignore', 'pipe']

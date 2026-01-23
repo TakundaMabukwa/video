@@ -105,6 +105,26 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Switch stream quality
+  router.post('/vehicles/:id/switch-stream', (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, streamType = 1 } = req.body; // 0=main, 1=sub
+
+    const success = tcpServer.switchStream(id, channel, streamType);
+
+    if (success) {
+      res.json({
+        success: true,
+        message: `Switched to ${streamType === 0 ? 'main' : 'sub'} stream for vehicle ${id}, channel ${channel}`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+  });
+
   // Stop live video for a vehicle
   router.post('/vehicles/:id/stop-live', (req, res) => {
     const { id } = req.params;
