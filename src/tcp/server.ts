@@ -705,6 +705,28 @@ export class JTT808Server {
     return true;
   }
 
+  optimizeVideoParameters(vehicleId: string, channel: number = 1): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildSetVideoParametersCommand(
+      vehicleId,
+      this.getNextSerial(),
+      channel,
+      1,    // CIF (352x288)
+      15,   // 15 fps
+      512   // 512 kbps
+    );
+    
+    console.log(`⚡ Optimizing camera: ${vehicleId} ch${channel} -> CIF/15fps/512kbps`);
+    socket.write(command);
+    return true;
+  }
+
   switchStream(vehicleId: string, channel: number, streamType: 0 | 1): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);

@@ -144,6 +144,40 @@ export class JTT1078Commands {
     return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
   }
 
+  // Build 0x8103 command - Set video parameters (resolution, bitrate, frame rate)
+  static buildSetVideoParametersCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    channel: number,
+    resolution: number = 1, // 0=QCIF, 1=CIF, 2=WCIF, 3=D1, 4=WD1
+    frameRate: number = 15,
+    bitrate: number = 512
+  ): Buffer {
+    const paramId = 0x0077;
+    const paramLength = 21;
+    
+    const body = Buffer.alloc(4 + 1 + paramLength);
+    let offset = 0;
+    
+    body.writeUInt32BE(paramId, offset); offset += 4;
+    body.writeUInt8(paramLength, offset); offset += 1;
+    
+    body.writeUInt8(channel, offset++);           // Logical channel
+    body.writeUInt8(0, offset++);                 // CBR encoding
+    body.writeUInt8(resolution, offset++);        // Resolution
+    body.writeUInt16BE(2, offset); offset += 2;   // I-frame every 2s
+    body.writeUInt8(frameRate, offset++);         // Frame rate
+    body.writeUInt32BE(bitrate, offset); offset += 4; // Bitrate
+    body.writeUInt8(0, offset++);                 // Save: CBR
+    body.writeUInt8(resolution, offset++);        // Save: Resolution
+    body.writeUInt16BE(2, offset); offset += 2;   // Save: I-frame
+    body.writeUInt8(frameRate, offset++);         // Save: Frame rate
+    body.writeUInt32BE(bitrate, offset); offset += 4; // Save: Bitrate
+    body.writeUInt16BE(0, offset);                // OSD settings
+    
+    return this.buildMessage(0x8103, terminalPhone, serialNumber, body);
+  }
+
   // Build 0x9102 command - Audio/video transmission control (switch stream, pause, resume)
   static buildStreamControlCommand(
     terminalPhone: string,

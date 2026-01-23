@@ -105,6 +105,32 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Optimize camera video parameters
+  router.post('/vehicles/:id/optimize-video', (req, res) => {
+    const { id } = req.params;
+    const { channel = 1 } = req.body;
+
+    const success = tcpServer.optimizeVideoParameters(id, channel);
+
+    if (success) {
+      res.json({
+        success: true,
+        message: `Camera optimized for ${id} channel ${channel}`,
+        settings: {
+          resolution: 'CIF (352x288)',
+          frameRate: '15 fps',
+          bitrate: '512 kbps',
+          speedup: '3-5x faster'
+        }
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found`
+      });
+    }
+  });
+
   // Switch stream quality
   router.post('/vehicles/:id/switch-stream', (req, res) => {
     const { id } = req.params;
