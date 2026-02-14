@@ -39,10 +39,12 @@ export interface AlertEvent {
 export class AlertManager extends EventEmitter {
   private videoBuffers = new Map<string, CircularVideoBuffer>();
   private activeAlerts = new Map<string, AlertEvent>();
+  private recentAlertSignatures = new Map<string, number>();
   private escalation: AlertEscalation;
   private notifier: AlertNotifier;
   private alertStorage = new AlertStorageDB();
   private alertCounter = 0;
+  private readonly duplicateWindowMs = 60 * 60 * 1000;
 
   constructor() {
     super();
@@ -109,12 +111,16 @@ export class AlertManager extends EventEmitter {
   async processAlert(alert: LocationAlert): Promise<void> {
     const alertSignals = this.extractAlertSignals(alert);
     if (alertSignals.length === 0) return;
-
-    const priority = this.determinePriority(alert, alertSignals);
-
-    const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
     const channel = this.extractChannelFromAlert(alert);
     const primaryType = this.getPrimaryAlertType(alert, alertSignals);
+    const signature = this.buildAlertSignature(alert.vehicleId, channel, primaryType);
+
+    if (this.shouldSuppressDuplicate(signature, alert.timestamp)) {
+      return;
+    }
+
+    const priority = this.determinePriority(alert, alertSignals);
+    const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
 
     const alertEvent: AlertEvent = {
       id: alertId,
@@ -160,6 +166,29 @@ export class AlertManager extends EventEmitter {
     this.emit('alert', alertEvent);
 
     console.log(`🚨 Alert ${alertId}: ${alertEvent.type} [${priority}]`);
+  }
+
+  private buildAlertSignature(vehicleId: string, channel: number, primaryType: string): string {
+    return `${vehicleId}|${channel}|${primaryType.toLowerCase().trim()}`;
+  }
+
+  private shouldSuppressDuplicate(signature: string, now: Date): boolean {
+    const nowMs = now.getTime();
+    const lastSeenMs = this.recentAlertSignatures.get(signature);
+
+    if (lastSeenMs !== undefined && nowMs - lastSeenMs < this.duplicateWindowMs) {
+      return true;
+    }
+
+    this.recentAlertSignatures.set(signature, nowMs);
+
+    for (const [key, ts] of this.recentAlertSignatures.entries()) {
+      if (nowMs - ts >= this.duplicateWindowMs) {
+        this.recentAlertSignatures.delete(key);
+      }
+    }
+
+    return false;
   }
 
   private async captureEventVideo(alert: AlertEvent): Promise<void> {
