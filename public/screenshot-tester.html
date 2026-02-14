@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Screenshot Tester</title>
+  <style>
+    :root {
+      --bg: #0b1220;
+      --panel: #121b2d;
+      --muted: #7f8ba3;
+      --text: #e8eefb;
+      --ok: #2ecc71;
+      --warn: #f39c12;
+      --err: #e74c3c;
+      --accent: #3aa0ff;
+      --border: #25314a;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: radial-gradient(circle at top right, #1a2540, var(--bg));
+      color: var(--text);
+    }
+
+    .wrap {
+      max-width: 1200px;
+      margin: 24px auto;
+      padding: 0 16px;
+    }
+
+    .row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: 2fr 1fr 1fr auto auto;
+      align-items: end;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+
+    label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    input, select, button {
+      width: 100%;
+      border: 1px solid var(--border);
+      background: #0f1728;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+
+    button {
+      cursor: pointer;
+      background: #16233a;
+    }
+    button.primary {
+      background: linear-gradient(180deg, #2f8fff, #1f76d8);
+      border: 1px solid #3b9cff;
+      font-weight: 600;
+    }
+
+    .status {
+      font-size: 13px;
+      margin-top: 8px;
+      color: var(--muted);
+    }
+    .status.ok { color: var(--ok); }
+    .status.warn { color: var(--warn); }
+    .status.err { color: var(--err); }
+
+    .topline {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .meta {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+
+    .shot {
+      background: #0f1728;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+
+    .shot img {
+      width: 100%;
+      height: 180px;
+      object-fit: cover;
+      display: block;
+      background: #0a1020;
+    }
+
+    .shot .info {
+      padding: 10px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.4;
+    }
+
+    @media (max-width: 900px) {
+      .row {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2 style="margin: 0 0 10px 0;">Screenshot Tester</h2>
+      <div class="row">
+        <div>
+          <label for="vehicleId">Vehicle ID</label>
+          <input id="vehicleId" placeholder="e.g. 221087868252" />
+        </div>
+        <div>
+          <label for="channel">Channel</label>
+          <input id="channel" type="number" min="1" value="1" />
+        </div>
+        <div>
+          <label for="minutes">Recent Window (minutes)</label>
+          <input id="minutes" type="number" min="1" value="30" />
+        </div>
+        <div>
+          <label for="limit">Limit</label>
+          <input id="limit" type="number" min="1" value="50" />
+        </div>
+        <div>
+          <button id="requestBtn" class="primary">Request Screenshot</button>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
+        <button id="refreshBtn">Refresh Now</button>
+        <button id="loadVehiclesBtn">Load Connected Vehicles</button>
+        <button id="toggleAutoBtn">Pause Auto Refresh</button>
+      </div>
+
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <div class="card">
+      <div class="topline">
+        <div>
+          <strong>Recent Screenshots</strong>
+          <div id="summary" class="meta">No data yet.</div>
+        </div>
+        <div id="wsStatus" class="meta">WebSocket: connecting...</div>
+      </div>
+      <div id="shots" class="grid"></div>
+    </div>
+  </div>
+
+  <script>
+    const vehicleIdEl = document.getElementById('vehicleId');
+    const channelEl = document.getElementById('channel');
+    const minutesEl = document.getElementById('minutes');
+    const limitEl = document.getElementById('limit');
+    const statusEl = document.getElementById('status');
+    const wsStatusEl = document.getElementById('wsStatus');
+    const summaryEl = document.getElementById('summary');
+    const shotsEl = document.getElementById('shots');
+
+    let autoRefresh = true;
+    let refreshTimer = null;
+
+    function setStatus(text, kind = 'status') {
+      statusEl.className = 'status ' + kind;
+      statusEl.textContent = text;
+    }
+
+    async function loadVehicles() {
+      try {
+        const res = await fetch('/api/vehicles/connected');
+        if (!res.ok) throw new Error('Failed to fetch vehicles');
+        const vehicles = await res.json();
+        if (Array.isArray(vehicles) && vehicles.length > 0) {
+          vehicleIdEl.value = vehicles[0].id;
+          setStatus(`Loaded ${vehicles.length} connected vehicle(s). Using ${vehicles[0].id}.`, 'ok');
+        } else {
+          setStatus('No connected vehicles found.', 'warn');
+        }
+      } catch (err) {
+        setStatus(`Vehicle load error: ${err.message}`, 'err');
+      }
+    }
+
+    function card(item) {
+      const url = item.storage_url && item.storage_url !== 'upload-failed' && item.storage_url !== 'local-only'
+        ? item.storage_url
+        : '';
+
+      const ts = item.timestamp ? new Date(item.timestamp).toLocaleString() : 'n/a';
+      const fileSizeKb = item.file_size ? (item.file_size / 1024).toFixed(1) : 'n/a';
+
+      return `
+        <div class="shot">
+          ${url ? `<img src="${url}" alt="screenshot ${item.id}" loading="lazy" />` : `<img alt="missing image URL" />`}
+          <div class="info">
+            <div><strong>Device:</strong> ${item.device_id || 'n/a'} | <strong>Ch:</strong> ${item.channel ?? 'n/a'}</div>
+            <div><strong>Time:</strong> ${ts}</div>
+            <div><strong>Size:</strong> ${fileSizeKb} KB</div>
+            <div><strong>Alert:</strong> ${item.alert_id || 'none'}</div>
+            <div><strong>ID:</strong> ${item.id}</div>
+          </div>
+        </div>
+      `;
+    }
+
+    async function refreshScreenshots() {
+      const minutes = Number(minutesEl.value || 30);
+      const limit = Number(limitEl.value || 50);
+
+      try {
+        const res = await fetch(`/api/screenshots/recent?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        const screenshots = data.screenshots || [];
+
+        summaryEl.textContent = `${screenshots.length} screenshot(s) | last update: ${new Date().toLocaleTimeString()}`;
+        shotsEl.innerHTML = screenshots.map(card).join('') || '<div class="meta">No screenshots found in selected window.</div>';
+      } catch (err) {
+        setStatus(`Refresh error: ${err.message}`, 'err');
+      }
+    }
+
+    async function requestScreenshot() {
+      const vehicleId = vehicleIdEl.value.trim();
+      const channel = Number(channelEl.value || 1);
+
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required.', 'warn');
+        return;
+      }
+
+      setStatus(`Requesting screenshot for ${vehicleId} channel ${channel}...`);
+
+      try {
+        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/screenshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel })
+        });
+        const body = await res.json();
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        setStatus(body.message || 'Screenshot request sent.', 'ok');
+        setTimeout(refreshScreenshots, 1500);
+      } catch (err) {
+        setStatus(`Request failed: ${err.message}`, 'err');
+      }
+    }
+
+    function startAutoRefresh() {
+      if (refreshTimer) clearInterval(refreshTimer);
+      refreshTimer = setInterval(() => {
+        if (autoRefresh) refreshScreenshots();
+      }, 5000);
+    }
+
+    function connectWebSocket() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${location.host}/ws/alerts`);
+
+      ws.onopen = () => { wsStatusEl.textContent = 'WebSocket: connected'; };
+      ws.onclose = () => {
+        wsStatusEl.textContent = 'WebSocket: disconnected (retrying)';
+        setTimeout(connectWebSocket, 2000);
+      };
+      ws.onerror = () => { wsStatusEl.textContent = 'WebSocket: error'; };
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'screenshot-received' || msg.type === 'new_alert') {
+            refreshScreenshots();
+          }
+        } catch (_) {}
+      };
+    }
+
+    document.getElementById('requestBtn').addEventListener('click', requestScreenshot);
+    document.getElementById('refreshBtn').addEventListener('click', refreshScreenshots);
+    document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
+    document.getElementById('toggleAutoBtn').addEventListener('click', (e) => {
+      autoRefresh = !autoRefresh;
+      e.target.textContent = autoRefresh ? 'Pause Auto Refresh' : 'Resume Auto Refresh';
+      setStatus(`Auto refresh ${autoRefresh ? 'enabled' : 'paused'}.`, 'ok');
+    });
+
+    loadVehicles();
+    refreshScreenshots();
+    startAutoRefresh();
+    connectWebSocket();
+  </script>
+</body>
+</html>

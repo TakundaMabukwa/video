@@ -72,6 +72,21 @@ export class JTT808Server {
       
       // Process complete messages
       while (buffer.length > 0) {
+        // Resync to frame delimiter for signaling packets
+        if (buffer[0] !== 0x7E) {
+          const start = buffer.indexOf(0x7E);
+          if (start === -1) {
+            buffer = Buffer.alloc(0);
+            break;
+          }
+          buffer = buffer.slice(start);
+        }
+
+        // Skip duplicated delimiters (some devices send 0x7E 0x7E between frames)
+        while (buffer.length >= 2 && buffer[0] === 0x7E && buffer[1] === 0x7E) {
+          buffer = buffer.slice(1);
+        }
+
         // Check for RTP video data first (0x30316364)
         if (buffer.length >= 4 && buffer.readUInt32BE(0) === 0x30316364) {
           // Parse data type at offset 15 to determine header size
@@ -108,6 +123,10 @@ export class JTT808Server {
         if (messageEnd === -1) break;
         
         const messageBuffer = buffer.slice(0, messageEnd + 1);
+        if (messageBuffer.length <= 2) {
+          buffer = buffer.slice(messageEnd + 1);
+          continue;
+        }
         buffer = buffer.slice(messageEnd + 1);
         
         await this.processMessage(messageBuffer, socket);
