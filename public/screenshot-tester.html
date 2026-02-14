@@ -268,7 +268,7 @@
         const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/screenshot`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel })
+          body: JSON.stringify({ channel, fallback: true })
         });
         const body = await res.json();
         if (!res.ok || !body.success) {
@@ -323,7 +323,7 @@
             fetch(`/api/vehicles/${encodeURIComponent(job.vehicleId)}/screenshot`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ channel: job.channel })
+              body: JSON.stringify({ channel: job.channel, fallback: true })
             }).then(async r => {
               const body = await r.json().catch(() => ({}));
               if (!r.ok || !body.success) {

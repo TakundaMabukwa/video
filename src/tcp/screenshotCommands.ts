@@ -5,7 +5,8 @@ export class ScreenshotCommands {
     vehicleId: string,
     serialNumber: number,
     serverIp: string,
-    serverPort: number,
+    tcpPort: number,
+    udpPort: number,
     channel: number = 1,
     timestamp?: Date
   ): Buffer {
@@ -29,12 +30,12 @@ export class ScreenshotCommands {
     serverIpBytes.copy(body, offset);
     offset += serverIpLength;
     
-    // Server TCP port (set to 0 - not using TCP)
-    body.writeUInt16BE(0, offset);
+    // Server TCP port
+    body.writeUInt16BE(tcpPort, offset);
     offset += 2;
     
     // Server UDP port
-    body.writeUInt16BE(serverPort, offset);
+    body.writeUInt16BE(udpPort, offset);
     offset += 2;
     
     // Logical channel number

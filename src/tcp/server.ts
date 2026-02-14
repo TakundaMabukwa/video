@@ -665,13 +665,28 @@ export class JTT808Server {
       vehicleId,
       this.getNextSerial(),
       serverIp,
+      this.port,
       this.udpPort,
       channel,
       now
     );
-    
-    console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel} (TCP ${this.port})`);
+
+    const legacyCommand = JTT1078Commands.buildPlaybackCommand(
+      vehicleId,
+      this.getNextSerial(),
+      serverIp,
+      this.port,
+      channel,
+      now,
+      now,
+      4
+    );
+
+    console.log(`Screenshot requested for vehicle ${vehicleId}, channel ${channel} (spec + legacy fallback)`);
     socket.write(command);
+    setTimeout(() => {
+      if (socket.writable) socket.write(legacyCommand);
+    }, 120);
     return true;
   }
 
@@ -875,6 +890,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 
