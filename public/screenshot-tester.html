@@ -162,6 +162,7 @@
         <button id="loadVehiclesBtn">Load Connected Vehicles</button>
         <button id="requestAllBtn" class="primary">Request All Vehicles/Channels</button>
         <button id="toggleAutoBtn">Pause Auto Refresh</button>
+        <button id="toggleAutoCaptureBtn" class="primary">Pause 30s Auto Capture</button>
       </div>
 
       <div id="status" class="status">Ready.</div>
@@ -191,6 +192,8 @@
 
     let autoRefresh = true;
     let refreshTimer = null;
+    let autoCapture = true;
+    let captureTimer = null;
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -281,7 +284,7 @@
       }
     }
 
-    async function requestAllScreenshots() {
+    async function requestAllScreenshots(silent = false) {
       setStatus('Loading connected vehicles and channels...');
       try {
         const res = await fetch('/api/vehicles/connected');
@@ -316,7 +319,9 @@
           return;
         }
 
-        setStatus(`Requesting ${jobs.length} screenshots in parallel...`);
+        if (!silent) {
+          setStatus(`Requesting ${jobs.length} screenshots in parallel...`);
+        }
 
         const results = await Promise.allSettled(
           jobs.map(job =>
@@ -336,7 +341,11 @@
 
         const ok = results.filter(r => r.status === 'fulfilled').length;
         const fail = results.length - ok;
-        setStatus(`All-request complete: ${ok} success, ${fail} failed.`, fail ? 'warn' : 'ok');
+        if (!silent) {
+          setStatus(`All-request complete: ${ok} success, ${fail} failed.`, fail ? 'warn' : 'ok');
+        } else {
+          setStatus(`30s auto-capture: ${ok} success, ${fail} failed.`, fail ? 'warn' : 'ok');
+        }
         setTimeout(refreshScreenshots, 1500);
       } catch (err) {
         setStatus(`All-request failed: ${err.message}`, 'err');
@@ -348,6 +357,15 @@
       refreshTimer = setInterval(() => {
         if (autoRefresh) refreshScreenshots();
       }, 5000);
+    }
+
+    function startAutoCapture() {
+      if (captureTimer) clearInterval(captureTimer);
+      captureTimer = setInterval(() => {
+        if (autoCapture) {
+          requestAllScreenshots(true);
+        }
+      }, 30000);
     }
 
     function connectWebSocket() {
@@ -379,10 +397,16 @@
       e.target.textContent = autoRefresh ? 'Pause Auto Refresh' : 'Resume Auto Refresh';
       setStatus(`Auto refresh ${autoRefresh ? 'enabled' : 'paused'}.`, 'ok');
     });
+    document.getElementById('toggleAutoCaptureBtn').addEventListener('click', (e) => {
+      autoCapture = !autoCapture;
+      e.target.textContent = autoCapture ? 'Pause 30s Auto Capture' : 'Resume 30s Auto Capture';
+      setStatus(`30s auto capture ${autoCapture ? 'enabled' : 'paused'}.`, 'ok');
+    });
 
     loadVehicles();
     refreshScreenshots();
     startAutoRefresh();
+    startAutoCapture();
     connectWebSocket();
   </script>
 </body>
