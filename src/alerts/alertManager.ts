@@ -190,31 +190,30 @@ export class AlertManager extends EventEmitter {
   }
 
   private determinePriority(alert: LocationAlert): AlertPriority {
-    // CRITICAL: Fatigue level > 80 (per JTT 1078-2016 Table 15)
-    if (alert.drivingBehavior?.fatigueLevel && alert.drivingBehavior.fatigueLevel > 80) {
+    // CRITICAL: emergency, collision warning, or severe fatigue
+    if (alert.alarmFlags?.emergency ||
+        alert.alarmFlags?.collisionWarning ||
+        (alert.drivingBehavior?.fatigueLevel !== undefined && alert.drivingBehavior.fatigueLevel > 80)) {
       return AlertPriority.CRITICAL;
     }
 
-    // HIGH: Fatigue, phone call, smoking, storage failure
-    if (alert.drivingBehavior?.fatigue || 
+    // HIGH: clear unsafe driving signals and storage failures
+    if (alert.alarmFlags?.fatigue ||
+        alert.alarmFlags?.dangerousDriving ||
+        alert.alarmFlags?.fatigueWarning ||
+        alert.drivingBehavior?.fatigue ||
         alert.drivingBehavior?.phoneCall || 
         alert.drivingBehavior?.smoking ||
         alert.videoAlarms?.storageFailure) {
       return AlertPriority.HIGH;
     }
 
-    // MEDIUM: Signal loss, blocking, overcrowding
+    // MEDIUM: video signal quality/system issues and speed alarms
     if (alert.videoAlarms?.videoSignalLoss ||
         alert.videoAlarms?.videoSignalBlocking ||
-        alert.videoAlarms?.busOvercrowding) {
-      return AlertPriority.MEDIUM;
-    }
-
-    // Add speed-based alerts if speed data available
-    if (alert.speed && alert.speed > 100) { // Example: 100+ km/h = HIGH priority
-      return AlertPriority.HIGH;
-    }
-    if (alert.speed && alert.speed > 80) { // Example: 80+ km/h = MEDIUM priority  
+        alert.videoAlarms?.busOvercrowding ||
+        alert.alarmFlags?.overspeed ||
+        alert.alarmFlags?.overspeedWarning) {
       return AlertPriority.MEDIUM;
     }
 
@@ -222,9 +221,12 @@ export class AlertManager extends EventEmitter {
   }
 
   private getAlertType(alert: LocationAlert): string {
-    if (alert.drivingBehavior?.fatigue) return 'Driver Fatigue';
-    if (alert.drivingBehavior?.phoneCall) return 'Phone Call While Driving';
+    if (alert.alarmFlags?.emergency) return 'Emergency Alarm';
+    if (alert.alarmFlags?.collisionWarning) return 'Collision Warning';
+    if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Driver Fatigue';
+    if (alert.drivingBehavior?.phoneCall || alert.alarmFlags?.dangerousDriving) return 'Dangerous Driving Behavior';
     if (alert.drivingBehavior?.smoking) return 'Smoking While Driving';
+    if (alert.alarmFlags?.overspeed || alert.alarmFlags?.overspeedWarning) return 'Overspeed Alarm';
     if (alert.videoAlarms?.storageFailure) return 'Storage Failure';
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
     if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
@@ -314,10 +316,12 @@ export class AlertManager extends EventEmitter {
   }
 
   private isDriverRelatedAlert(alert: LocationAlert): boolean {
-    return !!(alert.drivingBehavior?.fatigue || 
+    return !!(alert.alarmFlags?.fatigue ||
+             alert.alarmFlags?.dangerousDriving ||
+             alert.alarmFlags?.fatigueWarning ||
+             alert.drivingBehavior?.fatigue || 
              alert.drivingBehavior?.phoneCall || 
-             alert.drivingBehavior?.smoking ||
-             (alert.speed && alert.speed > 80)); // Include speeding
+             alert.drivingBehavior?.smoking);
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {

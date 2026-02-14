@@ -398,6 +398,15 @@ export class JTT808Server {
 
   private processAlert(alert: LocationAlert): void {
     // Check if there are any actual alerts
+    const hasBaseAlarmFlags = !!(alert.alarmFlags && (
+      alert.alarmFlags.emergency ||
+      alert.alarmFlags.overspeed ||
+      alert.alarmFlags.fatigue ||
+      alert.alarmFlags.dangerousDriving ||
+      alert.alarmFlags.overspeedWarning ||
+      alert.alarmFlags.fatigueWarning ||
+      alert.alarmFlags.collisionWarning
+    ));
     const hasVideoAlarms = alert.videoAlarms && Object.values(alert.videoAlarms).some(v => v === true);
     const hasDrivingBehavior = alert.drivingBehavior && (alert.drivingBehavior.fatigue || alert.drivingBehavior.phoneCall || alert.drivingBehavior.smoking || alert.drivingBehavior.custom > 0);
     const hasSignalLoss = alert.signalLossChannels && alert.signalLossChannels.length > 0;
@@ -405,7 +414,7 @@ export class JTT808Server {
     const hasMemoryFailures = alert.memoryFailures && (alert.memoryFailures.main.length > 0 || alert.memoryFailures.backup.length > 0);
     
     // Only log if there are actual alerts
-    if (!hasVideoAlarms && !hasDrivingBehavior && !hasSignalLoss && !hasBlocking && !hasMemoryFailures) {
+    if (!hasBaseAlarmFlags && !hasVideoAlarms && !hasDrivingBehavior && !hasSignalLoss && !hasBlocking && !hasMemoryFailures) {
       return; // No alerts, skip logging
     }
     
@@ -414,6 +423,10 @@ export class JTT808Server {
     console.log(`Vehicle: ${alert.vehicleId} | Time: ${alert.timestamp.toISOString()}`);
     console.log(`Location: ${alert.latitude}, ${alert.longitude}`);
     console.log('='.repeat(80));
+
+    if (hasBaseAlarmFlags) {
+      console.log('\n🚦 BASE ALARM FLAGS (0x0200 DWORD):', alert.alarmFlags);
+    }
     
     if (hasVideoAlarms) {
       console.log('\n📹 VIDEO ALARMS:', alert.videoAlarms);

@@ -26,7 +26,8 @@ export class JTT808Parser {
       // Verify checksum
       const calculatedChecksum = this.calculateChecksum(unescaped.slice(0, 12 + bodyLength));
       if (checksum !== calculatedChecksum) {
-        // Checksum mismatch - continue processing but don't log
+        console.warn(`JT/T 808 checksum mismatch for msg 0x${messageId.toString(16).padStart(4, '0')} from ${terminalPhone}`);
+        return null;
       }
 
       return {

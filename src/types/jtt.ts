@@ -105,6 +105,16 @@ export interface VideoAlarmStatus {
   specialAlarmThreshold: boolean;
 }
 
+export interface AlarmFlags {
+  emergency: boolean;
+  overspeed: boolean;
+  fatigue: boolean;
+  dangerousDriving: boolean;
+  overspeedWarning: boolean;
+  fatigueWarning: boolean;
+  collisionWarning: boolean;
+}
+
 export interface LocationAlert {
   vehicleId: string;
   timestamp: Date;
@@ -114,6 +124,9 @@ export interface LocationAlert {
   direction?: number;    // degrees
   altitude?: number;     // meters
   videoAlarms?: VideoAlarmStatus;
+  alarmFlags?: AlarmFlags; // JT/T 808 base alarm flag DWORD
+  rawAlarmFlag?: number;
+  rawStatusFlag?: number;
   signalLossChannels?: number[]; // channels 1-32
   blockingChannels?: number[]; // channels 1-32
   memoryFailures?: { main: number[]; backup: number[]; };

@@ -1,4 +1,4 @@
-import { AbnormalDrivingBehavior, VideoAlarmStatus, LocationAlert } from '../types/jtt';
+import { AbnormalDrivingBehavior, VideoAlarmStatus, LocationAlert, AlarmFlags } from '../types/jtt';
 
 export class AlertParser {
   static parseLocationReport(body: Buffer, vehicleId: string): LocationAlert | null {
@@ -21,7 +21,10 @@ export class AlertParser {
       longitude,
       speed,
       direction,
-      altitude
+      altitude,
+      alarmFlags: this.parseAlarmFlags(alarmFlag),
+      rawAlarmFlag: alarmFlag,
+      rawStatusFlag: statusFlag
     };
 
     // Parse additional information (after byte 28)
@@ -127,15 +130,32 @@ export class AlertParser {
     };
   }
 
+  private static parseAlarmFlags(alarmFlag: number): AlarmFlags {
+    return {
+      emergency: !!(alarmFlag & (1 << 0)),
+      overspeed: !!(alarmFlag & (1 << 1)),
+      fatigue: !!(alarmFlag & (1 << 2)),
+      dangerousDriving: !!(alarmFlag & (1 << 3)),
+      overspeedWarning: !!(alarmFlag & (1 << 13)),
+      fatigueWarning: !!(alarmFlag & (1 << 14)),
+      collisionWarning: !!(alarmFlag & (1 << 31))
+    };
+  }
+
+  private static bcdToDec(value: number): number {
+    return ((value >> 4) & 0x0F) * 10 + (value & 0x0F);
+  }
+
   private static parseTimestamp(data: Buffer): Date {
-    // BCD format: YY-MM-DD-HH-MM-SS
-    const year = 2000 + parseInt(data[0].toString(16));
-    const month = parseInt(data[1].toString(16)) - 1;
-    const day = parseInt(data[2].toString(16));
-    const hour = parseInt(data[3].toString(16));
-    const minute = parseInt(data[4].toString(16));
-    const second = parseInt(data[5].toString(16));
-    
-    return new Date(year, month, day, hour, minute, second);
+    // BCD format: YY-MM-DD-HH-MM-SS (spec timestamps are GMT+8)
+    const year = 2000 + this.bcdToDec(data[0]);
+    const month = this.bcdToDec(data[1]);
+    const day = this.bcdToDec(data[2]);
+    const hour = this.bcdToDec(data[3]);
+    const minute = this.bcdToDec(data[4]);
+    const second = this.bcdToDec(data[5]);
+    const utcMs = Date.UTC(year, month - 1, day, hour, minute, second) - (8 * 60 * 60 * 1000);
+
+    return new Date(utcMs);
   }
 }
