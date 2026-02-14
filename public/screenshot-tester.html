@@ -160,6 +160,7 @@
       <div style="display:flex; gap:8px; margin-top:10px; flex-wrap:wrap;">
         <button id="refreshBtn">Refresh Now</button>
         <button id="loadVehiclesBtn">Load Connected Vehicles</button>
+        <button id="requestAllBtn" class="primary">Request All Vehicles/Channels</button>
         <button id="toggleAutoBtn">Pause Auto Refresh</button>
       </div>
 
@@ -280,6 +281,68 @@
       }
     }
 
+    async function requestAllScreenshots() {
+      setStatus('Loading connected vehicles and channels...');
+      try {
+        const res = await fetch('/api/vehicles/connected');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const vehicles = await res.json();
+
+        if (!Array.isArray(vehicles) || vehicles.length === 0) {
+          setStatus('No connected vehicles found.', 'warn');
+          return;
+        }
+
+        const jobs = [];
+        for (const v of vehicles) {
+          const videoChannels = Array.isArray(v.channels)
+            ? v.channels
+                .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
+                .map(ch => Number(ch.logicalChannel))
+                .filter(ch => Number.isFinite(ch) && ch > 0)
+            : [];
+
+          const channels = videoChannels.length ? [...new Set(videoChannels)] : [1];
+          for (const ch of channels) {
+            jobs.push({
+              vehicleId: String(v.id),
+              channel: ch
+            });
+          }
+        }
+
+        if (jobs.length === 0) {
+          setStatus('No valid vehicle/channel targets found.', 'warn');
+          return;
+        }
+
+        setStatus(`Requesting ${jobs.length} screenshots in parallel...`);
+
+        const results = await Promise.allSettled(
+          jobs.map(job =>
+            fetch(`/api/vehicles/${encodeURIComponent(job.vehicleId)}/screenshot`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ channel: job.channel })
+            }).then(async r => {
+              const body = await r.json().catch(() => ({}));
+              if (!r.ok || !body.success) {
+                throw new Error(body.message || `HTTP ${r.status}`);
+              }
+              return job;
+            })
+          )
+        );
+
+        const ok = results.filter(r => r.status === 'fulfilled').length;
+        const fail = results.length - ok;
+        setStatus(`All-request complete: ${ok} success, ${fail} failed.`, fail ? 'warn' : 'ok');
+        setTimeout(refreshScreenshots, 1500);
+      } catch (err) {
+        setStatus(`All-request failed: ${err.message}`, 'err');
+      }
+    }
+
     function startAutoRefresh() {
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(() => {
@@ -308,6 +371,7 @@
     }
 
     document.getElementById('requestBtn').addEventListener('click', requestScreenshot);
+    document.getElementById('requestAllBtn').addEventListener('click', requestAllScreenshots);
     document.getElementById('refreshBtn').addEventListener('click', refreshScreenshots);
     document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
     document.getElementById('toggleAutoBtn').addEventListener('click', (e) => {
