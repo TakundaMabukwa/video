@@ -71,18 +71,10 @@ export class JTT808Server {
       console.log(`[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`);
       buffer = Buffer.concat([buffer, data]);
       
+      const rtpMagic = Buffer.from([0x30, 0x31, 0x63, 0x64]);
+
       // Process complete messages
       while (buffer.length > 0) {
-        // Resync to frame delimiter for signaling packets
-        if (buffer[0] !== 0x7E) {
-          const start = buffer.indexOf(0x7E);
-          if (start === -1) {
-            buffer = Buffer.alloc(0);
-            break;
-          }
-          buffer = buffer.slice(start);
-        }
-
         // Skip duplicated delimiters (some devices send 0x7E 0x7E between frames)
         while (buffer.length >= 2 && buffer[0] === 0x7E && buffer[1] === 0x7E) {
           buffer = buffer.slice(1);
@@ -118,19 +110,46 @@ export class JTT808Server {
           }
           break; // Wait for more data
         }
-        
-        // Check for JT/T 808 message (0x7E)
-        const messageEnd = buffer.indexOf(0x7E, 1);
-        if (messageEnd === -1) break;
-        
-        const messageBuffer = buffer.slice(0, messageEnd + 1);
-        if (messageBuffer.length <= 2) {
-          buffer = buffer.slice(messageEnd + 1);
+
+        // Check for JT/T 808 frame when aligned to delimiter
+        if (buffer[0] === 0x7E) {
+          const messageEnd = buffer.indexOf(0x7E, 1);
+          if (messageEnd === -1) break;
+
+          const frameLength = messageEnd + 1;
+          // Guardrail: malformed oversized/undersized frame; resync by one byte.
+          if (frameLength < 15 || frameLength > 8192) {
+            buffer = buffer.slice(1);
+            continue;
+          }
+
+          const messageBuffer = buffer.slice(0, frameLength);
+          buffer = buffer.slice(frameLength);
+
+          await this.processMessage(messageBuffer, socket);
           continue;
         }
-        buffer = buffer.slice(messageEnd + 1);
-        
-        await this.processMessage(messageBuffer, socket);
+
+        // Not aligned to either protocol; resync to the nearest known marker.
+        const next808 = buffer.indexOf(0x7E);
+        const nextRtp = buffer.indexOf(rtpMagic);
+
+        if (next808 === -1 && nextRtp === -1) {
+          buffer = Buffer.alloc(0);
+          break;
+        }
+
+        let next = -1;
+        if (next808 === -1) next = nextRtp;
+        else if (nextRtp === -1) next = next808;
+        else next = Math.min(next808, nextRtp);
+
+        if (next <= 0) {
+          // Safety fallback: drop one byte to avoid infinite loops.
+          buffer = buffer.slice(1);
+        } else {
+          buffer = buffer.slice(next);
+        }
       }
     });
 
