@@ -195,6 +195,9 @@ export class JTT808Server {
         this.handleMultimediaEvent(message, socket);
         break;
       case 0x0801: // Multimedia data upload
+        if (message.isSubpackage) {
+          console.log(`📦 0x0801 subpackage ${message.packetIndex}/${message.packetCount} from ${message.terminalPhone}, body=${message.body.length}`);
+        }
         await this.handleMultimediaData(message, socket);
         break;
       case 0x0704: // Custom/proprietary message

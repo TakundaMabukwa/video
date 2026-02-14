@@ -10,21 +10,39 @@ export class JTT808Parser {
     try {
       // Unescape 0x7D sequences
       const unescaped = this.unescape(buffer.slice(1, -1));
+      if (unescaped.length < 12) return null;
       
       const messageId = unescaped.readUInt16BE(0);
       const bodyProps = unescaped.readUInt16BE(2);
       const bodyLength = bodyProps & 0x3FF; // Lower 10 bits
+      const isSubpackage = (bodyProps & 0x2000) !== 0;
       
       // Terminal phone (BCD, 6 bytes)
       const phoneBytes = unescaped.slice(4, 10);
       const terminalPhone = this.bcdToString(phoneBytes);
       
       const serialNumber = unescaped.readUInt16BE(10);
-      const body = unescaped.slice(12, 12 + bodyLength);
-      const checksum = unescaped[12 + bodyLength];
+      let headerLength = 12;
+      let packetCount: number | undefined;
+      let packetIndex: number | undefined;
+
+      if (isSubpackage) {
+        if (unescaped.length < 16) return null;
+        packetCount = unescaped.readUInt16BE(12);
+        packetIndex = unescaped.readUInt16BE(14);
+        headerLength = 16;
+      }
+
+      const expectedMinLength = headerLength + bodyLength + 1; // + checksum
+      if (unescaped.length < expectedMinLength) {
+        return null;
+      }
+
+      const body = unescaped.slice(headerLength, headerLength + bodyLength);
+      const checksum = unescaped[headerLength + bodyLength];
       
       // Verify checksum
-      const calculatedChecksum = this.calculateChecksum(unescaped.slice(0, 12 + bodyLength));
+      const calculatedChecksum = this.calculateChecksum(unescaped.slice(0, headerLength + bodyLength));
       if (checksum !== calculatedChecksum) {
         console.warn(`JT/T 808 checksum mismatch for msg 0x${messageId.toString(16).padStart(4, '0')} from ${terminalPhone}`);
         return null;
@@ -35,6 +53,9 @@ export class JTT808Parser {
         bodyLength,
         terminalPhone,
         serialNumber,
+        isSubpackage,
+        packetCount,
+        packetIndex,
         body,
         checksum
       };

@@ -21,6 +21,9 @@ export interface JTT808Message {
   bodyLength: number;
   terminalPhone: string;
   serialNumber: number;
+  isSubpackage?: boolean;
+  packetCount?: number;
+  packetIndex?: number;
   body: Buffer;
   checksum: number;
 }
