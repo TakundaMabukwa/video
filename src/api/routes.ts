@@ -1031,19 +1031,21 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Get screenshots for review (auto-refresh endpoint)
   router.get('/screenshots/recent', async (req, res) => {
     const limit = parseInt(req.query.limit as string) || 50;
+    const minutes = parseInt(req.query.minutes as string) || 30;
     const alertsOnly = req.query.alertsOnly === 'true';
 
     try {
       const query = alertsOnly
-        ? `SELECT * FROM images WHERE alert_id IS NOT NULL ORDER BY timestamp DESC LIMIT $1`
-        : `SELECT * FROM images ORDER BY timestamp DESC LIMIT $1`;
+        ? `SELECT * FROM images WHERE alert_id IS NOT NULL AND timestamp >= NOW() - ($2 || ' minutes')::interval ORDER BY timestamp DESC LIMIT $1`
+        : `SELECT * FROM images WHERE timestamp >= NOW() - ($2 || ' minutes')::interval ORDER BY timestamp DESC LIMIT $1`;
 
-      const result = await require('../storage/database').query(query, [limit]);
+      const result = await require('../storage/database').query(query, [limit, minutes]);
 
       res.json({
         success: true,
+        screenshots: result.rows,
         total: result.rows.length,
-        data: result.rows,
+        count: result.rows.length,
         lastUpdate: new Date()
       });
     } catch (error) {

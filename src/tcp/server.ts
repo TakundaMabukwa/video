@@ -1,6 +1,7 @@
 import * as net from 'net';
 import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
+import { ScreenshotCommands } from './screenshotCommands';
 import { AlertParser } from './alertParser';
 import { MultimediaParser } from './multimediaParser';
 import { AlertVideoCommands } from './alertVideoCommands';
@@ -638,15 +639,13 @@ export class JTT808Server {
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     const now = new Date();
 
-    const command = JTT1078Commands.buildPlaybackCommand(
+    const command = ScreenshotCommands.buildSingleFrameRequest(
       vehicleId,
       this.getNextSerial(),
       serverIp,
-      this.port,
+      this.udpPort,
       channel,
-      now,
-      now,
-      4 // Single frame upload
+      now
     );
     
     console.log(`📸 Screenshot requested for vehicle ${vehicleId}, channel ${channel} (TCP ${this.port})`);
