@@ -107,24 +107,30 @@ export class AlertManager extends EventEmitter {
   }
 
   async processAlert(alert: LocationAlert): Promise<void> {
-    const priority = this.determinePriority(alert);
-    
-    if (priority === AlertPriority.LOW) return;
+    const alertSignals = this.extractAlertSignals(alert);
+    if (alertSignals.length === 0) return;
+
+    const priority = this.determinePriority(alert, alertSignals);
 
     const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
     const channel = this.extractChannelFromAlert(alert);
+    const primaryType = this.getPrimaryAlertType(alert, alertSignals);
 
     const alertEvent: AlertEvent = {
       id: alertId,
       vehicleId: alert.vehicleId,
       channel,
       priority,
-      type: this.getAlertType(alert),
+      type: primaryType,
       timestamp: alert.timestamp,
       location: { latitude: alert.latitude, longitude: alert.longitude },
       status: 'new',
       escalationLevel: 0,
-      metadata: alert
+      metadata: {
+        ...alert,
+        alertSignals,
+        primaryAlertType: primaryType
+      }
     };
 
     this.activeAlerts.set(alertId, alertEvent);
@@ -189,7 +195,7 @@ export class AlertManager extends EventEmitter {
     }
   }
 
-  private determinePriority(alert: LocationAlert): AlertPriority {
+  private determinePriority(alert: LocationAlert, alertSignals: string[]): AlertPriority {
     // CRITICAL: emergency, collision warning, or severe fatigue
     if (alert.alarmFlags?.emergency ||
         alert.alarmFlags?.collisionWarning ||
@@ -217,10 +223,12 @@ export class AlertManager extends EventEmitter {
       return AlertPriority.MEDIUM;
     }
 
+    // Any remaining active signal should still be stored as at least LOW.
+    if (alertSignals.length > 0) return AlertPriority.LOW;
     return AlertPriority.LOW;
   }
 
-  private getAlertType(alert: LocationAlert): string {
+  private getPrimaryAlertType(alert: LocationAlert, alertSignals: string[]): string {
     if (alert.alarmFlags?.emergency) return 'Emergency Alarm';
     if (alert.alarmFlags?.collisionWarning) return 'Collision Warning';
     if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Driver Fatigue';
@@ -231,7 +239,7 @@ export class AlertManager extends EventEmitter {
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
     if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
     if (alert.videoAlarms?.busOvercrowding) return 'Bus Overcrowding';
-    return 'General Alert';
+    return alertSignals[0] || 'General Alert';
   }
 
   private extractChannelFromAlert(alert: LocationAlert): number {
@@ -322,6 +330,57 @@ export class AlertManager extends EventEmitter {
              alert.drivingBehavior?.fatigue || 
              alert.drivingBehavior?.phoneCall || 
              alert.drivingBehavior?.smoking);
+  }
+
+  private extractAlertSignals(alert: LocationAlert): string[] {
+    const signals: string[] = [];
+
+    if (alert.alarmFlags?.emergency) signals.push('jt808_emergency');
+    if (alert.alarmFlags?.overspeed) signals.push('jt808_overspeed');
+    if (alert.alarmFlags?.fatigue) signals.push('jt808_fatigue');
+    if (alert.alarmFlags?.dangerousDriving) signals.push('jt808_dangerous_driving');
+    if (alert.alarmFlags?.overspeedWarning) signals.push('jt808_overspeed_warning');
+    if (alert.alarmFlags?.fatigueWarning) signals.push('jt808_fatigue_warning');
+    if (alert.alarmFlags?.collisionWarning) signals.push('jt808_collision_warning');
+
+    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 31]);
+    for (const bit of alert.alarmFlagSetBits || []) {
+      if (!knownAlarmBits.has(bit)) {
+        signals.push(`jt808_alarm_bit_${bit}`);
+      }
+    }
+
+    if (alert.videoAlarms?.videoSignalLoss) signals.push('jtt1078_video_signal_loss');
+    if (alert.videoAlarms?.videoSignalBlocking) signals.push('jtt1078_video_signal_blocking');
+    if (alert.videoAlarms?.storageFailure) signals.push('jtt1078_storage_failure');
+    if (alert.videoAlarms?.otherVideoFailure) signals.push('jtt1078_other_video_failure');
+    if (alert.videoAlarms?.busOvercrowding) signals.push('jtt1078_bus_overcrowding');
+    if (alert.videoAlarms?.abnormalDriving) signals.push('jtt1078_abnormal_driving');
+    if (alert.videoAlarms?.specialAlarmThreshold) signals.push('jtt1078_special_alarm_threshold');
+
+    const knownVideoBits = new Set([0, 1, 2, 3, 4, 5, 6]);
+    for (const bit of alert.videoAlarms?.setBits || []) {
+      if (!knownVideoBits.has(bit)) {
+        signals.push(`jtt1078_video_alarm_bit_${bit}`);
+      }
+    }
+
+    if (alert.signalLossChannels?.length) {
+      signals.push(`jtt1078_signal_loss_channels_${alert.signalLossChannels.join('_')}`);
+    }
+    if (alert.blockingChannels?.length) {
+      signals.push(`jtt1078_signal_blocking_channels_${alert.blockingChannels.join('_')}`);
+    }
+    if (alert.memoryFailures?.main.length || alert.memoryFailures?.backup.length) {
+      signals.push('jtt1078_memory_failure');
+    }
+
+    if (alert.drivingBehavior?.fatigue) signals.push('jtt1078_behavior_fatigue');
+    if (alert.drivingBehavior?.phoneCall) signals.push('jtt1078_behavior_phone_call');
+    if (alert.drivingBehavior?.smoking) signals.push('jtt1078_behavior_smoking');
+    if ((alert.drivingBehavior?.custom || 0) > 0) signals.push(`jtt1078_behavior_custom_${alert.drivingBehavior?.custom}`);
+
+    return Array.from(new Set(signals));
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {

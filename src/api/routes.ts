@@ -684,6 +684,53 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Get normalized alert signals for one alert
+  router.get('/alerts/:id/signals', async (req, res) => {
+    const { id } = req.params;
+
+    try {
+      const result = await require('../storage/database').query(
+        `SELECT id, alert_type, priority, timestamp, metadata
+         FROM alerts
+         WHERE id = $1`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      const row = result.rows[0];
+      const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : (row.metadata || {});
+
+      res.json({
+        success: true,
+        data: {
+          id: row.id,
+          timestamp: row.timestamp,
+          priority: row.priority,
+          primaryAlertType: metadata.primaryAlertType || row.alert_type,
+          alertSignals: metadata.alertSignals || [],
+          alarmFlags: metadata.alarmFlags || {},
+          alarmFlagSetBits: metadata.alarmFlagSetBits || [],
+          videoAlarms: metadata.videoAlarms || {},
+          drivingBehavior: metadata.drivingBehavior || {},
+          rawAlarmFlag: metadata.rawAlarmFlag,
+          rawStatusFlag: metadata.rawStatusFlag
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert signals',
+        error: error?.message
+      });
+    }
+  });
+
   // Get alert by ID
   router.get('/alerts/:id', async (req, res) => {
     const { id } = req.params;

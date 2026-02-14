@@ -101,6 +101,22 @@
       gap: 12px;
       grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .tab-btn {
+      width: auto;
+      padding: 8px 14px;
+      font-weight: 600;
+    }
+    .tab-btn.active {
+      background: linear-gradient(180deg, #2f8fff, #1f76d8);
+      border-color: #3b9cff;
+    }
+    .tab-pane { display: none; }
+    .tab-pane.active { display: block; }
 
     .shot {
       background: #0f1728;
@@ -122,6 +138,44 @@
       font-size: 12px;
       color: var(--muted);
       line-height: 1.4;
+    }
+    .alert-item {
+      background: #0f1728;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+    }
+    .alert-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .pill {
+      font-size: 11px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 3px 8px;
+      color: var(--muted);
+    }
+    .priority-critical { color: #ff7b7b; border-color: #7b2a2a; }
+    .priority-high { color: #ffb366; border-color: #704214; }
+    .priority-medium { color: #e6d97f; border-color: #665f26; }
+    .priority-low { color: #8fd4ff; border-color: #295872; }
+    .thumbs {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .thumbs img {
+      width: 100%;
+      height: 80px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #0a1020;
     }
 
     @media (max-width: 900px) {
@@ -169,14 +223,23 @@
     </div>
 
     <div class="card">
+      <div class="tabs">
+        <button id="tabScreenshots" class="tab-btn active">Screenshots</button>
+        <button id="tabAlerts" class="tab-btn">Alerts</button>
+      </div>
       <div class="topline">
         <div>
-          <strong>Recent Screenshots</strong>
+          <strong id="panelTitle">Recent Screenshots</strong>
           <div id="summary" class="meta">No data yet.</div>
         </div>
         <div id="wsStatus" class="meta">WebSocket: connecting...</div>
       </div>
-      <div id="shots" class="grid"></div>
+      <div id="paneScreenshots" class="tab-pane active">
+        <div id="shots" class="grid"></div>
+      </div>
+      <div id="paneAlerts" class="tab-pane">
+        <div id="alerts" class="grid"></div>
+      </div>
     </div>
   </div>
 
@@ -188,12 +251,22 @@
     const statusEl = document.getElementById('status');
     const wsStatusEl = document.getElementById('wsStatus');
     const summaryEl = document.getElementById('summary');
+    const panelTitleEl = document.getElementById('panelTitle');
     const shotsEl = document.getElementById('shots');
+    const alertsEl = document.getElementById('alerts');
+    const paneScreenshotsEl = document.getElementById('paneScreenshots');
+    const paneAlertsEl = document.getElementById('paneAlerts');
+    const tabScreenshotsEl = document.getElementById('tabScreenshots');
+    const tabAlertsEl = document.getElementById('tabAlerts');
 
     let autoRefresh = true;
     let refreshTimer = null;
     let autoCapture = true;
     let captureTimer = null;
+    let alertCheckTimer = null;
+    let activeTab = 'screenshots';
+    let recentScreenshotsCache = [];
+    let lastAlertCount = null;
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -238,21 +311,104 @@
       `;
     }
 
-    async function refreshScreenshots() {
+    function alertCard(alert, screenshots) {
+      const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
+      const pr = (alert.priority || 'low').toLowerCase();
+      const imgs = (screenshots || []).slice(0, 8).map((s) => {
+        const url = s.storage_url && s.storage_url !== 'upload-failed' && s.storage_url !== 'local-only' ? s.storage_url : '';
+        return url ? `<img src="${url}" alt="${s.id}" loading="lazy" />` : '';
+      }).join('');
+
+      return `
+        <div class="alert-item">
+          <div class="alert-head">
+            <div>
+              <div><strong>${alert.alert_type || alert.type || 'Alert'}</strong></div>
+              <div class="meta">${alert.id}</div>
+            </div>
+            <div class="pill priority-${pr}">${pr}</div>
+          </div>
+          <div class="meta">Vehicle: ${alert.device_id || alert.vehicleId || 'n/a'} | Channel: ${alert.channel ?? 'n/a'}</div>
+          <div class="meta">Time: ${ts}</div>
+          <div class="meta">Status: ${alert.status || 'n/a'}</div>
+          <div class="meta">Screenshots: ${(screenshots || []).length}</div>
+          <div class="thumbs">${imgs || '<div class="meta">No screenshots linked yet.</div>'}</div>
+        </div>
+      `;
+    }
+
+    async function fetchRecentScreenshots() {
       const minutes = Number(minutesEl.value || 30);
       const limit = Number(limitEl.value || 50);
+      const res = await fetch(`/api/screenshots/recent?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      return data.screenshots || [];
+    }
 
+    async function refreshScreenshots() {
       try {
-        const res = await fetch(`/api/screenshots/recent?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const data = await res.json();
-        const screenshots = data.screenshots || [];
+        const screenshots = await fetchRecentScreenshots();
+        recentScreenshotsCache = screenshots;
 
         summaryEl.textContent = `${screenshots.length} screenshot(s) | last update: ${new Date().toLocaleTimeString()}`;
         shotsEl.innerHTML = screenshots.map(card).join('') || '<div class="meta">No screenshots found in selected window.</div>';
       } catch (err) {
         setStatus(`Refresh error: ${err.message}`, 'err');
+      }
+    }
+
+    async function refreshAlerts() {
+      try {
+        if (recentScreenshotsCache.length === 0) {
+          recentScreenshotsCache = await fetchRecentScreenshots();
+        }
+        const res = await fetch('/api/alerts/active');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const alerts = data.alerts || [];
+
+        const byAlertId = new Map();
+        for (const s of recentScreenshotsCache) {
+          if (!s.alert_id) continue;
+          const key = String(s.alert_id);
+          if (!byAlertId.has(key)) byAlertId.set(key, []);
+          byAlertId.get(key).push(s);
+        }
+
+        const alertDetails = await Promise.allSettled(
+          alerts.map((a) => fetch(`/api/alerts/${encodeURIComponent(a.id)}`).then((r) => r.ok ? r.json() : null))
+        );
+
+        const byAlertDetailScreens = new Map();
+        for (let i = 0; i < alerts.length; i++) {
+          const baseAlert = alerts[i];
+          const detailResult = alertDetails[i];
+          const detailedShots = detailResult.status === 'fulfilled'
+            ? (detailResult.value?.alert?.screenshots || [])
+            : [];
+          byAlertDetailScreens.set(String(baseAlert.id), detailedShots);
+        }
+
+        summaryEl.textContent = `${alerts.length} active alert(s) | last update: ${new Date().toLocaleTimeString()}`;
+        alertsEl.innerHTML = alerts.map((a) => {
+          const id = String(a.id);
+          const linked = byAlertDetailScreens.get(id);
+          const recent = byAlertId.get(id);
+          const screenshots = (linked && linked.length) ? linked : (recent || []);
+          return alertCard(a, screenshots);
+        }).join('')
+          || '<div class="meta">No active alerts.</div>';
+      } catch (err) {
+        setStatus(`Alert refresh error: ${err.message}`, 'err');
+      }
+    }
+
+    async function refreshCurrentTab() {
+      if (activeTab === 'alerts') {
+        await refreshAlerts();
+      } else {
+        await refreshScreenshots();
       }
     }
 
@@ -346,7 +502,7 @@
         } else {
           setStatus(`30s auto-capture: ${ok} success, ${fail} failed.`, fail ? 'warn' : 'ok');
         }
-        setTimeout(refreshScreenshots, 1500);
+        setTimeout(refreshCurrentTab, 1500);
       } catch (err) {
         setStatus(`All-request failed: ${err.message}`, 'err');
       }
@@ -355,7 +511,7 @@
     function startAutoRefresh() {
       if (refreshTimer) clearInterval(refreshTimer);
       refreshTimer = setInterval(() => {
-        if (autoRefresh) refreshScreenshots();
+        if (autoRefresh) refreshCurrentTab();
       }, 5000);
     }
 
@@ -364,6 +520,42 @@
       captureTimer = setInterval(() => {
         if (autoCapture) {
           requestAllScreenshots(true);
+        }
+      }, 30000);
+    }
+
+    async function checkForNewAlerts() {
+      try {
+        const res = await fetch('/api/alerts/active');
+        if (!res.ok) return;
+        const data = await res.json();
+        const currentCount = Number(data.count || 0);
+
+        if (lastAlertCount === null) {
+          lastAlertCount = currentCount;
+          return;
+        }
+
+        if (currentCount > lastAlertCount) {
+          setStatus(`New alerts detected: +${currentCount - lastAlertCount} (active: ${currentCount}).`, 'warn');
+          if (activeTab === 'alerts') {
+            await refreshAlerts();
+          }
+        } else if (activeTab === 'alerts' && currentCount !== lastAlertCount) {
+          await refreshAlerts();
+        }
+
+        lastAlertCount = currentCount;
+      } catch (_) {
+        // Keep silent for periodic background check
+      }
+    }
+
+    function startAlertCheck() {
+      if (alertCheckTimer) clearInterval(alertCheckTimer);
+      alertCheckTimer = setInterval(() => {
+        if (autoRefresh) {
+          checkForNewAlerts();
         }
       }, 30000);
     }
@@ -382,15 +574,26 @@
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'screenshot-received' || msg.type === 'new_alert') {
-            refreshScreenshots();
+            refreshCurrentTab();
           }
         } catch (_) {}
       };
     }
 
+    function setTab(tab) {
+      activeTab = tab;
+      const isAlerts = tab === 'alerts';
+      tabAlertsEl.classList.toggle('active', isAlerts);
+      tabScreenshotsEl.classList.toggle('active', !isAlerts);
+      paneAlertsEl.classList.toggle('active', isAlerts);
+      paneScreenshotsEl.classList.toggle('active', !isAlerts);
+      panelTitleEl.textContent = isAlerts ? 'Active Alerts + Linked Screenshots' : 'Recent Screenshots';
+      refreshCurrentTab();
+    }
+
     document.getElementById('requestBtn').addEventListener('click', requestScreenshot);
     document.getElementById('requestAllBtn').addEventListener('click', requestAllScreenshots);
-    document.getElementById('refreshBtn').addEventListener('click', refreshScreenshots);
+    document.getElementById('refreshBtn').addEventListener('click', refreshCurrentTab);
     document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
     document.getElementById('toggleAutoBtn').addEventListener('click', (e) => {
       autoRefresh = !autoRefresh;
@@ -402,11 +605,14 @@
       e.target.textContent = autoCapture ? 'Pause 30s Auto Capture' : 'Resume 30s Auto Capture';
       setStatus(`30s auto capture ${autoCapture ? 'enabled' : 'paused'}.`, 'ok');
     });
+    tabScreenshotsEl.addEventListener('click', () => setTab('screenshots'));
+    tabAlertsEl.addEventListener('click', () => setTab('alerts'));
 
     loadVehicles();
-    refreshScreenshots();
+    refreshCurrentTab();
     startAutoRefresh();
     startAutoCapture();
+    startAlertCheck();
     connectWebSocket();
   </script>
 </body>

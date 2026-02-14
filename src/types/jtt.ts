@@ -106,6 +106,7 @@ export interface VideoAlarmStatus {
   busOvercrowding: boolean;
   abnormalDriving: boolean;
   specialAlarmThreshold: boolean;
+  setBits?: number[]; // all set bits from 0x14 DWORD for auditability
 }
 
 export interface AlarmFlags {
@@ -128,6 +129,7 @@ export interface LocationAlert {
   altitude?: number;     // meters
   videoAlarms?: VideoAlarmStatus;
   alarmFlags?: AlarmFlags; // JT/T 808 base alarm flag DWORD
+  alarmFlagSetBits?: number[]; // all set bits from JT/T 808 alarm DWORD
   rawAlarmFlag?: number;
   rawStatusFlag?: number;
   signalLossChannels?: number[]; // channels 1-32

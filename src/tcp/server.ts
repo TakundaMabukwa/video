@@ -1,4 +1,7 @@
 import * as net from 'net';
+import * as fs from 'fs';
+import * as path from 'path';
+import { spawn } from 'child_process';
 import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
 import { ScreenshotCommands } from './screenshotCommands';
@@ -37,6 +40,9 @@ export class JTT808Server {
     this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
       console.log(`📸 Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${channel}`);
       this.requestScreenshot(vehicleId, channel);
+      setTimeout(() => {
+        void this.captureScreenshotFromHLS(vehicleId, channel, alertId);
+      }, 700);
     });
     
     // Listen for camera video requests from alert manager
@@ -690,6 +696,68 @@ export class JTT808Server {
     return true;
   }
 
+  private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<void> {
+    try {
+      const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+      if (!fs.existsSync(playlistPath)) {
+        console.log(`HLS fallback skipped: playlist not found for ${vehicleId} ch${channel}`);
+        return;
+      }
+
+      const imageData = await new Promise<Buffer | null>((resolve) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-i', playlistPath,
+          '-frames:v', '1',
+          '-f', 'image2pipe',
+          '-vcodec', 'mjpeg',
+          'pipe:1'
+        ], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        const chunks: Buffer[] = [];
+        let done = false;
+
+        const finish = (data: Buffer | null) => {
+          if (done) return;
+          done = true;
+          resolve(data);
+        };
+
+        const timeout = setTimeout(() => {
+          ffmpeg.kill('SIGKILL');
+          finish(null);
+        }, 6000);
+
+        ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+        ffmpeg.on('error', () => {
+          clearTimeout(timeout);
+          finish(null);
+        });
+        ffmpeg.on('close', (code) => {
+          clearTimeout(timeout);
+          if (code === 0 && chunks.length > 0) {
+            finish(Buffer.concat(chunks));
+          } else {
+            finish(null);
+          }
+        });
+      });
+
+      if (!imageData || imageData.length < 4) {
+        console.log(`HLS fallback capture failed for ${vehicleId} ch${channel}`);
+        return;
+      }
+
+      await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      console.log(`Alert ${alertId || 'manual'}: HLS fallback screenshot saved for ${vehicleId} ch${channel}`);
+    } catch (error: any) {
+      console.error(`HLS fallback screenshot error for ${vehicleId} ch${channel}:`, error?.message || error);
+    }
+  }
+
   requestCameraVideo(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
@@ -890,6 +958,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 

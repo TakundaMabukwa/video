@@ -23,6 +23,7 @@ export class AlertParser {
       direction,
       altitude,
       alarmFlags: this.parseAlarmFlags(alarmFlag),
+      alarmFlagSetBits: this.getSetBits(alarmFlag, 32),
       rawAlarmFlag: alarmFlag,
       rawStatusFlag: statusFlag
     };
@@ -72,7 +73,8 @@ export class AlertParser {
       otherVideoFailure: !!(flags & (1 << 3)),
       busOvercrowding: !!(flags & (1 << 4)),
       abnormalDriving: !!(flags & (1 << 5)),
-      specialAlarmThreshold: !!(flags & (1 << 6))
+      specialAlarmThreshold: !!(flags & (1 << 6)),
+      setBits: this.getSetBits(flags, 32)
     };
   }
 
@@ -144,6 +146,14 @@ export class AlertParser {
 
   private static bcdToDec(value: number): number {
     return ((value >> 4) & 0x0F) * 10 + (value & 0x0F);
+  }
+
+  private static getSetBits(value: number, maxBits: number): number[] {
+    const bits: number[] = [];
+    for (let i = 0; i < maxBits; i++) {
+      if (value & (1 << i)) bits.push(i);
+    }
+    return bits;
   }
 
   private static parseTimestamp(data: Buffer): Date {
