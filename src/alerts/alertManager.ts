@@ -44,7 +44,7 @@ export class AlertManager extends EventEmitter {
   private notifier: AlertNotifier;
   private alertStorage = new AlertStorageDB();
   private alertCounter = 0;
-  private readonly duplicateWindowMs = 60 * 60 * 1000;
+  private readonly duplicateWindowMs = 0;
 
   constructor() {
     super();
@@ -173,6 +173,10 @@ export class AlertManager extends EventEmitter {
   }
 
   private shouldSuppressDuplicate(signature: string, now: Date): boolean {
+    if (this.duplicateWindowMs <= 0) {
+      return false;
+    }
+
     const nowMs = now.getTime();
     const lastSeenMs = this.recentAlertSignatures.get(signature);
 
