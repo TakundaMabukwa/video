@@ -111,6 +111,7 @@ export class AlertManager extends EventEmitter {
   async processAlert(alert: LocationAlert): Promise<void> {
     const alertSignals = this.extractAlertSignals(alert);
     if (alertSignals.length === 0) return;
+    const alertLabels = alertSignals.map((s) => this.toHumanReadableSignal(s));
     const channel = this.extractChannelFromAlert(alert);
     const primaryType = this.getPrimaryAlertType(alert, alertSignals);
     const signature = this.buildAlertSignature(alert.vehicleId, channel, primaryType);
@@ -135,6 +136,7 @@ export class AlertManager extends EventEmitter {
       metadata: {
         ...alert,
         alertSignals,
+        alertLabels,
         primaryAlertType: primaryType
       }
     };
@@ -148,14 +150,11 @@ export class AlertManager extends EventEmitter {
     console.log(`📸 Requesting screenshot for alert ${alertId}`);
     this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
 
-    // For driver-related alerts ONLY: capture video from buffer + request from camera SD
-    if (this.isDriverRelatedAlert(alert)) {
-      // Capture from circular buffer (30s pre/post)
-      await this.captureEventVideo(alertEvent);
-      
-      // Request 30s before/after from camera SD card
-      await this.requestAlertVideoFromCamera(alertEvent);
-    }
+    // Capture video evidence for ALL alerts.
+    // Flow mirrors screenshot behavior: always keep a local fallback (buffer clip),
+    // and also request camera-side video retrieval.
+    await this.captureEventVideo(alertEvent);
+    await this.requestAlertVideoFromCamera(alertEvent);
 
     // Send bell notification
     this.notifier.sendAlertNotification(alertEvent);
@@ -272,7 +271,10 @@ export class AlertManager extends EventEmitter {
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
     if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
     if (alert.videoAlarms?.busOvercrowding) return 'Bus Overcrowding';
-    return alertSignals[0] || 'General Alert';
+    if (alertSignals.length > 0) {
+      return this.toHumanReadableSignal(alertSignals[0]);
+    }
+    return 'General Alert';
   }
 
   private extractChannelFromAlert(alert: LocationAlert): number {
@@ -414,6 +416,60 @@ export class AlertManager extends EventEmitter {
     if ((alert.drivingBehavior?.custom || 0) > 0) signals.push(`jtt1078_behavior_custom_${alert.drivingBehavior?.custom}`);
 
     return Array.from(new Set(signals));
+  }
+
+  private toHumanReadableSignal(signal: string): string {
+    const directMap: Record<string, string> = {
+      jt808_emergency: 'Emergency Alarm',
+      jt808_overspeed: 'Overspeed Alarm',
+      jt808_fatigue: 'Driver Fatigue',
+      jt808_dangerous_driving: 'Dangerous Driving Behavior',
+      jt808_overspeed_warning: 'Overspeed Warning',
+      jt808_fatigue_warning: 'Fatigue Warning',
+      jt808_collision_warning: 'Collision Warning',
+
+      jtt1078_video_signal_loss: 'Video Signal Loss',
+      jtt1078_video_signal_blocking: 'Video Signal Blocking',
+      jtt1078_storage_failure: 'Storage Unit Failure',
+      jtt1078_other_video_failure: 'Other Video Equipment Failure',
+      jtt1078_bus_overcrowding: 'Bus Overcrowding',
+      jtt1078_abnormal_driving: 'Abnormal Driving Behavior Alarm',
+      jtt1078_special_alarm_threshold: 'Special Alarm Recording Threshold Reached',
+
+      jtt1078_memory_failure: 'Memory Failure Alarm',
+      jtt1078_behavior_fatigue: 'Abnormal Driving: Fatigue',
+      jtt1078_behavior_phone_call: 'Abnormal Driving: Phone Call',
+      jtt1078_behavior_smoking: 'Abnormal Driving: Smoking'
+    };
+
+    if (directMap[signal]) return directMap[signal];
+
+    if (signal.startsWith('jt808_alarm_bit_')) {
+      const bit = signal.replace('jt808_alarm_bit_', '');
+      return `JT/T 808 Alarm Bit ${bit} (see JT/T 808 alarm bit table)`;
+    }
+
+    if (signal.startsWith('jtt1078_video_alarm_bit_')) {
+      const bit = signal.replace('jtt1078_video_alarm_bit_', '');
+      return `JT/T 1078 Video Alarm Bit ${bit}`;
+    }
+
+    if (signal.startsWith('jtt1078_signal_loss_channels_')) {
+      const channels = signal.replace('jtt1078_signal_loss_channels_', '').split('_').join(', ');
+      return `Video Signal Loss (Channels: ${channels})`;
+    }
+
+    if (signal.startsWith('jtt1078_signal_blocking_channels_')) {
+      const channels = signal.replace('jtt1078_signal_blocking_channels_', '').split('_').join(', ');
+      return `Video Signal Blocking (Channels: ${channels})`;
+    }
+
+    if (signal.startsWith('jtt1078_behavior_custom_')) {
+      const custom = signal.replace('jtt1078_behavior_custom_', '');
+      return `Abnormal Driving: Custom Type ${custom}`;
+    }
+
+    return signal;
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {

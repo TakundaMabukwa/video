@@ -14,7 +14,13 @@ import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager } from '../alerts/alertManager';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
-type ScreenshotFallbackResult = { ok: boolean; imageId?: string; reason?: string };
+type ScreenshotFallbackResult = {
+  ok: boolean;
+  imageId?: string;
+  reason?: string;
+  videoEvidencePath?: string;
+  videoEvidenceReason?: string;
+};
 
 export class JTT808Server {
   private server: net.Server;
@@ -44,7 +50,9 @@ export class JTT808Server {
       void this.requestScreenshotWithFallback(vehicleId, channel, {
         fallback: true,
         fallbackDelayMs: 700,
-        alertId
+        alertId,
+        captureVideoEvidence: true,
+        videoDurationSec: 8
       });
     });
     
@@ -706,10 +714,18 @@ export class JTT808Server {
   async requestScreenshotWithFallback(
     vehicleId: string,
     channel: number = 1,
-    options?: { fallback?: boolean; fallbackDelayMs?: number; alertId?: string }
+    options?: {
+      fallback?: boolean;
+      fallbackDelayMs?: number;
+      alertId?: string;
+      captureVideoEvidence?: boolean;
+      videoDurationSec?: number;
+    }
   ): Promise<{ success: boolean; fallback: ScreenshotFallbackResult }> {
     const fallbackEnabled = options?.fallback !== false;
     const fallbackDelayMs = Math.max(0, Math.min(3000, Number(options?.fallbackDelayMs) || 600));
+    const captureVideoEvidence = options?.captureVideoEvidence === true;
+    const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
     const success = this.requestScreenshot(vehicleId, channel);
 
     if (!success) {
@@ -722,7 +738,81 @@ export class JTT808Server {
 
     await new Promise((r) => setTimeout(r, fallbackDelayMs));
     const fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    if (captureVideoEvidence) {
+      const videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+      if (videoBackup.ok && videoBackup.path) {
+        fallback.videoEvidencePath = videoBackup.path;
+      } else {
+        fallback.videoEvidenceReason = videoBackup.reason;
+      }
+    }
     return { success: true, fallback };
+  }
+
+  private async captureVideoEvidenceFromHLS(
+    vehicleId: string,
+    channel: number,
+    durationSec: number,
+    alertId?: string
+  ): Promise<{ ok: boolean; path?: string; reason?: string }> {
+    try {
+      const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+      if (!fs.existsSync(playlistPath)) {
+        return { ok: false, reason: 'HLS playlist not found' };
+      }
+
+      const evidenceDir = path.join(process.cwd(), 'recordings', vehicleId, 'evidence');
+      if (!fs.existsSync(evidenceDir)) {
+        fs.mkdirSync(evidenceDir, { recursive: true });
+      }
+
+      const base = alertId ? `${alertId}_ch${channel}` : `screenshot_ch${channel}`;
+      const outPath = path.join(evidenceDir, `${base}_${Date.now()}.mp4`);
+
+      const ffmpegOk = await new Promise<boolean>((resolve) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-y',
+          '-i', playlistPath,
+          '-t', String(durationSec),
+          '-c', 'copy',
+          '-movflags', '+faststart',
+          outPath
+        ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+        let stderr = '';
+        const timeout = setTimeout(() => {
+          ffmpeg.kill('SIGKILL');
+          resolve(false);
+        }, 12000);
+
+        ffmpeg.stderr.on('data', (d) => { stderr += d.toString(); });
+        ffmpeg.on('error', () => {
+          clearTimeout(timeout);
+          resolve(false);
+        });
+        ffmpeg.on('close', (code) => {
+          clearTimeout(timeout);
+          if (code === 0 && fs.existsSync(outPath)) {
+            resolve(true);
+          } else {
+            if (stderr) {
+              console.warn(`Video evidence fallback ffmpeg stderr: ${stderr.slice(0, 300)}`);
+            }
+            resolve(false);
+          }
+        });
+      });
+
+      if (!ffmpegOk) {
+        return { ok: false, reason: 'ffmpeg video capture failed' };
+      }
+
+      return { ok: true, path: outPath };
+    } catch (error: any) {
+      return { ok: false, reason: error?.message || 'video evidence fallback error' };
+    }
   }
 
   private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<ScreenshotFallbackResult> {
