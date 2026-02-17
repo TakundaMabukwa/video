@@ -111,7 +111,8 @@ export class AlertManager extends EventEmitter {
   async processAlert(alert: LocationAlert): Promise<void> {
     const alertSignals = this.extractAlertSignals(alert);
     if (alertSignals.length === 0) return;
-    const alertLabels = alertSignals.map((s) => this.toHumanReadableSignal(s));
+    const alertSignalDetails = alertSignals.map((s) => this.getSignalDetail(s));
+    const alertLabels = alertSignalDetails.map((d) => d.label);
     const channel = this.extractChannelFromAlert(alert);
     const primaryType = this.getPrimaryAlertType(alert, alertSignals);
     const signature = this.buildAlertSignature(alert.vehicleId, channel, primaryType);
@@ -137,6 +138,7 @@ export class AlertManager extends EventEmitter {
         ...alert,
         alertSignals,
         alertLabels,
+        alertSignalDetails,
         primaryAlertType: primaryType
       }
     };
@@ -271,9 +273,7 @@ export class AlertManager extends EventEmitter {
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
     if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
     if (alert.videoAlarms?.busOvercrowding) return 'Bus Overcrowding';
-    if (alertSignals.length > 0) {
-      return this.toHumanReadableSignal(alertSignals[0]);
-    }
+    if (alertSignals.length > 0) return this.getSignalDetail(alertSignals[0]).label;
     return 'General Alert';
   }
 
@@ -418,58 +418,172 @@ export class AlertManager extends EventEmitter {
     return Array.from(new Set(signals));
   }
 
-  private toHumanReadableSignal(signal: string): string {
-    const directMap: Record<string, string> = {
-      jt808_emergency: 'Emergency Alarm',
-      jt808_overspeed: 'Overspeed Alarm',
-      jt808_fatigue: 'Driver Fatigue',
-      jt808_dangerous_driving: 'Dangerous Driving Behavior',
-      jt808_overspeed_warning: 'Overspeed Warning',
-      jt808_fatigue_warning: 'Fatigue Warning',
-      jt808_collision_warning: 'Collision Warning',
+  private getSignalDetail(signal: string): { code: string; label: string; meaning: string; source: string } {
+    const directMap: Record<string, { label: string; meaning: string; source: string }> = {
+      jt808_emergency: {
+        label: 'Emergency Alarm',
+        meaning: 'Terminal emergency/SOS alarm bit is set.',
+        source: 'JT/T 808 alarm flag (base DWORD)'
+      },
+      jt808_overspeed: {
+        label: 'Overspeed Alarm',
+        meaning: 'Terminal reports overspeed condition.',
+        source: 'JT/T 808 alarm flag (base DWORD)'
+      },
+      jt808_fatigue: {
+        label: 'Driver Fatigue',
+        meaning: 'Terminal reports fatigue driving alarm.',
+        source: 'JT/T 808 alarm flag (base DWORD)'
+      },
+      jt808_dangerous_driving: {
+        label: 'Dangerous Driving Behavior',
+        meaning: 'Terminal reports dangerous driving behavior alarm.',
+        source: 'JT/T 808 alarm flag (base DWORD)'
+      },
+      jt808_overspeed_warning: {
+        label: 'Overspeed Warning',
+        meaning: 'Terminal reports overspeed warning state.',
+        source: 'JT/T 808 extended alarm flag'
+      },
+      jt808_fatigue_warning: {
+        label: 'Fatigue Warning',
+        meaning: 'Terminal reports fatigue warning state.',
+        source: 'JT/T 808 extended alarm flag'
+      },
+      jt808_collision_warning: {
+        label: 'Collision Warning',
+        meaning: 'Terminal reports collision warning alarm.',
+        source: 'JT/T 808 extended alarm flag'
+      },
 
-      jtt1078_video_signal_loss: 'Video Signal Loss',
-      jtt1078_video_signal_blocking: 'Video Signal Blocking',
-      jtt1078_storage_failure: 'Storage Unit Failure',
-      jtt1078_other_video_failure: 'Other Video Equipment Failure',
-      jtt1078_bus_overcrowding: 'Bus Overcrowding',
-      jtt1078_abnormal_driving: 'Abnormal Driving Behavior Alarm',
-      jtt1078_special_alarm_threshold: 'Special Alarm Recording Threshold Reached',
+      jtt1078_video_signal_loss: {
+        label: 'Video Signal Loss',
+        meaning: 'Video channel signal-loss alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit0'
+      },
+      jtt1078_video_signal_blocking: {
+        label: 'Video Signal Blocking',
+        meaning: 'Video channel masking/blocking alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit1'
+      },
+      jtt1078_storage_failure: {
+        label: 'Storage Unit Failure',
+        meaning: 'Storage unit failure alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit2'
+      },
+      jtt1078_other_video_failure: {
+        label: 'Other Video Equipment Failure',
+        meaning: 'Other video equipment failure alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit3'
+      },
+      jtt1078_bus_overcrowding: {
+        label: 'Bus Overcrowding',
+        meaning: 'Bus overcrowding alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit4'
+      },
+      jtt1078_abnormal_driving: {
+        label: 'Abnormal Driving Behavior Alarm',
+        meaning: 'Abnormal driving behavior alarm bit is set.',
+        source: 'JT/T 1078 Table 14 bit5'
+      },
+      jtt1078_special_alarm_threshold: {
+        label: 'Special Alarm Recording Threshold Reached',
+        meaning: 'Special alarm recording reached storage threshold.',
+        source: 'JT/T 1078 Table 14 bit6'
+      },
 
-      jtt1078_memory_failure: 'Memory Failure Alarm',
-      jtt1078_behavior_fatigue: 'Abnormal Driving: Fatigue',
-      jtt1078_behavior_phone_call: 'Abnormal Driving: Phone Call',
-      jtt1078_behavior_smoking: 'Abnormal Driving: Smoking'
+      jtt1078_memory_failure: {
+        label: 'Memory Failure Alarm',
+        meaning: 'Main or backup memory failure bits are set.',
+        source: 'JT/T 1078 Table 13 ID 0x17'
+      },
+      jtt1078_behavior_fatigue: {
+        label: 'Abnormal Driving: Fatigue',
+        meaning: 'Abnormal driving detail indicates fatigue.',
+        source: 'JT/T 1078 Table 15 bit0'
+      },
+      jtt1078_behavior_phone_call: {
+        label: 'Abnormal Driving: Phone Call',
+        meaning: 'Abnormal driving detail indicates phone call.',
+        source: 'JT/T 1078 Table 15 bit1'
+      },
+      jtt1078_behavior_smoking: {
+        label: 'Abnormal Driving: Smoking',
+        meaning: 'Abnormal driving detail indicates smoking.',
+        source: 'JT/T 1078 Table 15 bit2'
+      }
     };
 
-    if (directMap[signal]) return directMap[signal];
+    if (directMap[signal]) {
+      return { code: signal, ...directMap[signal] };
+    }
 
     if (signal.startsWith('jt808_alarm_bit_')) {
-      const bit = signal.replace('jt808_alarm_bit_', '');
-      return `JT/T 808 Alarm Bit ${bit} (see JT/T 808 alarm bit table)`;
+      const bit = Number(signal.replace('jt808_alarm_bit_', ''));
+      const knownBits: Record<number, { label: string; meaning: string }> = {
+        5: {
+          label: 'GNSS Antenna Disconnected',
+          meaning: 'GNSS antenna open/disconnected alarm bit is set.'
+        }
+      };
+      const mapped = knownBits[bit] || {
+        label: `JT/T 808 Alarm Bit ${bit}`,
+        meaning: `Alarm bit ${bit} is set (vendor/terminal-specific if not in your adopted profile).`
+      };
+      return {
+        code: signal,
+        label: mapped.label,
+        meaning: mapped.meaning,
+        source: 'JT/T 808 alarm flag table'
+      };
     }
 
     if (signal.startsWith('jtt1078_video_alarm_bit_')) {
       const bit = signal.replace('jtt1078_video_alarm_bit_', '');
-      return `JT/T 1078 Video Alarm Bit ${bit}`;
+      return {
+        code: signal,
+        label: `Video Alarm Bit ${bit}`,
+        meaning: `JT/T 1078 video alarm bit ${bit} is set (outside base Table 14 bit0~bit6).`,
+        source: 'JT/T 1078 Table 14 extension bit'
+      };
     }
 
     if (signal.startsWith('jtt1078_signal_loss_channels_')) {
       const channels = signal.replace('jtt1078_signal_loss_channels_', '').split('_').join(', ');
-      return `Video Signal Loss (Channels: ${channels})`;
+      return {
+        code: signal,
+        label: 'Video Signal Loss',
+        meaning: `Signal loss reported on channel(s): ${channels}.`,
+        source: 'JT/T 1078 Table 13 ID 0x15'
+      };
     }
 
     if (signal.startsWith('jtt1078_signal_blocking_channels_')) {
       const channels = signal.replace('jtt1078_signal_blocking_channels_', '').split('_').join(', ');
-      return `Video Signal Blocking (Channels: ${channels})`;
+      return {
+        code: signal,
+        label: 'Video Signal Blocking',
+        meaning: `Signal blocking reported on channel(s): ${channels}.`,
+        source: 'JT/T 1078 Table 13 ID 0x16'
+      };
     }
 
     if (signal.startsWith('jtt1078_behavior_custom_')) {
       const custom = signal.replace('jtt1078_behavior_custom_', '');
-      return `Abnormal Driving: Custom Type ${custom}`;
+      return {
+        code: signal,
+        label: `Abnormal Driving: Custom Type ${custom}`,
+        meaning: `Custom abnormal-driving type ${custom} reported by terminal.`,
+        source: 'JT/T 1078 Table 15 bit11~bit15'
+      };
     }
 
-    return signal;
+    return {
+      code: signal,
+      label: signal,
+      meaning: 'Unmapped signal code.',
+      source: 'System mapping'
+    };
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {

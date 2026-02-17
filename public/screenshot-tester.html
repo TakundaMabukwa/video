@@ -311,13 +311,32 @@
       `;
     }
 
-    function alertCard(alert, screenshots) {
+    function alertCard(alert, screenshots, videosInfo) {
       const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
       const pr = (alert.priority || 'low').toLowerCase();
       const imgs = (screenshots || []).slice(0, 8).map((s) => {
         const url = s.storage_url && s.storage_url !== 'upload-failed' && s.storage_url !== 'local-only' ? s.storage_url : '';
         return url ? `<img src="${url}" alt="${s.id}" loading="lazy" />` : '';
       }).join('');
+      const dbRecords = videosInfo?.videos?.database_records || [];
+      const hasPre = !!videosInfo?.videos?.pre_event?.path;
+      const hasPost = !!videosInfo?.videos?.post_event?.path;
+      const hasCamera = !!videosInfo?.videos?.camera_sd?.path;
+      const videoCount = (hasPre ? 1 : 0) + (hasPost ? 1 : 0) + (hasCamera ? 1 : 0) + dbRecords.length;
+      const videoLinks = [
+        hasPre ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/video/pre" target="_blank" class="meta">Pre-event video</a>` : '',
+        hasPost ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/video/post" target="_blank" class="meta">Post-event video</a>` : '',
+        hasCamera ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/videos" target="_blank" class="meta">Camera SD video info</a>` : ''
+      ].filter(Boolean).join(' | ');
+      const dbVideoLinks = dbRecords.slice(0, 3).map((v) => {
+        if (v.storage_url && v.storage_url.startsWith('http')) {
+          return `<a href="${v.storage_url}" target="_blank" class="meta">${v.video_type || 'video'} (${v.id})</a>`;
+        }
+        if (v.file_path) {
+          return `<span class="meta">${v.video_type || 'video'}: ${v.file_path}</span>`;
+        }
+        return '';
+      }).filter(Boolean).join('<br/>');
 
       return `
         <div class="alert-item">
@@ -333,6 +352,9 @@
           <div class="meta">Status: ${alert.status || 'n/a'}</div>
           <div class="meta">Screenshots: ${(screenshots || []).length}</div>
           <div class="thumbs">${imgs || '<div class="meta">No screenshots linked yet.</div>'}</div>
+          <div class="meta" style="margin-top:8px;">Videos: ${videoCount}</div>
+          <div class="meta">${videoLinks || 'No pre/post/camera video path yet.'}</div>
+          <div class="meta">${dbVideoLinks || ''}</div>
         </div>
       `;
     }
@@ -379,6 +401,9 @@
         const alertDetails = await Promise.allSettled(
           alerts.map((a) => fetch(`/api/alerts/${encodeURIComponent(a.id)}`).then((r) => r.ok ? r.json() : null))
         );
+        const alertVideos = await Promise.allSettled(
+          alerts.map((a) => fetch(`/api/alerts/${encodeURIComponent(a.id)}/videos`).then((r) => r.ok ? r.json() : null))
+        );
 
         const byAlertDetailScreens = new Map();
         for (let i = 0; i < alerts.length; i++) {
@@ -389,6 +414,15 @@
             : [];
           byAlertDetailScreens.set(String(baseAlert.id), detailedShots);
         }
+        const byAlertVideos = new Map();
+        for (let i = 0; i < alerts.length; i++) {
+          const baseAlert = alerts[i];
+          const videosResult = alertVideos[i];
+          const videos = videosResult.status === 'fulfilled'
+            ? (videosResult.value || null)
+            : null;
+          byAlertVideos.set(String(baseAlert.id), videos);
+        }
 
         summaryEl.textContent = `${alerts.length} active alert(s) | last update: ${new Date().toLocaleTimeString()}`;
         alertsEl.innerHTML = alerts.map((a) => {
@@ -396,7 +430,8 @@
           const linked = byAlertDetailScreens.get(id);
           const recent = byAlertId.get(id);
           const screenshots = (linked && linked.length) ? linked : (recent || []);
-          return alertCard(a, screenshots);
+          const videosInfo = byAlertVideos.get(id);
+          return alertCard(a, screenshots, videosInfo);
         }).join('')
           || '<div class="meta">No active alerts.</div>';
       } catch (err) {

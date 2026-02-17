@@ -663,6 +663,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           priority: row.priority,
           primaryAlertType: metadata.primaryAlertType || row.alert_type,
           alertSignals: metadata.alertSignals || [],
+          alertSignalDetails: metadata.alertSignalDetails || [],
           alarmFlags: metadata.alarmFlags || {},
           alarmFlagSetBits: metadata.alarmFlagSetBits || [],
           videoAlarms: metadata.videoAlarms || {},
