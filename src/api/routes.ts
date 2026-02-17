@@ -890,6 +890,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       // Extract video paths from metadata
       const videoClips = alert.metadata?.videoClips || {};
 
+      const hasPreEvent = !!videoClips.pre;
+      const hasPostEvent = !!videoClips.post;
+      const hasCameraVideo = !!videoClips.cameraVideo;
+      const preferredSource = (hasPreEvent || hasPostEvent)
+        ? 'buffer_pre_post'
+        : (hasCameraVideo ? 'camera_sd' : 'none');
+      const defaultSource = 'buffer_pre_post';
+
       res.json({
         success: true,
         alert_id: id,
@@ -897,31 +905,33 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         channel: alert.channel,
         alert_type: alert.alert_type,
         timestamp: alert.timestamp,
+        default_source: defaultSource,
+        preferred_source: preferredSource,
         videos: {
-          // From metadata (immediate paths)
+          // Primary evidence: frame-by-frame clips from circular buffer
           pre_event: {
             path: videoClips.pre || null,
             frames: videoClips.preFrameCount || 0,
             duration: videoClips.preDuration || 0,
-            description: '30 seconds before alert (from circular buffer)'
+            description: 'Primary evidence: 30 seconds before alert (frame-by-frame from circular buffer)'
           },
           post_event: {
             path: videoClips.post || null,
             frames: videoClips.postFrameCount || 0,
             duration: videoClips.postDuration || 0,
-            description: '30 seconds after alert (recorded live)'
+            description: 'Primary evidence: 30 seconds after alert (recorded frame-by-frame live)'
           },
           camera_sd: {
             path: videoClips.cameraVideo || null,
-            description: 'Retrieved from camera SD card (most reliable)'
+            description: 'Secondary evidence: retrieved from camera SD card'
           },
           // From videos table (database records)
           database_records: videosResult.rows
         },
         total_videos: videosResult.rows.length,
-        has_pre_event: !!videoClips.pre,
-        has_post_event: !!videoClips.post,
-        has_camera_video: !!videoClips.cameraVideo
+        has_pre_event: hasPreEvent,
+        has_post_event: hasPostEvent,
+        has_camera_video: hasCameraVideo
       });
     } catch (error) {
       res.status(500).json({
