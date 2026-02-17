@@ -14,6 +14,8 @@ import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager } from '../alerts/alertManager';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
+type ScreenshotFallbackResult = { ok: boolean; imageId?: string; reason?: string };
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -38,11 +40,12 @@ export class JTT808Server {
     
     // Listen for screenshot requests from alert manager
     this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
-      console.log(`📸 Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${channel}`);
-      this.requestScreenshot(vehicleId, channel);
-      setTimeout(() => {
-        void this.captureScreenshotFromHLS(vehicleId, channel, alertId);
-      }, 700);
+      console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${channel}`);
+      void this.requestScreenshotWithFallback(vehicleId, channel, {
+        fallback: true,
+        fallbackDelayMs: 700,
+        alertId
+      });
     });
     
     // Listen for camera video requests from alert manager
@@ -446,7 +449,7 @@ export class JTT808Server {
 
   private processAlert(alert: LocationAlert): void {
     // Check if there are any actual alerts
-    const hasBaseAlarmFlags = !!(alert.alarmFlags && (
+    const hasKnownBaseAlarmFlags = !!(alert.alarmFlags && (
       alert.alarmFlags.emergency ||
       alert.alarmFlags.overspeed ||
       alert.alarmFlags.fatigue ||
@@ -455,7 +458,11 @@ export class JTT808Server {
       alert.alarmFlags.fatigueWarning ||
       alert.alarmFlags.collisionWarning
     ));
-    const hasVideoAlarms = alert.videoAlarms && Object.values(alert.videoAlarms).some(v => v === true);
+    const hasAnyBaseAlarmBit = (alert.alarmFlagSetBits?.length || 0) > 0;
+    const hasBaseAlarmFlags = hasKnownBaseAlarmFlags || hasAnyBaseAlarmBit;
+    const hasKnownVideoAlarms = !!(alert.videoAlarms && Object.values(alert.videoAlarms).some(v => v === true));
+    const hasAnyVideoAlarmBit = (alert.videoAlarms?.setBits?.length || 0) > 0;
+    const hasVideoAlarms = hasKnownVideoAlarms || hasAnyVideoAlarmBit;
     const hasDrivingBehavior = alert.drivingBehavior && (alert.drivingBehavior.fatigue || alert.drivingBehavior.phoneCall || alert.drivingBehavior.smoking || alert.drivingBehavior.custom > 0);
     const hasSignalLoss = alert.signalLossChannels && alert.signalLossChannels.length > 0;
     const hasBlocking = alert.blockingChannels && alert.blockingChannels.length > 0;
@@ -696,12 +703,34 @@ export class JTT808Server {
     return true;
   }
 
-  private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<void> {
+  async requestScreenshotWithFallback(
+    vehicleId: string,
+    channel: number = 1,
+    options?: { fallback?: boolean; fallbackDelayMs?: number; alertId?: string }
+  ): Promise<{ success: boolean; fallback: ScreenshotFallbackResult }> {
+    const fallbackEnabled = options?.fallback !== false;
+    const fallbackDelayMs = Math.max(0, Math.min(3000, Number(options?.fallbackDelayMs) || 600));
+    const success = this.requestScreenshot(vehicleId, channel);
+
+    if (!success) {
+      return { success: false, fallback: { ok: false, reason: 'vehicle not connected' } };
+    }
+
+    if (!fallbackEnabled) {
+      return { success: true, fallback: { ok: false, reason: 'disabled' } };
+    }
+
+    await new Promise((r) => setTimeout(r, fallbackDelayMs));
+    const fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    return { success: true, fallback };
+  }
+
+  private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<ScreenshotFallbackResult> {
     try {
       const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
       if (!fs.existsSync(playlistPath)) {
         console.log(`HLS fallback skipped: playlist not found for ${vehicleId} ch${channel}`);
-        return;
+        return { ok: false, reason: 'HLS playlist not found' };
       }
 
       const imageData = await new Promise<Buffer | null>((resolve) => {
@@ -748,13 +777,15 @@ export class JTT808Server {
 
       if (!imageData || imageData.length < 4) {
         console.log(`HLS fallback capture failed for ${vehicleId} ch${channel}`);
-        return;
+        return { ok: false, reason: 'empty frame' };
       }
 
-      await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      const imageId = await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
       console.log(`Alert ${alertId || 'manual'}: HLS fallback screenshot saved for ${vehicleId} ch${channel}`);
+      return { ok: true, imageId };
     } catch (error: any) {
       console.error(`HLS fallback screenshot error for ${vehicleId} ch${channel}:`, error?.message || error);
+      return { ok: false, reason: error?.message || 'fallback error' };
     }
   }
 
@@ -958,6 +989,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 

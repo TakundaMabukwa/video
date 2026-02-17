@@ -112,6 +112,8 @@ const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
 const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
+const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
+const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
 
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
@@ -222,6 +224,56 @@ async function startServer() {
   });
   
   const wsServer = new AlertWebSocketServer(httpServer, alertManager);
+
+  // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected streams.
+  const runAutoScreenshotFanout = async () => {
+    const connected = tcpServer.getVehicles().filter(v => v.connected);
+    if (connected.length === 0) {
+      return;
+    }
+
+    const targets: Array<{ vehicleId: string; channel: number }> = [];
+    for (const v of connected) {
+      const fromCapabilities = (v.channels || [])
+        .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
+        .map(ch => Number(ch.logicalChannel))
+        .filter(ch => Number.isFinite(ch) && ch > 0);
+
+      const fromActiveStreams = Array.from(v.activeStreams)
+        .map(ch => Number(ch))
+        .filter(ch => Number.isFinite(ch) && ch > 0);
+
+      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : (fromActiveStreams.length ? fromActiveStreams : [1]))];
+      for (const channel of channels) {
+        targets.push({ vehicleId: String(v.id), channel });
+      }
+    }
+
+    if (targets.length === 0) {
+      return;
+    }
+
+    const results = await Promise.allSettled(
+      targets.map(t =>
+        tcpServer.requestScreenshotWithFallback(t.vehicleId, t.channel, {
+          fallback: true,
+          fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
+        })
+      )
+    );
+
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+    const fail = results.length - ok;
+    console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
+  };
+
+  setTimeout(() => {
+    void runAutoScreenshotFanout();
+  }, 5000);
+
+  setInterval(() => {
+    void runAutoScreenshotFanout();
+  }, AUTO_SCREENSHOT_INTERVAL_MS);
   
   // Alert reminder scheduler - Check for unattended alerts every 5 minutes
   setInterval(async () => {

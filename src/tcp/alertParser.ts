@@ -118,17 +118,27 @@ export class AlertParser {
   }
 
   private static parseAbnormalDriving(data: Buffer): AbnormalDrivingBehavior {
-    if (data.length < 3) return {} as AbnormalDrivingBehavior;
-    
+    // JT/T 1078 Table 13 defines 0x18 as WORD (2 bytes).
+    // Some vendors append extra bytes; if present we treat byte 2 as optional fatigue level.
+    if (data.length < 2) {
+      return {
+        fatigue: false,
+        phoneCall: false,
+        smoking: false,
+        custom: 0,
+        fatigueLevel: 0
+      };
+    }
+
     const behaviorFlags = data.readUInt16BE(0);
-    const fatigueLevel = data.readUInt8(2); // Byte 2: Fatigue level 0-100
-    
+    const fatigueLevel = data.length >= 3 ? data.readUInt8(2) : 0;
+
     return {
       fatigue: !!(behaviorFlags & (1 << 0)),     // bit0: fatigue
-      phoneCall: !!(behaviorFlags & (1 << 1)),   // bit1: call  
+      phoneCall: !!(behaviorFlags & (1 << 1)),   // bit1: call
       smoking: !!(behaviorFlags & (1 << 2)),     // bit2: smoking
       custom: (behaviorFlags >> 11) & 0x1F,      // bits 11-15: custom
-      fatigueLevel                                // 0-100 scale per Table 15
+      fatigueLevel
     };
   }
 

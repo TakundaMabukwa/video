@@ -3,79 +3,10 @@ import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
 import { SpeedingManager } from '../services/speedingManager';
 import * as path from 'path';
-import * as fs from 'fs';
-import { spawn } from 'child_process';
-import { ImageStorage } from '../storage/imageStorage';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
   const speedingManager = new SpeedingManager();
-  const imageStorage = new ImageStorage();
-
-  const captureScreenshotFromHLS = async (vehicleId: string, channel: number): Promise<{ ok: boolean; imageId?: string; reason?: string }> => {
-    const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
-    if (!fs.existsSync(playlistPath)) {
-      return { ok: false, reason: 'HLS playlist not found' };
-    }
-
-    return await new Promise((resolve) => {
-      const ffmpeg = spawn('ffmpeg', [
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-i', playlistPath,
-        '-frames:v', '1',
-        '-f', 'image2pipe',
-        '-vcodec', 'mjpeg',
-        'pipe:1'
-      ], {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      const chunks: Buffer[] = [];
-      let stderr = '';
-      let settled = false;
-
-      const finalize = async (ok: boolean, reason?: string) => {
-        if (settled) return;
-        settled = true;
-        if (!ok) {
-          resolve({ ok: false, reason: reason || 'ffmpeg failed' });
-          return;
-        }
-        try {
-          const imageData = Buffer.concat(chunks);
-          if (imageData.length < 4) {
-            resolve({ ok: false, reason: 'empty frame' });
-            return;
-          }
-          const imageId = await imageStorage.saveImage(vehicleId, channel, imageData);
-          resolve({ ok: true, imageId });
-        } catch (e: any) {
-          resolve({ ok: false, reason: e?.message || 'save failed' });
-        }
-      };
-
-      const timeout = setTimeout(() => {
-        ffmpeg.kill('SIGKILL');
-        void finalize(false, 'ffmpeg timeout');
-      }, 6000);
-
-      ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
-      ffmpeg.stderr.on('data', (d) => { stderr += d.toString(); });
-      ffmpeg.on('error', (err) => {
-        clearTimeout(timeout);
-        void finalize(false, err.message);
-      });
-      ffmpeg.on('close', (code) => {
-        clearTimeout(timeout);
-        if (code === 0 && chunks.length > 0) {
-          void finalize(true);
-        } else {
-          void finalize(false, stderr || `ffmpeg exit ${code}`);
-        }
-      });
-    });
-  };
 
   // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
@@ -251,10 +182,12 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.post('/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
     const { channel = 1, fallback = true, fallbackDelayMs = 600 } = req.body;
+    const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
+      fallback: !!fallback,
+      fallbackDelayMs: Number(fallbackDelayMs)
+    });
 
-    const success = tcpServer.requestScreenshot(id, channel);
-
-    if (!success) {
+    if (!result.success) {
       res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
@@ -262,17 +195,33 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       return;
     }
 
-    let fallbackResult: { ok: boolean; imageId?: string; reason?: string } | undefined;
-    if (fallback) {
-      const wait = Math.max(0, Math.min(3000, Number(fallbackDelayMs) || 600));
-      await new Promise((r) => setTimeout(r, wait));
-      fallbackResult = await captureScreenshotFromHLS(id, Number(channel));
+    res.json({
+      success: true,
+      message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
+      fallback: result.fallback || { ok: false, reason: 'disabled' }
+    });
+  });
+
+  // Alias route used by external frontend proxy path
+  router.post('/video-server/vehicles/:id/screenshot', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, fallback = true, fallbackDelayMs = 600 } = req.body;
+    const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
+      fallback: !!fallback,
+      fallbackDelayMs: Number(fallbackDelayMs)
+    });
+
+    if (!result.success) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
     }
 
     res.json({
       success: true,
       message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
-      fallback: fallbackResult || { ok: false, reason: 'disabled' }
+      fallback: result.fallback || { ok: false, reason: 'disabled' }
     });
   });
 
