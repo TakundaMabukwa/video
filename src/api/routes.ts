@@ -3,10 +3,25 @@ import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
 import { SpeedingManager } from '../services/speedingManager';
 import * as path from 'path';
+import * as fs from 'fs';
+import { spawn } from 'child_process';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
   const speedingManager = new SpeedingManager();
+  const manualVideoJobs = new Map<string, {
+    id: string;
+    vehicleId: string;
+    channel: number;
+    startTime: string;
+    endTime: string;
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    createdAt: string;
+    updatedAt: string;
+    outputPath?: string;
+    outputUrl?: string;
+    error?: string;
+  }>();
   const buildAlertMediaLinks = (alertId: string) => {
     const id = encodeURIComponent(String(alertId));
     return {
@@ -21,6 +36,83 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
+  const buildManualVideoJob = (
+    vehicleId: string,
+    channel: number,
+    start: Date,
+    end: Date
+  ) => {
+    const id = `JOB-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const now = new Date().toISOString();
+    const durationSec = Math.max(1, Math.min(300, Math.ceil((end.getTime() - start.getTime()) / 1000)));
+    const outputDir = path.join(process.cwd(), 'recordings', vehicleId, 'manual');
+    const outputName = `${id}_ch${channel}.mp4`;
+    const outputPath = path.join(outputDir, outputName);
+    const outputUrl = `/api/videos/jobs/${encodeURIComponent(id)}/file`;
+    const job = {
+      id,
+      vehicleId,
+      channel,
+      startTime: start.toISOString(),
+      endTime: end.toISOString(),
+      status: 'queued' as const,
+      createdAt: now,
+      updatedAt: now,
+      outputPath,
+      outputUrl
+    };
+    manualVideoJobs.set(id, job);
+
+    const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+    setTimeout(() => {
+      const current = manualVideoJobs.get(id);
+      if (!current) return;
+      current.status = 'running';
+      current.updatedAt = new Date().toISOString();
+      manualVideoJobs.set(id, current);
+
+      try {
+        fs.mkdirSync(outputDir, { recursive: true });
+      } catch {}
+
+      const ffmpeg = spawn('ffmpeg', [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-y',
+        '-i', playlistPath,
+        '-t', String(durationSec),
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        outputPath
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
+      ffmpeg.on('error', (err) => {
+        const failed = manualVideoJobs.get(id);
+        if (!failed) return;
+        failed.status = 'failed';
+        failed.error = err?.message || 'ffmpeg spawn failed';
+        failed.updatedAt = new Date().toISOString();
+        manualVideoJobs.set(id, failed);
+      });
+      ffmpeg.on('close', (code) => {
+        const finalJob = manualVideoJobs.get(id);
+        if (!finalJob) return;
+        const ok = code === 0 && fs.existsSync(outputPath);
+        if (ok) {
+          finalJob.status = 'completed';
+        } else {
+          finalJob.status = 'failed';
+          finalJob.error = stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`;
+        }
+        finalJob.updatedAt = new Date().toISOString();
+        manualVideoJobs.set(id, finalJob);
+      });
+    }, 1200);
+
+    return { id, outputUrl };
+  };
 
   // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
@@ -1093,7 +1185,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       startTime,
       endTime,
       mode = 'both',
-      queryResources = true
+      queryResources = true,
+      recordPlayback = true
     } = req.body || {};
 
     const vehicle = tcpServer.getVehicle(id);
@@ -1141,6 +1234,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const querySent = queryResources ? tcpServer.queryResourceList(id, ch, start, end) : false;
     const streamRequestSent = wantStream ? tcpServer.requestCameraVideo(id, ch, start, end) : false;
     const downloadRequestSent = wantDownload ? tcpServer.requestCameraVideoDownload(id, ch, start, end) : false;
+    const warnings: string[] = [];
+    if (wantDownload && !downloadRequestSent) {
+      warnings.push('Download request not sent. Configure FTP env vars: ALERT_VIDEO_FTP_HOST/PORT/USER/PASS/PATH');
+    }
+    let playbackJobId: string | null = null;
+    let playbackJobUrl: string | null = null;
+    if (recordPlayback && streamRequestSent) {
+      const job = buildManualVideoJob(id, ch, start, end);
+      playbackJobId = job.id;
+      playbackJobUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}`;
+    }
 
     const anySent = streamRequestSent || downloadRequestSent || querySent;
     if (!anySent) {
@@ -1153,7 +1257,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           mode: normalizedMode,
           querySent,
           streamRequestSent,
-          downloadRequestSent
+          downloadRequestSent,
+          warnings,
+          playbackJobId,
+          playbackJobUrl
         }
       });
     }
@@ -1169,9 +1276,42 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         endTime: end.toISOString(),
         querySent,
         streamRequestSent,
-        downloadRequestSent
+        downloadRequestSent,
+        warnings,
+        playbackJobId,
+        playbackJobUrl
       }
     });
+  });
+
+  // Get status of a manual playback capture job
+  router.get('/videos/jobs/:id', (req, res) => {
+    const { id } = req.params;
+    const job = manualVideoJobs.get(id);
+    if (!job) {
+      return res.status(404).json({
+        success: false,
+        message: `Job ${id} not found`
+      });
+    }
+    res.json({
+      success: true,
+      data: job
+    });
+  });
+
+  // Stream/download generated manual playback file
+  router.get('/videos/jobs/:id/file', (req, res) => {
+    const { id } = req.params;
+    const job = manualVideoJobs.get(id);
+    if (!job) {
+      return res.status(404).json({ success: false, message: `Job ${id} not found` });
+    }
+    if (job.status !== 'completed' || !job.outputPath || !fs.existsSync(job.outputPath)) {
+      return res.status(404).json({ success: false, message: 'Video file not ready' });
+    }
+    res.setHeader('Content-Type', 'video/mp4');
+    res.sendFile(path.resolve(job.outputPath));
   });
 
   // TEST: Request playback (0x9201)

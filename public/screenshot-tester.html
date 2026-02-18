@@ -263,8 +263,8 @@
             <div>
               <label for="videoMode">Mode</label>
               <select id="videoMode">
+                <option value="stream">Playback Stream (Recommended)</option>
                 <option value="both">Both (Stream + Download)</option>
-                <option value="stream">Stream Only</option>
                 <option value="download">Download Only</option>
               </select>
             </div>
@@ -281,6 +281,25 @@
             <button id="videoFillNowBtn">Set Last 60s</button>
           </div>
           <div id="videoResult" class="meta" style="margin-top:10px;">No request yet.</div>
+          <div id="videoJobStatus" class="meta" style="margin-top:8px;"></div>
+          <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button id="videoOpenViewerBtn">Open Full Viewer</button>
+          </div>
+          <div style="margin-top:12px;">
+            <iframe
+              id="videoPreviewFrame"
+              title="Video Preview"
+              src=""
+              style="width:100%; min-height:460px; border:1px solid var(--border); border-radius:8px; background:#0a1020;"
+            ></iframe>
+          </div>
+          <div style="margin-top:12px;">
+            <video
+              id="videoReadyPlayer"
+              controls
+              style="width:100%; max-height:420px; border:1px solid var(--border); border-radius:8px; background:#000;"
+            ></video>
+          </div>
         </div>
       </div>
     </div>
@@ -310,6 +329,9 @@
     const videoModeEl = document.getElementById('videoMode');
     const videoQueryResourcesEl = document.getElementById('videoQueryResources');
     const videoResultEl = document.getElementById('videoResult');
+    const videoPreviewFrameEl = document.getElementById('videoPreviewFrame');
+    const videoJobStatusEl = document.getElementById('videoJobStatus');
+    const videoReadyPlayerEl = document.getElementById('videoReadyPlayer');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -319,6 +341,7 @@
     let activeTab = 'screenshots';
     let recentScreenshotsCache = [];
     let lastAlertCount = null;
+    let videoJobPollTimer = null;
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -502,17 +525,76 @@
         }
 
         const d = body.data || {};
+        const warnings = Array.isArray(d.warnings) ? d.warnings : [];
         videoResultEl.innerHTML = `
           <strong>Request Sent</strong><br/>
           Vehicle: ${d.vehicleId} | Channel: ${d.channel} | Mode: ${d.mode}<br/>
           Window: ${new Date(d.startTime).toLocaleString()} -> ${new Date(d.endTime).toLocaleString()}<br/>
           Query Sent: ${d.querySent ? 'Yes' : 'No'} | Stream Sent: ${d.streamRequestSent ? 'Yes' : 'No'} | Download Sent: ${d.downloadRequestSent ? 'Yes' : 'No'}
+          ${warnings.length ? `<br/><span style="color:#f39c12;">${warnings.join(' | ')}</span>` : ''}
         `;
         setStatus(body.message || 'Video request submitted.', 'ok');
+        videoReadyPlayerEl.removeAttribute('src');
+        videoReadyPlayerEl.load();
+
+        if (d.streamRequestSent) {
+          const previewUrl = `/live-stream.html?vehicleId=${encodeURIComponent(vehicleId)}&channel=${encodeURIComponent(channel)}&autostart=1&embedded=1`;
+          videoPreviewFrameEl.src = previewUrl;
+        }
+
+        if (d.playbackJobId) {
+          pollVideoJob(d.playbackJobId);
+        } else {
+          videoJobStatusEl.textContent = 'No capture job started.';
+        }
       } catch (err) {
         videoResultEl.textContent = `Request failed: ${err.message}`;
         setStatus(`Video request failed: ${err.message}`, 'err');
+        videoJobStatusEl.textContent = '';
       }
+    }
+
+    async function pollVideoJob(jobId) {
+      if (videoJobPollTimer) {
+        clearInterval(videoJobPollTimer);
+        videoJobPollTimer = null;
+      }
+
+      const check = async () => {
+        try {
+          const res = await fetch(`/api/videos/jobs/${encodeURIComponent(jobId)}`);
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body.success) {
+            videoJobStatusEl.textContent = `Job ${jobId}: status fetch failed`;
+            return;
+          }
+          const j = body.data || {};
+          videoJobStatusEl.textContent = `Job ${jobId}: ${j.status || 'unknown'}`;
+
+          if (j.status === 'completed') {
+            if (videoJobPollTimer) {
+              clearInterval(videoJobPollTimer);
+              videoJobPollTimer = null;
+            }
+            const fileUrl = j.outputUrl || `/api/videos/jobs/${encodeURIComponent(jobId)}/file`;
+            videoReadyPlayerEl.src = fileUrl;
+            videoReadyPlayerEl.load();
+            setStatus(`Video ready: ${jobId}`, 'ok');
+          } else if (j.status === 'failed') {
+            if (videoJobPollTimer) {
+              clearInterval(videoJobPollTimer);
+              videoJobPollTimer = null;
+            }
+            const err = j.error ? ` (${j.error})` : '';
+            setStatus(`Video capture failed${err}`, 'err');
+          }
+        } catch (err) {
+          videoJobStatusEl.textContent = `Job ${jobId}: polling error`;
+        }
+      };
+
+      await check();
+      videoJobPollTimer = setInterval(check, 2000);
     }
 
     async function fetchRecentScreenshots() {
@@ -814,6 +896,12 @@
     tabVideoEl.addEventListener('click', () => setTab('video'));
     document.getElementById('videoRequestBtn').addEventListener('click', requestVideoByRange);
     document.getElementById('videoFillNowBtn').addEventListener('click', setDefaultVideoWindow);
+    document.getElementById('videoOpenViewerBtn').addEventListener('click', () => {
+      const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
+      const channel = Number(videoChannelEl.value || 1);
+      const url = `/live-stream.html?vehicleId=${encodeURIComponent(vehicleId)}&channel=${encodeURIComponent(channel)}&autostart=1`;
+      window.open(url, '_blank');
+    });
     alertsEl.addEventListener('click', (e) => {
       const target = e.target.closest('button[data-request-video],button[data-open-videos]');
       if (!target) return;

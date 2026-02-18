@@ -52,6 +52,18 @@
     let ws = null;
     const streams = new Map();
     let vehicles = [];
+    const query = new URLSearchParams(window.location.search);
+    const presetVehicleId = query.get('vehicleId') || '';
+    const presetChannel = Number(query.get('channel') || '1');
+    const presetAutoStart = query.get('autostart') === '1';
+    const embedded = query.get('embedded') === '1';
+
+    if (embedded) {
+      document.body.style.margin = '0';
+      document.body.style.padding = '10px';
+      document.querySelector('.vehicles-section').style.display = 'none';
+      document.querySelector('h1').textContent = 'Live Stream Preview';
+    }
 
     function connect() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -67,6 +79,9 @@
         document.getElementById('status').textContent = '✅ Connected to video server';
         console.log('✅ WebSocket connected');
         refreshVehicles();
+        if (presetAutoStart && presetVehicleId && Number.isFinite(presetChannel) && presetChannel > 0) {
+          setTimeout(() => subscribe(presetVehicleId, presetChannel), 700);
+        }
       };
 
       ws.onclose = (event) => {
