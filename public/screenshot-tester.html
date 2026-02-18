@@ -254,11 +254,11 @@
             </div>
             <div>
               <label for="videoStartTime">Start Time</label>
-              <input id="videoStartTime" type="datetime-local" />
+              <input id="videoStartTime" type="datetime-local" step="1" />
             </div>
             <div>
               <label for="videoEndTime">End Time</label>
-              <input id="videoEndTime" type="datetime-local" />
+              <input id="videoEndTime" type="datetime-local" step="1" />
             </div>
             <div>
               <label for="videoMode">Mode</label>
@@ -358,7 +358,7 @@
 
     function toLocalDatetimeValue(date) {
       const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
-      return d.toISOString().slice(0, 16);
+      return d.toISOString().slice(0, 19);
     }
 
     function setDefaultVideoWindow() {
@@ -1038,9 +1038,10 @@
       const start = btn.getAttribute('data-clip-start');
       const end = btn.getAttribute('data-clip-end');
       const ch = btn.getAttribute('data-clip-channel');
-      if (start) videoStartTimeEl.value = start.replace(' ', 'T').slice(0, 16);
-      if (end) videoEndTimeEl.value = end.replace(' ', 'T').slice(0, 16);
+      if (start) videoStartTimeEl.value = start.replace(' ', 'T').slice(0, 19);
+      if (end) videoEndTimeEl.value = end.replace(' ', 'T').slice(0, 19);
       if (ch) videoChannelEl.value = String(Number(ch) || 1);
+      setStatus(`Starting clip stream: ${start || ''} -> ${end || ''}`, 'ok');
       requestVideoByRange();
     });
     videoSavedListEl.addEventListener('click', (e) => {
