@@ -141,6 +141,23 @@ Response:
 }
 ```
 
+## 6) Alert Videos (grouped by alert, with priority hint)
+- `GET /api/alerts/:id/videos`
+
+Important:
+- `preferred_source` tells frontend which source to prioritize.
+- `default_source` is always `buffer_pre_post` (policy default).
+- Current behavior prioritizes frame-by-frame buffer clips:
+  - `buffer_pre_post` (primary)
+  - `camera_sd` (secondary fallback)
+
+Response includes:
+- `preferred_source`
+- `videos.pre_event`
+- `videos.post_event`
+- `videos.camera_sd`
+- `videos.database_records`
+
 ## Optional (recommended)
 - `GET /api/alerts/history?device_id=<id>&days=7`
 - `GET /api/alerts/stats`

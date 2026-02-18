@@ -587,12 +587,12 @@ export class AlertManager extends EventEmitter {
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {
-    // Calculate 30s before and after alert time
+    // Post-alert evidence window: alert time to +30s
     const alertTime = alert.timestamp;
-    const startTime = new Date(alertTime.getTime() - 30 * 1000); // 30s before
-    const endTime = new Date(alertTime.getTime() + 30 * 1000);   // 30s after
+    const startTime = new Date(alertTime.getTime());
+    const endTime = new Date(alertTime.getTime() + 30 * 1000);
 
-    console.log(`🎥 Requesting 30s pre/post video from camera SD card for alert ${alert.id}`);
+    console.log(`🎥 Requesting post-alert camera video (0~30s) for alert ${alert.id}`);
     
     // Emit request for camera video retrieval (0x9201 command)
     this.emit('request-camera-video', {
@@ -606,5 +606,15 @@ export class AlertManager extends EventEmitter {
       memoryType: 1,     // Main storage
       playbackMethod: 0  // Normal playback
     });
+
+    // File transfer request (0x9206)
+    this.emit('request-camera-video-download', {
+      vehicleId: alert.vehicleId,
+      channel: alert.channel,
+      startTime,
+      endTime,
+      alertId: alert.id
+    });
   }
 }
+

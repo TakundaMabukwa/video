@@ -226,6 +226,7 @@
       <div class="tabs">
         <button id="tabScreenshots" class="tab-btn active">Screenshots</button>
         <button id="tabAlerts" class="tab-btn">Alerts</button>
+        <button id="tabVideo" class="tab-btn">Video</button>
       </div>
       <div class="topline">
         <div>
@@ -239,6 +240,48 @@
       </div>
       <div id="paneAlerts" class="tab-pane">
         <div id="alerts" class="grid"></div>
+      </div>
+      <div id="paneVideo" class="tab-pane">
+        <div class="card" style="margin:0; padding:12px;">
+          <div class="row" style="grid-template-columns: 2fr 1fr 1fr 1fr 1fr auto;">
+            <div>
+              <label for="videoVehicleId">Vehicle ID</label>
+              <input id="videoVehicleId" placeholder="e.g. 221087868252" />
+            </div>
+            <div>
+              <label for="videoChannel">Channel</label>
+              <input id="videoChannel" type="number" min="1" value="1" />
+            </div>
+            <div>
+              <label for="videoStartTime">Start Time</label>
+              <input id="videoStartTime" type="datetime-local" />
+            </div>
+            <div>
+              <label for="videoEndTime">End Time</label>
+              <input id="videoEndTime" type="datetime-local" />
+            </div>
+            <div>
+              <label for="videoMode">Mode</label>
+              <select id="videoMode">
+                <option value="both">Both (Stream + Download)</option>
+                <option value="stream">Stream Only</option>
+                <option value="download">Download Only</option>
+              </select>
+            </div>
+            <div>
+              <label for="videoRequestBtn">Action</label>
+              <button id="videoRequestBtn" class="primary">Pull Video</button>
+            </div>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <label style="display:flex; align-items:center; gap:8px; margin:0;">
+              <input id="videoQueryResources" type="checkbox" checked style="width:auto;" />
+              Query Resource List First (0x9205)
+            </label>
+            <button id="videoFillNowBtn">Set Last 60s</button>
+          </div>
+          <div id="videoResult" class="meta" style="margin-top:10px;">No request yet.</div>
+        </div>
       </div>
     </div>
   </div>
@@ -256,8 +299,17 @@
     const alertsEl = document.getElementById('alerts');
     const paneScreenshotsEl = document.getElementById('paneScreenshots');
     const paneAlertsEl = document.getElementById('paneAlerts');
+    const paneVideoEl = document.getElementById('paneVideo');
     const tabScreenshotsEl = document.getElementById('tabScreenshots');
     const tabAlertsEl = document.getElementById('tabAlerts');
+    const tabVideoEl = document.getElementById('tabVideo');
+    const videoVehicleIdEl = document.getElementById('videoVehicleId');
+    const videoChannelEl = document.getElementById('videoChannel');
+    const videoStartTimeEl = document.getElementById('videoStartTime');
+    const videoEndTimeEl = document.getElementById('videoEndTime');
+    const videoModeEl = document.getElementById('videoMode');
+    const videoQueryResourcesEl = document.getElementById('videoQueryResources');
+    const videoResultEl = document.getElementById('videoResult');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -273,6 +325,18 @@
       statusEl.textContent = text;
     }
 
+    function toLocalDatetimeValue(date) {
+      const d = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+      return d.toISOString().slice(0, 16);
+    }
+
+    function setDefaultVideoWindow() {
+      const end = new Date();
+      const start = new Date(end.getTime() - 60 * 1000);
+      videoStartTimeEl.value = toLocalDatetimeValue(start);
+      videoEndTimeEl.value = toLocalDatetimeValue(end);
+    }
+
     async function loadVehicles() {
       try {
         const res = await fetch('/api/vehicles/connected');
@@ -280,6 +344,7 @@
         const vehicles = await res.json();
         if (Array.isArray(vehicles) && vehicles.length > 0) {
           vehicleIdEl.value = vehicles[0].id;
+          videoVehicleIdEl.value = vehicles[0].id;
           setStatus(`Loaded ${vehicles.length} connected vehicle(s). Using ${vehicles[0].id}.`, 'ok');
         } else {
           setStatus('No connected vehicles found.', 'warn');
@@ -355,8 +420,99 @@
           <div class="meta" style="margin-top:8px;">Videos: ${videoCount}</div>
           <div class="meta">${videoLinks || 'No pre/post/camera video path yet.'}</div>
           <div class="meta">${dbVideoLinks || ''}</div>
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button data-request-video="${String(alert.id)}" class="primary" style="width:auto; padding:8px 10px;">
+              Request Camera Video (-30s)
+            </button>
+            <button data-open-videos="${String(alert.id)}" style="width:auto; padding:8px 10px;">
+              Open Video JSON
+            </button>
+          </div>
         </div>
       `;
+    }
+
+    async function requestAlertReportVideo(alertId) {
+      try {
+        setStatus(`Requesting camera report video for alert ${alertId}...`);
+        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/request-report-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lookbackSeconds: 30,
+            forwardSeconds: 0,
+            queryResources: true
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        const start = body?.data?.startTime ? new Date(body.data.startTime).toLocaleString() : 'n/a';
+        const end = body?.data?.endTime ? new Date(body.data.endTime).toLocaleString() : 'n/a';
+        setStatus(`Video request sent. Window: ${start} -> ${end}`, 'ok');
+        setTimeout(refreshAlerts, 1500);
+      } catch (err) {
+        setStatus(`Video request failed: ${err.message}`, 'err');
+      }
+    }
+
+    async function requestVideoByRange() {
+      const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
+      const channel = Number(videoChannelEl.value || 1);
+      const startLocal = videoStartTimeEl.value;
+      const endLocal = videoEndTimeEl.value;
+      const mode = videoModeEl.value || 'both';
+      const queryResources = !!videoQueryResourcesEl.checked;
+
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required for video request.', 'warn');
+        return;
+      }
+      if (!startLocal || !endLocal) {
+        setStatus('Start and End time are required for video request.', 'warn');
+        return;
+      }
+
+      const start = new Date(startLocal);
+      const end = new Date(endLocal);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+        setStatus('Invalid video time range.', 'warn');
+        return;
+      }
+
+      setStatus(`Requesting video for ${vehicleId} ch${channel}...`);
+      videoResultEl.textContent = 'Submitting request...';
+
+      try {
+        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/request-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel,
+            startTime: start.toISOString(),
+            endTime: end.toISOString(),
+            mode,
+            queryResources
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+
+        const d = body.data || {};
+        videoResultEl.innerHTML = `
+          <strong>Request Sent</strong><br/>
+          Vehicle: ${d.vehicleId} | Channel: ${d.channel} | Mode: ${d.mode}<br/>
+          Window: ${new Date(d.startTime).toLocaleString()} -> ${new Date(d.endTime).toLocaleString()}<br/>
+          Query Sent: ${d.querySent ? 'Yes' : 'No'} | Stream Sent: ${d.streamRequestSent ? 'Yes' : 'No'} | Download Sent: ${d.downloadRequestSent ? 'Yes' : 'No'}
+        `;
+        setStatus(body.message || 'Video request submitted.', 'ok');
+      } catch (err) {
+        videoResultEl.textContent = `Request failed: ${err.message}`;
+        setStatus(`Video request failed: ${err.message}`, 'err');
+      }
     }
 
     async function fetchRecentScreenshots() {
@@ -442,6 +598,8 @@
     async function refreshCurrentTab() {
       if (activeTab === 'alerts') {
         await refreshAlerts();
+      } else if (activeTab === 'video') {
+        summaryEl.textContent = 'Submit an arbitrary time range request to retrieve camera video.';
       } else {
         await refreshScreenshots();
       }
@@ -618,11 +776,22 @@
     function setTab(tab) {
       activeTab = tab;
       const isAlerts = tab === 'alerts';
+      const isVideo = tab === 'video';
+      const isScreenshots = tab === 'screenshots';
+
       tabAlertsEl.classList.toggle('active', isAlerts);
-      tabScreenshotsEl.classList.toggle('active', !isAlerts);
+      tabScreenshotsEl.classList.toggle('active', isScreenshots);
+      tabVideoEl.classList.toggle('active', isVideo);
+
       paneAlertsEl.classList.toggle('active', isAlerts);
-      paneScreenshotsEl.classList.toggle('active', !isAlerts);
-      panelTitleEl.textContent = isAlerts ? 'Active Alerts + Linked Screenshots' : 'Recent Screenshots';
+      paneScreenshotsEl.classList.toggle('active', isScreenshots);
+      paneVideoEl.classList.toggle('active', isVideo);
+
+      panelTitleEl.textContent = isAlerts
+        ? 'Active Alerts + Linked Screenshots'
+        : isVideo
+          ? 'Video Retrieval'
+          : 'Recent Screenshots';
       refreshCurrentTab();
     }
 
@@ -642,8 +811,27 @@
     });
     tabScreenshotsEl.addEventListener('click', () => setTab('screenshots'));
     tabAlertsEl.addEventListener('click', () => setTab('alerts'));
+    tabVideoEl.addEventListener('click', () => setTab('video'));
+    document.getElementById('videoRequestBtn').addEventListener('click', requestVideoByRange);
+    document.getElementById('videoFillNowBtn').addEventListener('click', setDefaultVideoWindow);
+    alertsEl.addEventListener('click', (e) => {
+      const target = e.target.closest('button[data-request-video],button[data-open-videos]');
+      if (!target) return;
+
+      const requestId = target.getAttribute('data-request-video');
+      if (requestId) {
+        requestAlertReportVideo(requestId);
+        return;
+      }
+
+      const openId = target.getAttribute('data-open-videos');
+      if (openId) {
+        window.open(`/api/alerts/${encodeURIComponent(openId)}/videos`, '_blank');
+      }
+    });
 
     loadVehicles();
+    setDefaultVideoWindow();
     refreshCurrentTab();
     startAutoRefresh();
     startAutoCapture();

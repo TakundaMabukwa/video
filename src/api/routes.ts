@@ -7,6 +7,20 @@ import * as path from 'path';
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
   const speedingManager = new SpeedingManager();
+  const buildAlertMediaLinks = (alertId: string) => {
+    const id = encodeURIComponent(String(alertId));
+    return {
+      alert: `/api/alerts/${id}`,
+      videos: `/api/alerts/${id}/videos`,
+      preVideo: `/api/alerts/${id}/video/pre`,
+      postVideo: `/api/alerts/${id}/video/post`,
+      requestReportVideo: `/api/alerts/${id}/request-report-video`
+    };
+  };
+  const withAlertMediaLinks = (alert: any) => ({
+    ...alert,
+    mediaLinks: buildAlertMediaLinks(alert.id)
+  });
 
   // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
@@ -486,7 +500,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const alerts = alertManager.getActiveAlerts();
     res.json({
       success: true,
-      alerts: alerts,
+      alerts: alerts.map(withAlertMediaLinks),
       count: alerts.length
     });
   });
@@ -707,14 +721,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       res.json({
         success: true,
         alert: {
-          ...alert,
+          ...withAlertMediaLinks(alert),
           screenshots: screenshots.rows
         }
       });
     } catch (error) {
       res.json({
         success: true,
-        alert: alert
+        alert: withAlertMediaLinks(alert)
       });
     }
   });
@@ -905,24 +919,28 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         channel: alert.channel,
         alert_type: alert.alert_type,
         timestamp: alert.timestamp,
+        media_links: buildAlertMediaLinks(id),
         default_source: defaultSource,
         preferred_source: preferredSource,
         videos: {
           // Primary evidence: frame-by-frame clips from circular buffer
           pre_event: {
             path: videoClips.pre || null,
+            url: videoClips.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null,
             frames: videoClips.preFrameCount || 0,
             duration: videoClips.preDuration || 0,
             description: 'Primary evidence: 30 seconds before alert (frame-by-frame from circular buffer)'
           },
           post_event: {
             path: videoClips.post || null,
+            url: videoClips.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null,
             frames: videoClips.postFrameCount || 0,
             duration: videoClips.postDuration || 0,
             description: 'Primary evidence: 30 seconds after alert (recorded frame-by-frame live)'
           },
           camera_sd: {
             path: videoClips.cameraVideo || null,
+            request_url: `/api/alerts/${encodeURIComponent(id)}/request-report-video`,
             description: 'Secondary evidence: retrieved from camera SD card'
           },
           // From videos table (database records)
@@ -937,6 +955,112 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       res.status(500).json({
         success: false,
         message: 'Failed to fetch alert videos'
+      });
+    }
+  });
+
+  // Request camera SD playback window for reporting (default: 30s before alert)
+  router.post('/alerts/:id/request-report-video', async (req, res) => {
+    const { id } = req.params;
+    const lookbackSeconds = Math.max(0, Math.min(600, Number(req.body?.lookbackSeconds ?? 30)));
+    const forwardSeconds = Math.max(0, Math.min(600, Number(req.body?.forwardSeconds ?? 0)));
+    const queryResources = req.body?.queryResources !== false;
+    const requestDownload = req.body?.requestDownload !== false;
+
+    try {
+      const alertManager = tcpServer.getAlertManager();
+      const inMemoryAlert = alertManager.getAlertById(id);
+
+      let vehicleId: string | undefined = inMemoryAlert?.vehicleId;
+      let channel: number = Number(inMemoryAlert?.channel ?? 1);
+      let alertTimestamp: Date | undefined = inMemoryAlert?.timestamp ? new Date(inMemoryAlert.timestamp) : undefined;
+
+      if (!vehicleId || Number.isNaN(alertTimestamp?.getTime())) {
+        const db = require('../storage/database');
+        const dbResult = await db.query(
+          `SELECT id, device_id, channel, timestamp
+           FROM alerts
+           WHERE id = $1`,
+          [id]
+        );
+
+        if (dbResult.rows.length === 0) {
+          return res.status(404).json({
+            success: false,
+            message: `Alert ${id} not found`
+          });
+        }
+
+        const row = dbResult.rows[0];
+        vehicleId = String(row.device_id);
+        channel = Number(row.channel || 1);
+        alertTimestamp = new Date(row.timestamp);
+      }
+
+      if (!vehicleId || Number.isNaN(alertTimestamp!.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Alert has invalid vehicle or timestamp'
+        });
+      }
+
+      const startTime = new Date(alertTimestamp!.getTime() - lookbackSeconds * 1000);
+      const endTime = new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
+
+      const queried = queryResources
+        ? tcpServer.queryResourceList(vehicleId, channel, startTime, endTime)
+        : false;
+      const requested = tcpServer.requestCameraVideo(vehicleId, channel, startTime, endTime);
+      const downloadRequested = requestDownload
+        ? tcpServer.requestCameraVideoDownload(vehicleId, channel, startTime, endTime)
+        : false;
+
+      if (!requested) {
+        return res.status(409).json({
+          success: false,
+          message: `Vehicle ${vehicleId} is not connected; cannot request camera playback`,
+          data: {
+            alertId: id,
+            vehicleId,
+            channel,
+            alertTimestamp: alertTimestamp!.toISOString(),
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            lookbackSeconds,
+            forwardSeconds,
+            queryResources,
+            querySent: queried,
+            requestSent: false,
+            requestDownload,
+            downloadRequestSent: false
+          }
+        });
+      }
+
+      res.json({
+        success: true,
+        message: `Camera report-video request sent for alert ${id}`,
+        data: {
+          alertId: id,
+          vehicleId,
+          channel,
+          alertTimestamp: alertTimestamp!.toISOString(),
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          lookbackSeconds,
+          forwardSeconds,
+          queryResources,
+          querySent: queried,
+          requestSent: requested,
+          requestDownload,
+          downloadRequestSent: downloadRequested
+        }
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to request report video',
+        error: error?.message
       });
     }
   });
@@ -958,6 +1082,95 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     res.json({
       success,
       message: success ? 'Query sent, check logs for 0x1205 response' : 'Failed to send query'
+    });
+  });
+
+  // Request arbitrary video range from camera for a vehicle/channel
+  router.post('/vehicles/:id/request-video', (req, res) => {
+    const { id } = req.params;
+    const {
+      channel = 1,
+      startTime,
+      endTime,
+      mode = 'both',
+      queryResources = true
+    } = req.body || {};
+
+    const vehicle = tcpServer.getVehicle(id);
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not connected`
+      });
+    }
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime and endTime are required (ISO timestamp)'
+      });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid startTime or endTime'
+      });
+    }
+
+    if (end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'endTime must be after startTime'
+      });
+    }
+
+    const ch = Number(channel) || 1;
+    const normalizedMode = String(mode).toLowerCase();
+    const wantStream = normalizedMode === 'stream' || normalizedMode === 'both';
+    const wantDownload = normalizedMode === 'download' || normalizedMode === 'both';
+    if (!wantStream && !wantDownload) {
+      return res.status(400).json({
+        success: false,
+        message: 'mode must be one of: stream, download, both'
+      });
+    }
+
+    const querySent = queryResources ? tcpServer.queryResourceList(id, ch, start, end) : false;
+    const streamRequestSent = wantStream ? tcpServer.requestCameraVideo(id, ch, start, end) : false;
+    const downloadRequestSent = wantDownload ? tcpServer.requestCameraVideoDownload(id, ch, start, end) : false;
+
+    const anySent = streamRequestSent || downloadRequestSent || querySent;
+    if (!anySent) {
+      return res.status(409).json({
+        success: false,
+        message: 'No request was sent (check connection/FTP configuration)',
+        data: {
+          vehicleId: id,
+          channel: ch,
+          mode: normalizedMode,
+          querySent,
+          streamRequestSent,
+          downloadRequestSent
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Video request submitted for ${id} channel ${ch}`,
+      data: {
+        vehicleId: id,
+        channel: ch,
+        mode: normalizedMode,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        querySent,
+        streamRequestSent,
+        downloadRequestSent
+      }
     });
   });
 

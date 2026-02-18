@@ -59,11 +59,14 @@ export class JTT1078Commands {
     channelId: number,
     startTime: Date,
     endTime: Date,
-    alarmType: number = 0, // 0=all, 1-7=specific alarm types
-    mediaType: number = 0, // 0=audio+video, 1=audio, 2=video, 3=audio or video
-    streamType: number = 0 // 0=all, 1=main, 2=sub
+    options?: {
+      alarmFlag64?: bigint;
+      resourceType?: number; // 0=audio+video, 1=audio, 2=video, 3=video or audio
+      streamType?: number; // 0=all, 1=main, 2=sub
+      storageType?: number; // 0=all, 1=main, 2=disaster
+    }
   ): Buffer {
-    const body = Buffer.alloc(18);
+    const body = Buffer.alloc(24);
     let offset = 0;
     
     // Channel ID (1 byte)
@@ -79,17 +82,18 @@ export class JTT1078Commands {
     endBcd.copy(body, offset);
     offset += 6;
     
-    // Alarm type (1 byte)
-    body.writeUInt8(alarmType, offset++);
-    
-    // Media type (1 byte)
-    body.writeUInt8(mediaType, offset++);
-    
-    // Stream type (1 byte)
-    body.writeUInt8(streamType, offset++);
-    
-    // Storage type (1 byte) - 0=all, 1=main, 2=disaster recovery
-    body.writeUInt8(0, offset++);
+    // Alarm flag (64 bits)
+    body.writeBigUInt64BE(options?.alarmFlag64 ?? 0n, offset);
+    offset += 8;
+
+    // Resource type
+    body.writeUInt8(options?.resourceType ?? 2, offset++); // default video
+
+    // Stream type
+    body.writeUInt8(options?.streamType ?? 0, offset++); // default all streams
+
+    // Storage type
+    body.writeUInt8(options?.storageType ?? 0, offset++); // default all storage
     
     return this.buildMessage(0x9205, terminalPhone, serialNumber, body);
   }
@@ -142,6 +146,80 @@ export class JTT1078Commands {
     }
     
     return this.buildMessage(0x9201, terminalPhone, serialNumber, body);
+  }
+
+  // Build 0x9206 command - File upload command (terminal uploads recording file via FTP)
+  static buildFileUploadCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    ftpHost: string,
+    ftpPort: number,
+    ftpUsername: string,
+    ftpPassword: string,
+    ftpPath: string,
+    channelId: number,
+    startTime: Date,
+    endTime: Date,
+    options?: {
+      alarmFlag64?: bigint;
+      resourceType?: number; // 0=audio+video, 1=audio, 2=video, 3=video or audio
+      streamType?: number; // 0=main or sub, 1=main, 2=sub
+      storageLocation?: number; // 0=main or disaster, 1=main, 2=disaster
+      taskExecutionConditions?: number; // bit0 wifi, bit1 lan, bit2 3g/4g
+    }
+  ): Buffer {
+    const host = Buffer.from(ftpHost, 'utf8');
+    const user = Buffer.from(ftpUsername, 'utf8');
+    const pass = Buffer.from(ftpPassword, 'utf8');
+    const uploadPath = Buffer.from(ftpPath, 'utf8');
+    const startBcd = this.dateToBcd(startTime);
+    const endBcd = this.dateToBcd(endTime);
+
+    const bodyLength =
+      1 + host.length +
+      2 +
+      1 + user.length +
+      1 + pass.length +
+      1 + uploadPath.length +
+      1 +
+      6 +
+      6 +
+      8 +
+      1 +
+      1 +
+      1 +
+      1;
+
+    const body = Buffer.alloc(bodyLength);
+    let offset = 0;
+
+    body.writeUInt8(host.length, offset++);
+    host.copy(body, offset); offset += host.length;
+
+    body.writeUInt16BE(ftpPort, offset); offset += 2;
+
+    body.writeUInt8(user.length, offset++);
+    user.copy(body, offset); offset += user.length;
+
+    body.writeUInt8(pass.length, offset++);
+    pass.copy(body, offset); offset += pass.length;
+
+    body.writeUInt8(uploadPath.length, offset++);
+    uploadPath.copy(body, offset); offset += uploadPath.length;
+
+    body.writeUInt8(channelId, offset++);
+
+    startBcd.copy(body, offset); offset += 6;
+    endBcd.copy(body, offset); offset += 6;
+
+    body.writeBigUInt64BE(options?.alarmFlag64 ?? 0n, offset); offset += 8;
+
+    body.writeUInt8(options?.resourceType ?? 2, offset++); // video
+    body.writeUInt8(options?.streamType ?? 1, offset++); // main stream
+    body.writeUInt8(options?.storageLocation ?? 1, offset++); // main storage
+    body.writeUInt8(options?.taskExecutionConditions ?? 0b010, offset++); // LAN
+
+    return this.buildMessage(0x9206, terminalPhone, serialNumber, body);
   }
 
   // Build 0x8103 command - Set video parameters (resolution, bitrate, frame rate)

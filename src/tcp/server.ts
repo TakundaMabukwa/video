@@ -61,6 +61,11 @@ export class JTT808Server {
       console.log(`🎥 Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${channel}`);
       this.requestCameraVideo(vehicleId, channel, startTime, endTime);
     });
+
+    this.alertManager.on('request-camera-video-download', ({ vehicleId, channel, startTime, endTime, alertId }) => {
+      console.log(`Alert ${alertId}: Requesting camera SD card FTP upload from ${vehicleId} channel ${channel}`);
+      this.requestCameraVideoDownload(vehicleId, channel, startTime, endTime);
+    });
   }
 
   getAlertManager(): AlertManager {
@@ -226,6 +231,15 @@ export class JTT808Server {
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
         
         this.parseResourceList(message.body);
+        break;
+      case 0x1206: // File upload completion notification
+        console.log(`File upload completion (0x1206) from ${message.terminalPhone}`);
+        if (message.body.length >= 3) {
+          const responseSerial = message.body.readUInt16BE(0);
+          const result = message.body.readUInt8(2);
+          console.log(`   Response serial: ${responseSerial}`);
+          console.log(`   Upload result: ${result === 0 ? 'success' : 'failure'}`);
+        }
         break;
       case 0x0800: // Multimedia event message upload
         this.handleMultimediaEvent(message, socket);
@@ -902,6 +916,49 @@ export class JTT808Server {
     const command = this.buildMessage(0x9201, vehicleId, this.getNextSerial(), commandBody);
     
     console.log(`🎥 Camera video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
+    socket.write(command);
+    return true;
+  }
+
+  requestCameraVideoDownload(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const ftpHost = process.env.ALERT_VIDEO_FTP_HOST || process.env.FTP_HOST || '';
+    const ftpPort = Number(process.env.ALERT_VIDEO_FTP_PORT || process.env.FTP_PORT || 21);
+    const ftpUser = process.env.ALERT_VIDEO_FTP_USER || process.env.FTP_USER || '';
+    const ftpPass = process.env.ALERT_VIDEO_FTP_PASS || process.env.FTP_PASS || '';
+    const ftpPath = process.env.ALERT_VIDEO_FTP_PATH || process.env.FTP_PATH || '/';
+
+    if (!ftpHost || !ftpUser) {
+      console.warn(`FTP config missing; skip 0x9206 download for ${vehicleId} ch${channel}`);
+      return false;
+    }
+
+    const command = JTT1078Commands.buildFileUploadCommand(
+      vehicleId,
+      this.getNextSerial(),
+      ftpHost,
+      ftpPort,
+      ftpUser,
+      ftpPass,
+      ftpPath,
+      channel,
+      startTime,
+      endTime,
+      {
+        resourceType: 2,
+        streamType: 1,
+        storageLocation: 1,
+        taskExecutionConditions: 0b010
+      }
+    );
+    
+    console.log(`Camera FTP upload requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()} -> ftp://${ftpHost}:${ftpPort}${ftpPath}`);
     socket.write(command);
     return true;
   }
