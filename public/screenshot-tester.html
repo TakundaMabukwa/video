@@ -616,6 +616,7 @@
 
       const rows = jobs.slice(0, 20).map((j) => {
         const canPlay = j.status === 'completed' && j.outputUrl;
+        const actionLabel = canPlay ? 'Play Saved Video' : (j.status === 'failed' ? 'View Error' : 'Track Job');
         const label = `${j.vehicleId} ch${j.channel}`;
         const windowText = `${new Date(j.startTime).toLocaleString()} -> ${new Date(j.endTime).toLocaleString()}`;
         return `
@@ -625,10 +626,10 @@
             <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
               <button
                 data-play-job="${j.id}"
+                data-job-status="${j.status}"
                 data-job-url="${canPlay ? j.outputUrl : ''}"
-                ${canPlay ? '' : 'disabled'}
                 style="width:auto; padding:6px 10px;"
-              >Play Saved Video</button>
+              >${actionLabel}</button>
               ${canPlay ? `<a href="${j.outputUrl}" target="_blank" rel="noopener" style="color:#6aa6ff;">Download</a>` : ''}
             </div>
           </div>
@@ -1041,17 +1042,29 @@
       if (start) videoStartTimeEl.value = start.replace(' ', 'T').slice(0, 19);
       if (end) videoEndTimeEl.value = end.replace(' ', 'T').slice(0, 19);
       if (ch) videoChannelEl.value = String(Number(ch) || 1);
+      videoModeEl.value = 'stream';
       setStatus(`Starting clip stream: ${start || ''} -> ${end || ''}`, 'ok');
       requestVideoByRange();
     });
     videoSavedListEl.addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-play-job]');
       if (!btn) return;
+      const jobId = btn.getAttribute('data-play-job');
+      const jobStatus = btn.getAttribute('data-job-status') || '';
       const fileUrl = btn.getAttribute('data-job-url');
-      if (!fileUrl) return;
-      videoReadyPlayerEl.src = fileUrl;
-      videoReadyPlayerEl.load();
-      setStatus('Loaded saved video in player.', 'ok');
+      if (fileUrl) {
+        videoReadyPlayerEl.src = fileUrl;
+        videoReadyPlayerEl.load();
+        setStatus('Loaded saved video in player.', 'ok');
+        return;
+      }
+      if (!jobId) return;
+      if (jobStatus === 'failed') {
+        setStatus(`Job ${jobId} failed. Check Job Status line for details.`, 'err');
+      } else {
+        setStatus(`Job ${jobId} is ${jobStatus || 'pending'}. Waiting for completion...`, 'warn');
+      }
+      pollVideoJob(jobId);
     });
     alertsEl.addEventListener('click', (e) => {
       const target = e.target.closest('button[data-request-video],button[data-open-videos]');
