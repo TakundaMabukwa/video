@@ -284,6 +284,10 @@
           <div id="videoResult" class="meta" style="margin-top:10px;">No request yet.</div>
           <div id="videoJobStatus" class="meta" style="margin-top:8px;"></div>
           <div id="videoClipList" class="meta" style="margin-top:10px;"></div>
+          <div style="margin-top:10px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <button id="videoRefreshJobsBtn">Refresh Saved Videos</button>
+          </div>
+          <div id="videoSavedList" class="meta" style="margin-top:8px;"></div>
           <div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">
             <button id="videoOpenViewerBtn">Open Full Viewer</button>
           </div>
@@ -335,6 +339,7 @@
     const videoJobStatusEl = document.getElementById('videoJobStatus');
     const videoReadyPlayerEl = document.getElementById('videoReadyPlayer');
     const videoClipListEl = document.getElementById('videoClipList');
+    const videoSavedListEl = document.getElementById('videoSavedList');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -533,7 +538,8 @@
           <strong>Request Sent</strong><br/>
           Vehicle: ${d.vehicleId} | Channel: ${d.channel} | Mode: ${d.mode}<br/>
           Window: ${new Date(d.startTime).toLocaleString()} -> ${new Date(d.endTime).toLocaleString()}<br/>
-          Query Sent: ${d.querySent ? 'Yes' : 'No'} | Stream Sent: ${d.streamRequestSent ? 'Yes' : 'No'} | Download Sent: ${d.downloadRequestSent ? 'Yes' : 'No'}
+          Query Sent: ${d.querySent ? 'Yes' : 'No'} | Stream Sent: ${d.streamRequestSent ? 'Yes' : 'No'} | Download Sent: ${d.downloadRequestSent ? 'Yes' : 'No'}<br/>
+          <span class="meta">Download is expected to be "No" when mode is stream-only.</span>
           ${warnings.length ? `<br/><span style="color:#f39c12;">${warnings.join(' | ')}</span>` : ''}
         `;
         setStatus(body.message || 'Video request submitted.', 'ok');
@@ -582,6 +588,7 @@
             const fileUrl = j.outputUrl || `/api/videos/jobs/${encodeURIComponent(jobId)}/file`;
             videoReadyPlayerEl.src = fileUrl;
             videoReadyPlayerEl.load();
+            refreshVideoJobs();
             setStatus(`Video ready: ${jobId}`, 'ok');
           } else if (j.status === 'failed') {
             if (videoJobPollTimer) {
@@ -589,6 +596,7 @@
               videoJobPollTimer = null;
             }
             const err = j.error ? ` (${j.error})` : '';
+            refreshVideoJobs();
             setStatus(`Video capture failed${err}`, 'err');
           }
         } catch (err) {
@@ -598,6 +606,55 @@
 
       await check();
       videoJobPollTimer = setInterval(check, 2000);
+    }
+
+    function renderSavedJobs(jobs) {
+      if (!Array.isArray(jobs) || jobs.length === 0) {
+        videoSavedListEl.innerHTML = '<span>No saved video jobs found yet.</span>';
+        return;
+      }
+
+      const rows = jobs.slice(0, 20).map((j) => {
+        const canPlay = j.status === 'completed' && j.outputUrl;
+        const label = `${j.vehicleId} ch${j.channel}`;
+        const windowText = `${new Date(j.startTime).toLocaleString()} -> ${new Date(j.endTime).toLocaleString()}`;
+        return `
+          <div style="border:1px solid var(--border); border-radius:8px; padding:10px; margin-bottom:8px; background:#0f1728;">
+            <div><strong>${label}</strong> | ${windowText}</div>
+            <div class="meta">Job ${j.id} | Status: ${j.status} | Created: ${new Date(j.createdAt).toLocaleString()}</div>
+            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button
+                data-play-job="${j.id}"
+                data-job-url="${canPlay ? j.outputUrl : ''}"
+                ${canPlay ? '' : 'disabled'}
+                style="width:auto; padding:6px 10px;"
+              >Play Saved Video</button>
+              ${canPlay ? `<a href="${j.outputUrl}" target="_blank" rel="noopener" style="color:#6aa6ff;">Download</a>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+      videoSavedListEl.innerHTML = rows;
+    }
+
+    async function refreshVideoJobs() {
+      const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
+      const channel = Number(videoChannelEl.value || 1);
+      videoSavedListEl.textContent = 'Loading saved videos...';
+      try {
+        const qs = new URLSearchParams();
+        if (vehicleId) qs.set('vehicleId', vehicleId);
+        if (channel > 0) qs.set('channel', String(channel));
+        const url = `/api/videos/jobs${qs.toString() ? `?${qs.toString()}` : ''}`;
+        const res = await fetch(url);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        renderSavedJobs(body?.data?.jobs || []);
+      } catch (err) {
+        videoSavedListEl.textContent = `Saved video list failed: ${err.message}`;
+      }
     }
 
     function renderClipList(clips) {
@@ -968,6 +1025,7 @@
     document.getElementById('videoRequestBtn').addEventListener('click', requestVideoByRange);
     document.getElementById('videoFillNowBtn').addEventListener('click', setDefaultVideoWindow);
     document.getElementById('videoSearchBtn').addEventListener('click', searchVideoClips);
+    document.getElementById('videoRefreshJobsBtn').addEventListener('click', refreshVideoJobs);
     document.getElementById('videoOpenViewerBtn').addEventListener('click', () => {
       const vehicleId = (videoVehicleIdEl.value || vehicleIdEl.value || '').trim();
       const channel = Number(videoChannelEl.value || 1);
@@ -984,6 +1042,15 @@
       if (end) videoEndTimeEl.value = end.replace(' ', 'T').slice(0, 16);
       if (ch) videoChannelEl.value = String(Number(ch) || 1);
       requestVideoByRange();
+    });
+    videoSavedListEl.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-play-job]');
+      if (!btn) return;
+      const fileUrl = btn.getAttribute('data-job-url');
+      if (!fileUrl) return;
+      videoReadyPlayerEl.src = fileUrl;
+      videoReadyPlayerEl.load();
+      setStatus('Loaded saved video in player.', 'ok');
     });
     alertsEl.addEventListener('click', (e) => {
       const target = e.target.closest('button[data-request-video],button[data-open-videos]');
@@ -1003,6 +1070,7 @@
 
     loadVehicles();
     setDefaultVideoWindow();
+    refreshVideoJobs();
     refreshCurrentTab();
     startAutoRefresh();
     startAutoCapture();

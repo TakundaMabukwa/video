@@ -1372,6 +1372,34 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get status of a manual playback capture job
+  router.get('/videos/jobs', (req, res) => {
+    const vehicleIdFilter = String(req.query.vehicleId || '').trim();
+    const channelFilter = Number(req.query.channel || 0);
+    const statusFilter = String(req.query.status || '').trim().toLowerCase();
+
+    const jobs = Array.from(manualVideoJobs.values())
+      .filter((job) => {
+        if (vehicleIdFilter && job.vehicleId !== vehicleIdFilter) return false;
+        if (channelFilter > 0 && job.channel !== channelFilter) return false;
+        if (statusFilter && job.status !== statusFilter) return false;
+        return true;
+      })
+      .sort((a, b) => {
+        const ta = new Date(a.createdAt).getTime();
+        const tb = new Date(b.createdAt).getTime();
+        return tb - ta;
+      });
+
+    res.json({
+      success: true,
+      data: {
+        count: jobs.length,
+        jobs
+      }
+    });
+  });
+
+  // Get status of a manual playback capture job
   router.get('/videos/jobs/:id', (req, res) => {
     const { id } = req.params;
     const job = manualVideoJobs.get(id);

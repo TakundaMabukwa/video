@@ -33,6 +33,12 @@ type ResourceVideoItem = {
   fileSize: number;
 };
 
+type PendingResourceList = {
+  createdAt: number;
+  packetCount: number;
+  parts: Map<number, Buffer>;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -46,6 +52,7 @@ export class JTT808Server {
   private imageStorage = new ImageStorage();
   private alertManager: AlertManager;
   private latestResourceLists = new Map<string, { receivedAt: number; items: ResourceVideoItem[] }>();
+  private pendingResourceLists = new Map<string, PendingResourceList>();
 
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
@@ -239,10 +246,19 @@ export class JTT808Server {
         console.log(`📋 Capabilities response from ${message.terminalPhone}`);
         this.parseCapabilities(message.body, message.terminalPhone);
         break;
-      case 0x1205: // Resource list response
+            case 0x1205: // Resource list response
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
-        
-        this.parseResourceList(message.terminalPhone, message.body);
+
+        if (message.isSubpackage && message.packetCount && message.packetIndex) {
+          this.handleResourceListSubpackage(
+            message.terminalPhone,
+            message.body,
+            message.packetCount,
+            message.packetIndex
+          );
+        } else {
+          this.parseResourceList(message.terminalPhone, message.body);
+        }
         break;
       case 0x1206: // File upload completion notification
         console.log(`File upload completion (0x1206) from ${message.terminalPhone}`);
@@ -631,36 +647,103 @@ export class JTT808Server {
       }, 250 * channel.logicalChannel); // Stagger by 250ms (faster startup)
     }
   }
+  private handleResourceListSubpackage(
+    vehicleId: string,
+    bodyPart: Buffer,
+    packetCount: number,
+    packetIndex: number
+  ): void {
+    const key = vehicleId;
+    const now = Date.now();
+    const maxAgeMs = 30000;
+
+    for (const [k, pending] of this.pendingResourceLists.entries()) {
+      if (now - pending.createdAt > maxAgeMs) {
+        this.pendingResourceLists.delete(k);
+      }
+    }
+
+    let pending = this.pendingResourceLists.get(key);
+    if (!pending || pending.packetCount !== packetCount || packetIndex === 1) {
+      pending = {
+        createdAt: now,
+        packetCount,
+        parts: new Map<number, Buffer>()
+      };
+      this.pendingResourceLists.set(key, pending);
+    }
+
+    pending.parts.set(packetIndex, bodyPart);
+    console.log(`Resource list subpackage ${packetIndex}/${packetCount} from ${vehicleId} (partLen=${bodyPart.length})`);
+
+    if (pending.parts.size < packetCount) {
+      return;
+    }
+
+    const orderedParts: Buffer[] = [];
+    for (let i = 1; i <= packetCount; i++) {
+      const part = pending.parts.get(i);
+      if (!part) {
+        console.log(`Resource list assembly missing part ${i}/${packetCount} for ${vehicleId}`);
+        return;
+      }
+      orderedParts.push(part);
+    }
+
+    this.pendingResourceLists.delete(key);
+    const merged = Buffer.concat(orderedParts);
+    console.log(`Resource list merged ${packetCount} packets for ${vehicleId} (len=${merged.length})`);
+    this.parseResourceList(vehicleId, merged);
+  }
 
   private parseResourceList(vehicleId: string, body: Buffer): void {
     if (body.length < 2) {
-      console.log(`⚠️ Resource list body too short: ${body.length} bytes`);
+      console.log(`Resource list body too short: ${body.length} bytes`);
       return;
     }
-    
-    const itemCount = body.readUInt16BE(0);
-    console.log(`💾 Found ${itemCount} video files`);
-    console.log(`📦 Body length: ${body.length} bytes (expected: ${2 + itemCount * 28})`);
-    
-    if (body.length < 2 + itemCount * 28) {
-      console.log(`⚠️ Incomplete response - camera may send in multiple packets`);
-      
-      return;
+
+    let listOffset = 0;
+    let expectedTotal: number | undefined;
+    let querySerial: number | undefined;
+
+    // Preferred format per docs: [serial(2)][total(4)][items...]
+    if (body.length >= 6 && (body.length - 6) % 28 === 0) {
+      querySerial = body.readUInt16BE(0);
+      expectedTotal = body.readUInt32BE(2);
+      listOffset = 6;
+      console.log(`Resource list header: serial=${querySerial}, total=${expectedTotal}`);
+    } else if (body.length >= 2 && (body.length - 2) % 28 === 0) {
+      // Compatibility: some terminals prepend count(2).
+      expectedTotal = body.readUInt16BE(0);
+      listOffset = 2;
+      console.log(`Resource list header (compat): count=${expectedTotal}`);
+    } else {
+      // Last-resort: infer an item-aligned offset.
+      listOffset = body.length >= 6 ? 6 : 2;
+      while (listOffset > 0 && (body.length - listOffset) % 28 !== 0) {
+        listOffset--;
+      }
+      console.log(`Resource list body non-standard: len=${body.length}, inferredOffset=${listOffset}`);
     }
-    
+
+    const payloadBytes = Math.max(0, body.length - listOffset);
+    const itemCount = Math.floor(payloadBytes / 28);
+    console.log(`Parsed ${itemCount} video file item(s)`);
+
     const items: ResourceVideoItem[] = [];
-    let offset = 2;
+    let offset = listOffset;
     for (let i = 0; i < itemCount && offset + 28 <= body.length; i++) {
       const channel = body.readUInt8(offset);
       const startTime = this.parseBcdTime(body.slice(offset + 1, offset + 7));
       const endTime = this.parseBcdTime(body.slice(offset + 7, offset + 13));
-      const alarmType = body.readUInt8(offset + 13);
-      const mediaType = body.readUInt8(offset + 14);
-      const streamType = body.readUInt8(offset + 15);
-      const storageType = body.readUInt8(offset + 16);
-      const fileSize = body.readUInt32BE(offset + 17);
-      
-      console.log(`  📹 File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
+      // alarm flag is 64-bit (offset 13..20); use low byte for quick UI indication
+      const alarmType = body.readUInt8(offset + 20);
+      const mediaType = body.readUInt8(offset + 21);
+      const streamType = body.readUInt8(offset + 22);
+      const storageType = body.readUInt8(offset + 23);
+      const fileSize = body.readUInt32BE(offset + 24);
+
+      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
       items.push({
         channel,
         startTime,
@@ -674,12 +757,16 @@ export class JTT808Server {
       offset += 28;
     }
 
+    if (typeof expectedTotal === 'number' && expectedTotal > 0 && expectedTotal !== items.length) {
+      console.log(`Resource list partial parse: parsed=${items.length}, terminalTotal=${expectedTotal}`);
+    }
+
     this.latestResourceLists.set(vehicleId, {
       receivedAt: Date.now(),
       items
     });
   }
-  
+
   private parseBcdTime(buffer: Buffer): string {
     if (buffer.length < 6) return 'invalid';
     const year = this.fromBcd(buffer[0]) + 2000;
@@ -1168,6 +1255,8 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
+
 
 
 
