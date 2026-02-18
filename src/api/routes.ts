@@ -36,6 +36,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
+  const parseResourceTime = (value: string): Date | null => {
+    if (!value || typeof value !== 'string') return null;
+    const isoLike = value.replace(' ', 'T');
+    const d = new Date(isoLike);
+    if (!Number.isNaN(d.getTime())) return d;
+    const dUtc = new Date(`${isoLike}Z`);
+    return Number.isNaN(dUtc.getTime()) ? null : dUtc;
+  };
   const buildManualVideoJob = (
     vehicleId: string,
     channel: number,
@@ -1280,6 +1288,85 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         warnings,
         playbackJobId,
         playbackJobUrl
+      }
+    });
+  });
+
+  // Query videos in a time range and return selectable clip list
+  router.post('/vehicles/:id/videos/search', async (req, res) => {
+    const { id } = req.params;
+    const {
+      channel = 1,
+      startTime,
+      endTime,
+      waitMs = 8000
+    } = req.body || {};
+
+    const vehicle = tcpServer.getVehicle(id);
+    if (!vehicle || !vehicle.connected) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not connected`
+      });
+    }
+
+    if (!startTime || !endTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'startTime and endTime are required (ISO timestamp)'
+      });
+    }
+
+    const start = new Date(startTime);
+    const end = new Date(endTime);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end <= start) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid time range'
+      });
+    }
+
+    const ch = Number(channel) || 1;
+    const before = tcpServer.getLatestResourceList(id)?.receivedAt || 0;
+    const querySent = tcpServer.queryResourceList(id, ch, start, end);
+
+    const timeoutAt = Date.now() + Math.max(1000, Math.min(15000, Number(waitMs) || 8000));
+    while (Date.now() < timeoutAt) {
+      const latest = tcpServer.getLatestResourceList(id);
+      if (latest && latest.receivedAt > before) break;
+      await new Promise((r) => setTimeout(r, 350));
+    }
+
+    const latest = tcpServer.getLatestResourceList(id);
+    const items = latest?.items || [];
+    const filtered = items
+      .filter((it) => ch <= 0 || it.channel === ch)
+      .map((it, idx) => {
+        const itemStart = parseResourceTime(it.startTime);
+        const itemEnd = parseResourceTime(it.endTime);
+        const overlaps = itemStart && itemEnd
+          ? itemStart.getTime() <= end.getTime() && itemEnd.getTime() >= start.getTime()
+          : false;
+        return {
+          id: `${it.channel}-${idx}-${it.startTime}`,
+          ...it,
+          overlaps
+        };
+      })
+      .filter((it) => it.overlaps);
+
+    res.json({
+      success: true,
+      message: `Found ${filtered.length} clip(s) in selected range`,
+      data: {
+        vehicleId: id,
+        channel: ch,
+        startTime: start.toISOString(),
+        endTime: end.toISOString(),
+        querySent,
+        latestResourceReceivedAt: latest?.receivedAt || null,
+        totalListed: items.length,
+        clips: filtered
       }
     });
   });

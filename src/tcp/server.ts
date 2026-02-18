@@ -22,6 +22,17 @@ type ScreenshotFallbackResult = {
   videoEvidenceReason?: string;
 };
 
+type ResourceVideoItem = {
+  channel: number;
+  startTime: string;
+  endTime: string;
+  alarmType: number;
+  mediaType: number;
+  streamType: number;
+  storageType: number;
+  fileSize: number;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -34,6 +45,7 @@ export class JTT808Server {
   private deviceStorage = new DeviceStorage();
   private imageStorage = new ImageStorage();
   private alertManager: AlertManager;
+  private latestResourceLists = new Map<string, { receivedAt: number; items: ResourceVideoItem[] }>();
 
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
@@ -230,7 +242,7 @@ export class JTT808Server {
       case 0x1205: // Resource list response
         console.log(`📝 Resource list response (0x1205) from ${message.terminalPhone}`);
         
-        this.parseResourceList(message.body);
+        this.parseResourceList(message.terminalPhone, message.body);
         break;
       case 0x1206: // File upload completion notification
         console.log(`File upload completion (0x1206) from ${message.terminalPhone}`);
@@ -620,7 +632,7 @@ export class JTT808Server {
     }
   }
 
-  private parseResourceList(body: Buffer): void {
+  private parseResourceList(vehicleId: string, body: Buffer): void {
     if (body.length < 2) {
       console.log(`⚠️ Resource list body too short: ${body.length} bytes`);
       return;
@@ -636,6 +648,7 @@ export class JTT808Server {
       return;
     }
     
+    const items: ResourceVideoItem[] = [];
     let offset = 2;
     for (let i = 0; i < itemCount && offset + 28 <= body.length; i++) {
       const channel = body.readUInt8(offset);
@@ -648,8 +661,23 @@ export class JTT808Server {
       const fileSize = body.readUInt32BE(offset + 17);
       
       console.log(`  📹 File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
+      items.push({
+        channel,
+        startTime,
+        endTime,
+        alarmType,
+        mediaType,
+        streamType,
+        storageType,
+        fileSize
+      });
       offset += 28;
     }
+
+    this.latestResourceLists.set(vehicleId, {
+      receivedAt: Date.now(),
+      items
+    });
   }
   
   private parseBcdTime(buffer: Buffer): string {
@@ -1078,6 +1106,10 @@ export class JTT808Server {
 
   getVehicle(id: string): Vehicle | undefined {
     return this.vehicles.get(id);
+  }
+
+  getLatestResourceList(vehicleId: string): { receivedAt: number; items: ResourceVideoItem[] } | undefined {
+    return this.latestResourceLists.get(vehicleId);
   }
 
   async getAlerts() {
