@@ -479,9 +479,15 @@
         if (!res.ok || !body.success) {
           throw new Error(body.message || `HTTP ${res.status}`);
         }
+        const d = body.data || {};
         const start = body?.data?.startTime ? new Date(body.data.startTime).toLocaleString() : 'n/a';
         const end = body?.data?.endTime ? new Date(body.data.endTime).toLocaleString() : 'n/a';
         setStatus(`Video request sent. Window: ${start} -> ${end}`, 'ok');
+        if (d.playbackJobId) {
+          videoJobStatusEl.textContent = `Job ${d.playbackJobId}: queued`;
+          pollVideoJob(d.playbackJobId);
+          refreshVideoJobs();
+        }
         setTimeout(refreshAlerts, 1500);
       } catch (err) {
         setStatus(`Video request failed: ${err.message}`, 'err');

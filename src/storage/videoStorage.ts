@@ -9,7 +9,14 @@ export class VideoStorage {
     this.bucketReady = ensureBucket();
   }
 
-  async saveVideo(deviceId: string, channel: number, filePath: string, startTime: Date, videoType: 'live' | 'alert_pre' | 'alert_post', alertId?: string) {
+  async saveVideo(
+    deviceId: string,
+    channel: number,
+    filePath: string,
+    startTime: Date,
+    videoType: 'live' | 'alert_pre' | 'alert_post' | 'camera_sd' | 'manual',
+    alertId?: string
+  ) {
     const result = await query(
       `INSERT INTO videos (device_id, channel, file_path, start_time, video_type, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -41,12 +48,14 @@ export class VideoStorage {
 
     const videoData = fs.readFileSync(localPath);
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${deviceId}/ch${channel}/${timestamp}.h264`;
+    const ext = (localPath.split('.').pop() || 'mp4').toLowerCase();
+    const filename = `${deviceId}/ch${channel}/${timestamp}.${ext}`;
+    const contentType = ext === 'mp4' ? 'video/mp4' : 'video/h264';
 
     const { data, error } = await supabase.storage
       .from(bucketName)
       .upload(filename, videoData, {
-        contentType: 'video/h264',
+        contentType,
         upsert: false
       });
 

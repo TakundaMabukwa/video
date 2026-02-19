@@ -2,24 +2,30 @@ import express from 'express';
 import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
 import { SpeedingManager } from '../services/speedingManager';
+import { VideoStorage } from '../storage/videoStorage';
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn } from 'child_process';
+import { query as dbQuery } from '../storage/database';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
   const speedingManager = new SpeedingManager();
+  const videoStorage = new VideoStorage();
   const manualVideoJobs = new Map<string, {
     id: string;
     vehicleId: string;
     channel: number;
     startTime: string;
     endTime: string;
+    alertId?: string;
     status: 'queued' | 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
     outputPath?: string;
     outputUrl?: string;
+    persistedVideoId?: string;
+    persistedVideoUrl?: string;
     error?: string;
   }>();
   const buildAlertMediaLinks = (alertId: string) => {
@@ -48,7 +54,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     vehicleId: string,
     channel: number,
     start: Date,
-    end: Date
+    end: Date,
+    options?: {
+      alertId?: string;
+    }
   ) => {
     const id = `JOB-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
     const now = new Date().toISOString();
@@ -63,6 +72,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       channel,
       startTime: start.toISOString(),
       endTime: end.toISOString(),
+      alertId: options?.alertId,
       status: 'queued' as const,
       createdAt: now,
       updatedAt: now,
@@ -110,6 +120,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         const ok = code === 0 && fs.existsSync(outputPath);
         if (ok) {
           finalJob.status = 'completed';
+          void persistManualJobVideo(finalJob).catch((err: any) => {
+            const latest = manualVideoJobs.get(id);
+            if (!latest) return;
+            latest.error = `Persist failed: ${err?.message || 'unknown error'}`;
+            latest.updatedAt = new Date().toISOString();
+            manualVideoJobs.set(id, latest);
+          });
         } else {
           finalJob.status = 'failed';
           finalJob.error = stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`;
@@ -120,6 +137,73 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }, 1200);
 
     return { id, outputUrl };
+  };
+
+  const persistManualJobVideo = async (job: {
+    id: string;
+    vehicleId: string;
+    channel: number;
+    startTime: string;
+    endTime: string;
+    alertId?: string;
+    outputPath?: string;
+  }) => {
+    if (!job.outputPath || !fs.existsSync(job.outputPath)) return;
+
+    const stats = fs.statSync(job.outputPath);
+    const start = new Date(job.startTime);
+    const end = new Date(job.endTime);
+    const duration = Math.max(1, Math.round((end.getTime() - start.getTime()) / 1000));
+    const videoType = job.alertId ? 'camera_sd' : 'manual';
+
+    const videoId = await videoStorage.saveVideo(
+      job.vehicleId,
+      job.channel,
+      job.outputPath,
+      start,
+      videoType,
+      job.alertId
+    );
+    await videoStorage.updateVideoEnd(videoId, end, stats.size, duration);
+
+    let persistedUrl = `/api/videos/jobs/${encodeURIComponent(job.id)}/file`;
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const uploaded = await videoStorage.uploadVideoToSupabase(
+        videoId,
+        job.outputPath,
+        job.vehicleId,
+        job.channel
+      );
+      if (uploaded) persistedUrl = uploaded;
+    }
+
+    const current = manualVideoJobs.get(job.id);
+    if (current) {
+      current.persistedVideoId = String(videoId);
+      current.persistedVideoUrl = persistedUrl;
+      current.updatedAt = new Date().toISOString();
+      manualVideoJobs.set(job.id, current);
+    }
+
+    if (job.alertId) {
+      const alertResult = await dbQuery(
+        'SELECT metadata FROM alerts WHERE id = $1',
+        [job.alertId]
+      );
+      if (alertResult.rows.length > 0) {
+        const rawMeta = alertResult.rows[0].metadata;
+        const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
+        metadata.videoClips = metadata.videoClips || {};
+        metadata.videoClips.cameraVideo = persistedUrl;
+        metadata.videoClips.cameraVideoLocalPath = job.outputPath;
+        metadata.videoClips.cameraVideoJobId = job.id;
+        metadata.videoClips.cameraVideoVideoId = String(videoId);
+        await dbQuery(
+          'UPDATE alerts SET metadata = $1 WHERE id = $2',
+          [JSON.stringify(metadata), job.alertId]
+        );
+      }
+    }
   };
 
   // Get all connected vehicles with their channels
@@ -799,7 +883,31 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/alerts/:id', async (req, res) => {
     const { id } = req.params;
     const alertManager = tcpServer.getAlertManager();
-    const alert = alertManager.getAlertById(id);
+    let alert: any = alertManager.getAlertById(id);
+
+    if (!alert) {
+      try {
+        const dbAlert = await dbQuery(
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+           FROM alerts
+           WHERE id = $1`,
+          [id]
+        );
+        if (dbAlert.rows.length > 0) {
+          const row = dbAlert.rows[0];
+          alert = {
+            id: row.id,
+            vehicleId: row.device_id,
+            channel: row.channel,
+            type: row.alert_type,
+            priority: row.priority,
+            status: row.status,
+            timestamp: row.timestamp,
+            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {})
+          };
+        }
+      } catch {}
+    }
 
     if (!alert) {
       return res.status(404).json({
@@ -822,13 +930,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: true,
         alert: {
           ...withAlertMediaLinks(alert),
+          videoUrl: alert?.metadata?.videoClips?.cameraVideo || null,
           screenshots: screenshots.rows
         }
       });
     } catch (error) {
       res.json({
         success: true,
-        alert: withAlertMediaLinks(alert)
+        alert: {
+          ...withAlertMediaLinks(alert),
+          videoUrl: alert?.metadata?.videoClips?.cameraVideo || null
+        }
       });
     }
   });
@@ -1040,6 +1152,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           },
           camera_sd: {
             path: videoClips.cameraVideo || null,
+            url: videoClips.cameraVideo || null,
             request_url: `/api/alerts/${encodeURIComponent(id)}/request-report-video`,
             description: 'Secondary evidence: retrieved from camera SD card'
           },
@@ -1114,6 +1227,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const downloadRequested = requestDownload
         ? tcpServer.requestCameraVideoDownload(vehicleId, channel, startTime, endTime)
         : false;
+      const manualCaptureJob = requested
+        ? buildManualVideoJob(vehicleId, channel, startTime, endTime, { alertId: id })
+        : null;
 
       if (!requested) {
         return res.status(409).json({
@@ -1132,7 +1248,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             querySent: queried,
             requestSent: false,
             requestDownload,
-            downloadRequestSent: false
+            downloadRequestSent: false,
+            playbackJobId: manualCaptureJob?.id || null,
+            playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}` : null
           }
         });
       }
@@ -1153,7 +1271,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           querySent: queried,
           requestSent: requested,
           requestDownload,
-          downloadRequestSent: downloadRequested
+          downloadRequestSent: downloadRequested,
+          playbackJobId: manualCaptureJob?.id || null,
+          playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}` : null
         }
       });
     } catch (error: any) {
