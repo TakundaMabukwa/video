@@ -1711,7 +1711,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Resolve alert with required notes
   router.post('/alerts/:id/resolve-with-notes', async (req, res) => {
     const { id } = req.params;
-    const { notes, resolvedBy } = req.body;
+    const { notes, resolvedBy, ncrDocumentUrl, ncrDocumentName } = req.body;
 
     if (!notes || notes.trim().length < 10) {
       return res.status(400).json({
@@ -1721,12 +1721,24 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
 
     const alertManager = tcpServer.getAlertManager();
-    const success = await alertManager.resolveAlert(id, notes, resolvedBy);
+    const alertStorage = require('../storage/alertStorageDB');
+    const storage = new alertStorage.AlertStorageDB();
+
+    // Resolve in memory if active (best effort), and always persist in DB.
+    await alertManager.resolveAlert(id, notes, resolvedBy);
+    const success = await storage.resolveWithNcr(id, notes, resolvedBy, ncrDocumentUrl, ncrDocumentName);
 
     if (success) {
       res.json({
         success: true,
-        message: `Alert ${id} resolved with notes`
+        message: `Alert ${id} resolved with NCR details`,
+        data: {
+          alertId: id,
+          resolved: true,
+          closureType: 'ncr',
+          ncrDocumentUrl: ncrDocumentUrl || null,
+          ncrDocumentName: ncrDocumentName || null
+        }
       });
     } else {
       res.status(404).json({
@@ -1739,7 +1751,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Mark alert as false alert
   router.post('/alerts/:id/mark-false', async (req, res) => {
     const { id } = req.params;
-    const { reason, markedBy } = req.body;
+    const { reason, markedBy, reasonCode } = req.body;
 
     if (!reason || reason.trim().length < 10) {
       return res.status(400).json({
@@ -1750,11 +1762,25 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     try {
       const alertStorage = require('../storage/alertStorageDB');
-      await new alertStorage.AlertStorageDB().markAsFalseAlert(id, reason, markedBy);
+      const storage = new alertStorage.AlertStorageDB();
+      const success = await storage.markAsFalseAlert(id, reason, markedBy, reasonCode);
+
+      if (!success) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
 
       res.json({
         success: true,
-        message: `Alert ${id} marked as false alert`
+        message: `Alert ${id} marked as false alert`,
+        data: {
+          alertId: id,
+          resolved: true,
+          closureType: 'false_alert',
+          reasonCode: reasonCode || null
+        }
       });
     } catch (error) {
       res.status(500).json({
