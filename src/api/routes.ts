@@ -50,6 +50,12 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const dUtc = new Date(`${isoLike}Z`);
     return Number.isNaN(dUtc.getTime()) ? null : dUtc;
   };
+  const normalizePublicVideoUrl = (value: any, fallback: string) => {
+    const s = String(value || '').trim();
+    if (s && /^https?:\/\//i.test(s)) return s;
+    if (s && s.startsWith('/api/')) return s;
+    return fallback;
+  };
   const buildManualVideoJob = (
     vehicleId: string,
     channel: number,
@@ -174,7 +180,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         job.vehicleId,
         job.channel
       );
-      if (uploaded) persistedUrl = uploaded;
+      if (uploaded) persistedUrl = normalizePublicVideoUrl(uploaded, persistedUrl);
     }
 
     const current = manualVideoJobs.get(job.id);
@@ -194,7 +200,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         const rawMeta = alertResult.rows[0].metadata;
         const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
         metadata.videoClips = metadata.videoClips || {};
-        metadata.videoClips.cameraVideo = persistedUrl;
+        metadata.videoClips.cameraVideo = normalizePublicVideoUrl(
+          persistedUrl,
+          `/api/videos/jobs/${encodeURIComponent(job.id)}/file`
+        );
         metadata.videoClips.cameraVideoLocalPath = job.outputPath;
         metadata.videoClips.cameraVideoJobId = job.id;
         metadata.videoClips.cameraVideoVideoId = String(videoId);
@@ -944,18 +953,24 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: true,
         alert: {
           ...withAlertMediaLinks(alert),
-          videoUrl:
-            alert?.metadata?.videoClips?.preStorageUrl ||
-            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null) ||
-            alert?.metadata?.videoClips?.cameraVideo ||
-            null,
-          preIncidentVideoUrl:
-            alert?.metadata?.videoClips?.preStorageUrl ||
-            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
-          postIncidentVideoUrl:
-            alert?.metadata?.videoClips?.postStorageUrl ||
-            (alert?.metadata?.videoClips?.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
-          cameraVideoUrl: alert?.metadata?.videoClips?.cameraVideo || null,
+          videoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`
+          ),
+          preIncidentVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`
+          ),
+          postIncidentVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.postStorageUrl,
+            `/api/alerts/${encodeURIComponent(id)}/video/post`
+          ),
+          cameraVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/videos`
+          ),
+          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
+          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl),
           screenshots: screenshots.rows
         }
       });
@@ -964,18 +979,24 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: true,
         alert: {
           ...withAlertMediaLinks(alert),
-          videoUrl:
-            alert?.metadata?.videoClips?.preStorageUrl ||
-            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null) ||
-            alert?.metadata?.videoClips?.cameraVideo ||
-            null,
-          preIncidentVideoUrl:
-            alert?.metadata?.videoClips?.preStorageUrl ||
-            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
-          postIncidentVideoUrl:
-            alert?.metadata?.videoClips?.postStorageUrl ||
-            (alert?.metadata?.videoClips?.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
-          cameraVideoUrl: alert?.metadata?.videoClips?.cameraVideo || null
+          videoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`
+          ),
+          preIncidentVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`
+          ),
+          postIncidentVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.postStorageUrl,
+            `/api/alerts/${encodeURIComponent(id)}/video/post`
+          ),
+          cameraVideoUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/videos`
+          ),
+          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
+          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl)
         }
       });
     }
@@ -1174,21 +1195,30 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           // Primary evidence: frame-by-frame clips from circular buffer
           pre_event: {
             path: videoClips.pre || null,
-            url: videoClips.preStorageUrl || (videoClips.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
+            url: normalizePublicVideoUrl(
+              videoClips.preStorageUrl,
+              `/api/alerts/${encodeURIComponent(id)}/video/pre`
+            ),
             frames: videoClips.preFrameCount || 0,
             duration: videoClips.preDuration || 0,
             description: 'Primary evidence: 30 seconds before alert (frame-by-frame from circular buffer)'
           },
           post_event: {
             path: videoClips.post || null,
-            url: videoClips.postStorageUrl || (videoClips.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
+            url: normalizePublicVideoUrl(
+              videoClips.postStorageUrl,
+              `/api/alerts/${encodeURIComponent(id)}/video/post`
+            ),
             frames: videoClips.postFrameCount || 0,
             duration: videoClips.postDuration || 0,
             description: 'Primary evidence: 30 seconds after alert (recorded frame-by-frame live)'
           },
           camera_sd: {
             path: videoClips.cameraVideo || null,
-            url: videoClips.cameraVideo || null,
+            url: normalizePublicVideoUrl(
+              videoClips.cameraVideo,
+              `/api/alerts/${encodeURIComponent(id)}/videos`
+            ),
             request_url: `/api/alerts/${encodeURIComponent(id)}/request-report-video`,
             description: 'Secondary evidence: retrieved from camera SD card'
           },

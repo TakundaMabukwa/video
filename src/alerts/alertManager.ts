@@ -306,12 +306,18 @@ export class AlertManager extends EventEmitter {
       if (!alert.metadata.videoClips) {
         alert.metadata.videoClips = {};
       }
+      const safeFallback = videoType === 'alert_pre'
+        ? `/api/alerts/${encodeURIComponent(alert.id)}/video/pre`
+        : `/api/alerts/${encodeURIComponent(alert.id)}/video/post`;
+      const publicHttpUrl = publicUrl && /^https?:\/\//i.test(publicUrl)
+        ? publicUrl
+        : safeFallback;
       if (videoType === 'alert_pre') {
         alert.metadata.videoClips.preVideoId = String(videoId);
-        alert.metadata.videoClips.preStorageUrl = publicUrl || `/api/alerts/${encodeURIComponent(alert.id)}/video/pre`;
+        alert.metadata.videoClips.preStorageUrl = publicHttpUrl;
       } else {
         alert.metadata.videoClips.postVideoId = String(videoId);
-        alert.metadata.videoClips.postStorageUrl = publicUrl || `/api/alerts/${encodeURIComponent(alert.id)}/video/post`;
+        alert.metadata.videoClips.postStorageUrl = publicHttpUrl;
       }
     } catch (error: any) {
       console.warn(`⚠️ Failed to persist ${videoType} for alert ${alert.id}: ${error?.message || error}`);
