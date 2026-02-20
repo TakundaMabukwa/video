@@ -792,29 +792,34 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const status = String(req.query.status || '').trim();
       const priority = String(req.query.priority || '').trim();
       const limit = toNumericLimit(req.query.limit, 10);
-      const minutes = toNumericMinutes(req.query.minutes, 180);
+      const hasMinutesFilter = req.query.minutes !== undefined && req.query.minutes !== null && String(req.query.minutes).trim() !== '';
+      const minutes = hasMinutesFilter ? toNumericMinutes(req.query.minutes, 180) : null;
 
       const memAlertsRaw = alertManager.getActiveAlerts();
       let memAlerts = memAlertsRaw.map((a: any) => normalizeAlertRecord(a));
       if (status) memAlerts = memAlerts.filter((a: any) => String(a?.status || '').toLowerCase() === status.toLowerCase());
       if (priority) memAlerts = memAlerts.filter((a: any) => String(a?.priority || '').toLowerCase() === priority.toLowerCase());
 
-      const where: string[] = [`timestamp >= NOW() - ($1::int * INTERVAL '1 minute')`];
-      const params: any[] = [minutes];
-      let p = 2;
+      const where: string[] = [];
+      const params: any[] = [];
+      let p = 1;
+      if (minutes !== null) {
+        where.push(`timestamp >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
+        params.push(minutes);
+      }
       if (status) {
-        where.push(`status = $${p++}`);
+        where.push(`LOWER(COALESCE(status, '')) = LOWER($${p++})`);
         params.push(status);
       }
       if (priority) {
-        where.push(`priority = $${p++}`);
+        where.push(`LOWER(COALESCE(priority, '')) = LOWER($${p++})`);
         params.push(priority);
       }
       params.push(Math.max(limit * 5, 50));
       const dbResult = await require('../storage/database').query(
         `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
          FROM alerts
-         WHERE ${where.join(' AND ')}
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
          ORDER BY timestamp DESC
          LIMIT $${p}`,
         params
@@ -937,24 +942,40 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/alerts/active', async (req, res) => {
     try {
       const alertManager = tcpServer.getAlertManager();
-      const limit = toNumericLimit(req.query.limit, 10);
-      const minutes = toNumericMinutes(req.query.minutes, 180);
+      const limit = toNumericLimit(req.query.limit, 50);
+      const hasMinutesFilter = req.query.minutes !== undefined && req.query.minutes !== null && String(req.query.minutes).trim() !== '';
+      const minutes = hasMinutesFilter ? toNumericMinutes(req.query.minutes, 180) : null;
 
       const memAlerts = alertManager
         .getActiveAlerts()
         .map((a: any) => normalizeAlertRecord(a))
         .filter((a: any) => ['new', 'acknowledged', 'escalated'].includes(String(a?.status || '').toLowerCase()));
 
-      const dbResult = await require('../storage/database').query(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
-         FROM alerts
-         WHERE status IN ('new', 'acknowledged', 'escalated')
-           AND timestamp >= NOW() - ($1::int * INTERVAL '1 minute')
-         ORDER BY timestamp DESC
-         LIMIT $2`,
-        [minutes, Math.max(limit * 5, 50)]
-      );
-      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      let dbAlerts: any[] = [];
+      try {
+        const dbWhere: string[] = [
+          `(resolved IS DISTINCT FROM TRUE)`,
+          `(status IS NULL OR LOWER(status) NOT IN ('resolved', 'closed'))`
+        ];
+        const dbParams: any[] = [];
+        let px = 1;
+        if (minutes !== null) {
+          dbWhere.push(`timestamp >= NOW() - ($${px++}::int * INTERVAL '1 minute')`);
+          dbParams.push(minutes);
+        }
+        dbParams.push(Math.max(limit * 5, 50));
+        const dbResult = await require('../storage/database').query(
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+           FROM alerts
+           WHERE ${dbWhere.join(' AND ')}
+           ORDER BY timestamp DESC
+           LIMIT $${px}`,
+          dbParams
+        );
+        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      } catch (dbErr: any) {
+        console.error('alerts/active DB query failed:', dbErr?.message || dbErr);
+      }
       const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
 
       res.json({
@@ -964,8 +985,26 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         source: 'merged',
         window_minutes: minutes
       });
-    } catch (error) {
-      res.status(500).json({ success: false, message: 'Failed to fetch active alerts' });
+    } catch (error: any) {
+      console.error('alerts/active failed:', error?.message || error);
+      // Final fallback: in-memory only
+      try {
+        const fallbackLimit = toNumericLimit(req.query.limit, 10);
+        const memOnly = tcpServer.getAlertManager()
+          .getActiveAlerts()
+          .map((a: any) => normalizeAlertRecord(a))
+          .slice(0, fallbackLimit)
+          .map(withAlertMediaLinks);
+        return res.json({
+          success: true,
+          alerts: memOnly,
+          count: memOnly.length,
+          source: 'memory-fallback',
+          window_minutes: toNumericMinutes(req.query.minutes, 180)
+        });
+      } catch {
+        return res.status(500).json({ success: false, message: 'Failed to fetch active alerts' });
+      }
     }
   });
 
