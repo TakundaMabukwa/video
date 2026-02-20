@@ -206,6 +206,20 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   };
 
+  // Auto-capture and persist an alert-linked playback file whenever alert workflow
+  // requests camera video. This ensures alert APIs return a video URL once ready.
+  const alertManager = tcpServer.getAlertManager();
+  alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
+    if (!alertId || !vehicleId) return;
+    buildManualVideoJob(
+      String(vehicleId),
+      Number(channel || 1),
+      new Date(startTime),
+      new Date(endTime),
+      { alertId: String(alertId) }
+    );
+  });
+
   // Get all connected vehicles with their channels
   router.get('/vehicles', (req, res) => {
     const vehicles = tcpServer.getVehicles();
@@ -930,7 +944,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: true,
         alert: {
           ...withAlertMediaLinks(alert),
-          videoUrl: alert?.metadata?.videoClips?.cameraVideo || null,
+          videoUrl:
+            alert?.metadata?.videoClips?.preStorageUrl ||
+            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null) ||
+            alert?.metadata?.videoClips?.cameraVideo ||
+            null,
+          preIncidentVideoUrl:
+            alert?.metadata?.videoClips?.preStorageUrl ||
+            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
+          postIncidentVideoUrl:
+            alert?.metadata?.videoClips?.postStorageUrl ||
+            (alert?.metadata?.videoClips?.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
+          cameraVideoUrl: alert?.metadata?.videoClips?.cameraVideo || null,
           screenshots: screenshots.rows
         }
       });
@@ -939,7 +964,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: true,
         alert: {
           ...withAlertMediaLinks(alert),
-          videoUrl: alert?.metadata?.videoClips?.cameraVideo || null
+          videoUrl:
+            alert?.metadata?.videoClips?.preStorageUrl ||
+            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null) ||
+            alert?.metadata?.videoClips?.cameraVideo ||
+            null,
+          preIncidentVideoUrl:
+            alert?.metadata?.videoClips?.preStorageUrl ||
+            (alert?.metadata?.videoClips?.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
+          postIncidentVideoUrl:
+            alert?.metadata?.videoClips?.postStorageUrl ||
+            (alert?.metadata?.videoClips?.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
+          cameraVideoUrl: alert?.metadata?.videoClips?.cameraVideo || null
         }
       });
     }
@@ -1138,14 +1174,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           // Primary evidence: frame-by-frame clips from circular buffer
           pre_event: {
             path: videoClips.pre || null,
-            url: videoClips.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null,
+            url: videoClips.preStorageUrl || (videoClips.pre ? `/api/alerts/${encodeURIComponent(id)}/video/pre` : null),
             frames: videoClips.preFrameCount || 0,
             duration: videoClips.preDuration || 0,
             description: 'Primary evidence: 30 seconds before alert (frame-by-frame from circular buffer)'
           },
           post_event: {
             path: videoClips.post || null,
-            url: videoClips.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null,
+            url: videoClips.postStorageUrl || (videoClips.post ? `/api/alerts/${encodeURIComponent(id)}/video/post` : null),
             frames: videoClips.postFrameCount || 0,
             duration: videoClips.postDuration || 0,
             description: 'Primary evidence: 30 seconds after alert (recorded frame-by-frame live)'

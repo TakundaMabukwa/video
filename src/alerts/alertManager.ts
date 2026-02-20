@@ -4,6 +4,7 @@ import { CircularVideoBuffer } from './circularBuffer';
 import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
+import { VideoStorage } from '../storage/videoStorage';
 
 export enum AlertPriority {
   LOW = 'low',
@@ -32,6 +33,10 @@ export interface AlertEvent {
       preDuration?: number;
       postDuration?: number;
       cameraVideo?: string;  // Video retrieved from camera SD card
+      preVideoId?: string;
+      postVideoId?: string;
+      preStorageUrl?: string;
+      postStorageUrl?: string;
     };
   };
 }
@@ -43,6 +48,7 @@ export class AlertManager extends EventEmitter {
   private escalation: AlertEscalation;
   private notifier: AlertNotifier;
   private alertStorage = new AlertStorageDB();
+  private videoStorage = new VideoStorage();
   private alertCounter = 0;
   private readonly duplicateWindowMs = 0;
 
@@ -78,6 +84,7 @@ export class AlertManager extends EventEmitter {
           alert.metadata.videoClips.post = clipPath;
           alert.metadata.videoClips.postFrameCount = frameCount;
           alert.metadata.videoClips.postDuration = duration;
+          await this.persistAlertClipVideo(alert, clipPath, 'alert_post', duration);
           
           console.log(`✅ Alert ${alertId}: Post-event video linked (${frameCount} frames, ${duration.toFixed(1)}s)`);
           
@@ -221,6 +228,7 @@ export class AlertManager extends EventEmitter {
       }
       alert.metadata.videoClips.pre = clipPath;
       alert.videoClipPath = clipPath;
+      await this.persistAlertClipVideo(alert, clipPath, 'alert_pre', 30);
       
       await this.alertStorage.saveAlert(alert);
       console.log(`✅ Alert ${alert.id}: Pre-event video captured, post-event recording started (30s)`);
@@ -260,6 +268,54 @@ export class AlertManager extends EventEmitter {
     // Any remaining active signal should still be stored as at least LOW.
     if (alertSignals.length > 0) return AlertPriority.LOW;
     return AlertPriority.LOW;
+  }
+
+  private async persistAlertClipVideo(
+    alert: AlertEvent,
+    clipPath: string,
+    videoType: 'alert_pre' | 'alert_post',
+    durationSec: number
+  ): Promise<void> {
+    try {
+      const startTime = videoType === 'alert_pre'
+        ? new Date(alert.timestamp.getTime() - 30 * 1000)
+        : new Date(alert.timestamp.getTime());
+      const endTime = new Date(startTime.getTime() + Math.max(1, Math.round(durationSec)) * 1000);
+      const stats = require('fs').statSync(clipPath);
+
+      const videoId = await this.videoStorage.saveVideo(
+        alert.vehicleId,
+        alert.channel,
+        clipPath,
+        startTime,
+        videoType,
+        alert.id
+      );
+      await this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, Math.max(1, Math.round(durationSec)));
+
+      let publicUrl: string | null = null;
+      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+        publicUrl = await this.videoStorage.uploadVideoToSupabase(
+          videoId,
+          clipPath,
+          alert.vehicleId,
+          alert.channel
+        );
+      }
+
+      if (!alert.metadata.videoClips) {
+        alert.metadata.videoClips = {};
+      }
+      if (videoType === 'alert_pre') {
+        alert.metadata.videoClips.preVideoId = String(videoId);
+        alert.metadata.videoClips.preStorageUrl = publicUrl || `/api/alerts/${encodeURIComponent(alert.id)}/video/pre`;
+      } else {
+        alert.metadata.videoClips.postVideoId = String(videoId);
+        alert.metadata.videoClips.postStorageUrl = publicUrl || `/api/alerts/${encodeURIComponent(alert.id)}/video/post`;
+      }
+    } catch (error: any) {
+      console.warn(`⚠️ Failed to persist ${videoType} for alert ${alert.id}: ${error?.message || error}`);
+    }
   }
 
   private getPrimaryAlertType(alert: LocationAlert, alertSignals: string[]): string {
@@ -587,12 +643,12 @@ export class AlertManager extends EventEmitter {
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {
-    // Post-alert evidence window: alert time to +30s
+    // Reporting window: 30 seconds BEFORE alert timestamp
     const alertTime = alert.timestamp;
-    const startTime = new Date(alertTime.getTime());
-    const endTime = new Date(alertTime.getTime() + 30 * 1000);
+    const startTime = new Date(alertTime.getTime() - 30 * 1000);
+    const endTime = new Date(alertTime.getTime());
 
-    console.log(`🎥 Requesting post-alert camera video (0~30s) for alert ${alert.id}`);
+    console.log(`🎥 Requesting camera report video (-30s~0s) for alert ${alert.id}`);
     
     // Emit request for camera video retrieval (0x9201 command)
     this.emit('request-camera-video', {
@@ -617,4 +673,5 @@ export class AlertManager extends EventEmitter {
     });
   }
 }
+
 

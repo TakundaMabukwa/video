@@ -1025,7 +1025,7 @@ export class JTT808Server {
       startTime,
       endTime,
       serverIp,
-      this.port
+      this.udpPort
     );
     
     const command = this.buildMessage(0x9201, vehicleId, this.getNextSerial(), commandBody);

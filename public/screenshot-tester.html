@@ -350,6 +350,7 @@
     let recentScreenshotsCache = [];
     let lastAlertCount = null;
     let videoJobPollTimer = null;
+    const alertVideoState = new Map();
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -418,6 +419,9 @@
       const hasPre = !!videosInfo?.videos?.pre_event?.path;
       const hasPost = !!videosInfo?.videos?.post_event?.path;
       const hasCamera = !!videosInfo?.videos?.camera_sd?.path;
+      const preUrl = videosInfo?.videos?.pre_event?.url || '';
+      const postUrl = videosInfo?.videos?.post_event?.url || '';
+      const cameraUrl = videosInfo?.videos?.camera_sd?.url || '';
       const videoCount = (hasPre ? 1 : 0) + (hasPost ? 1 : 0) + (hasCamera ? 1 : 0) + dbRecords.length;
       const videoLinks = [
         hasPre ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/video/pre" target="_blank" class="meta">Pre-event video</a>` : '',
@@ -433,6 +437,13 @@
         }
         return '';
       }).filter(Boolean).join('<br/>');
+      const state = alertVideoState.get(String(alert.id));
+      const stateHtml = state
+        ? `<div class="meta" style="margin-top:6px; color:#9bc1ff;">
+             Request: query=${state.querySent ? 'yes' : 'no'}, stream=${state.requestSent ? 'yes' : 'no'}, download=${state.downloadRequestSent ? 'yes' : 'no'}<br/>
+             Job: ${state.jobId || 'n/a'} | Status: ${state.jobStatus || 'n/a'}${state.error ? ` | Error: ${state.error}` : ''}
+           </div>`
+        : '<div class="meta" style="margin-top:6px;">No alert-video test run yet.</div>';
 
       return `
         <div class="alert-item">
@@ -450,10 +461,19 @@
           <div class="thumbs">${imgs || '<div class="meta">No screenshots linked yet.</div>'}</div>
           <div class="meta" style="margin-top:8px;">Videos: ${videoCount}</div>
           <div class="meta">${videoLinks || 'No pre/post/camera video path yet.'}</div>
+          <div class="meta">
+            ${preUrl ? `<a href="${preUrl}" target="_blank" class="meta">Open Pre URL</a>` : ''}
+            ${postUrl ? `${preUrl ? ' | ' : ''}<a href="${postUrl}" target="_blank" class="meta">Open Post URL</a>` : ''}
+            ${cameraUrl ? `${(preUrl || postUrl) ? ' | ' : ''}<a href="${cameraUrl}" target="_blank" class="meta">Open Camera URL</a>` : ''}
+          </div>
           <div class="meta">${dbVideoLinks || ''}</div>
+          ${stateHtml}
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
             <button data-request-video="${String(alert.id)}" class="primary" style="width:auto; padding:8px 10px;">
-              Request Camera Video (-30s)
+              Test Alert Video (-30s)
+            </button>
+            <button data-refresh-alert-video="${String(alert.id)}" style="width:auto; padding:8px 10px;">
+              Refresh Alert Video Status
             </button>
             <button data-open-videos="${String(alert.id)}" style="width:auto; padding:8px 10px;">
               Open Video JSON
@@ -480,6 +500,16 @@
           throw new Error(body.message || `HTTP ${res.status}`);
         }
         const d = body.data || {};
+        const prev = alertVideoState.get(String(alertId)) || {};
+        alertVideoState.set(String(alertId), {
+          ...prev,
+          querySent: !!d.querySent,
+          requestSent: !!d.requestSent,
+          downloadRequestSent: !!d.downloadRequestSent,
+          jobId: d.playbackJobId || null,
+          jobStatus: d.playbackJobId ? 'queued' : 'none',
+          error: ''
+        });
         const start = body?.data?.startTime ? new Date(body.data.startTime).toLocaleString() : 'n/a';
         const end = body?.data?.endTime ? new Date(body.data.endTime).toLocaleString() : 'n/a';
         setStatus(`Video request sent. Window: ${start} -> ${end}`, 'ok');
@@ -487,10 +517,48 @@
           videoJobStatusEl.textContent = `Job ${d.playbackJobId}: queued`;
           pollVideoJob(d.playbackJobId);
           refreshVideoJobs();
+          pollAlertVideoJob(alertId, d.playbackJobId);
         }
         setTimeout(refreshAlerts, 1500);
       } catch (err) {
+        const prev = alertVideoState.get(String(alertId)) || {};
+        alertVideoState.set(String(alertId), {
+          ...prev,
+          error: err.message || String(err)
+        });
         setStatus(`Video request failed: ${err.message}`, 'err');
+      }
+    }
+
+    async function pollAlertVideoJob(alertId, jobId) {
+      if (!jobId) return;
+      const check = async () => {
+        const res = await fetch(`/api/videos/jobs/${encodeURIComponent(jobId)}`);
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) return false;
+        const j = body.data || {};
+        const prev = alertVideoState.get(String(alertId)) || {};
+        alertVideoState.set(String(alertId), {
+          ...prev,
+          jobId,
+          jobStatus: j.status || 'unknown',
+          error: j.error || ''
+        });
+        return j.status === 'completed' || j.status === 'failed';
+      };
+
+      try {
+        let done = await check();
+        let retries = 0;
+        while (!done && retries < 120) {
+          await new Promise((r) => setTimeout(r, 2000));
+          done = await check();
+          retries++;
+        }
+      } catch (_) {
+        // Keep silent; alert state remains visible from last success.
+      } finally {
+        refreshAlerts();
       }
     }
 
@@ -1073,12 +1141,18 @@
       pollVideoJob(jobId);
     });
     alertsEl.addEventListener('click', (e) => {
-      const target = e.target.closest('button[data-request-video],button[data-open-videos]');
+      const target = e.target.closest('button[data-request-video],button[data-open-videos],button[data-refresh-alert-video]');
       if (!target) return;
 
       const requestId = target.getAttribute('data-request-video');
       if (requestId) {
         requestAlertReportVideo(requestId);
+        return;
+      }
+
+      const refreshId = target.getAttribute('data-refresh-alert-video');
+      if (refreshId) {
+        refreshAlerts();
         return;
       }
 
