@@ -20,6 +20,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     startTime: string;
     endTime: string;
     alertId?: string;
+    windowType?: 'pre' | 'post';
     status: 'queued' | 'running' | 'completed' | 'failed';
     createdAt: string;
     updatedAt: string;
@@ -29,6 +30,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     persistedVideoUrl?: string;
     error?: string;
   }>();
+  const queuedAlertWindows = new Set<string>();
   const buildAlertMediaLinks = (alertId: string) => {
     const id = encodeURIComponent(String(alertId));
     return {
@@ -94,13 +96,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
     throw new Error(lastError);
   };
-  const toPlayableMp4 = async (sourcePath: string) => {
+  const toPlayableMp4 = async (sourcePath: string, inputFpsHint?: number) => {
     if (!sourcePath) throw new Error('Missing source file');
     if (!fs.existsSync(sourcePath)) throw new Error(`Source file not found: ${sourcePath}`);
     if (/\.mp4$/i.test(sourcePath)) return sourcePath;
 
+    const safeInputFps = Number.isFinite(Number(inputFpsHint)) && Number(inputFpsHint) > 0
+      ? Math.max(0.2, Math.min(30, Number(inputFpsHint)))
+      : null;
     const parsed = path.parse(sourcePath);
-    const outputPath = path.join(parsed.dir, `${parsed.name}.playable.mp4`);
+    const fpsTag = safeInputFps ? `.fps${String(safeInputFps).replace('.', '_')}` : '';
+    const outputPath = path.join(parsed.dir, `${parsed.name}${fpsTag}.playable.mp4`);
     const sourceStat = fs.statSync(sourcePath);
     if (fs.existsSync(outputPath)) {
       const outStat = fs.statSync(outputPath);
@@ -118,6 +124,23 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         ['-hide_banner', '-loglevel', 'error', '-y', '-r', '25', '-fflags', '+genpts', '-f', 'h264', '-i', sourcePath, ...commonOut],
         ['-hide_banner', '-loglevel', 'error', '-y', '-r', '20', '-f', 'h264', '-i', sourcePath, ...commonOut]
       ];
+      if (safeInputFps && !/\.mp4$/i.test(sourcePath)) {
+        profiles.unshift([
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-fflags',
+          '+genpts',
+          '-framerate',
+          String(safeInputFps),
+          '-f',
+          'h264',
+          '-i',
+          sourcePath,
+          ...commonOut
+        ]);
+      }
       await runFfmpegProfiles(profiles, outputPath);
       return outputPath;
     })().finally(() => {
@@ -174,6 +197,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       ''
     ).trim();
   };
+  const getAlertClipFpsHint = (videoClips: any, type: 'pre' | 'post' | 'camera') => {
+    if (type === 'camera') return undefined;
+    const duration = Number(type === 'pre' ? videoClips?.preDuration : videoClips?.postDuration);
+    const frames = Number(type === 'pre' ? videoClips?.preFrameCount : videoClips?.postFrameCount);
+    if (!Number.isFinite(duration) || !Number.isFinite(frames) || duration <= 0 || frames <= 0) {
+      return undefined;
+    }
+    const fps = frames / duration;
+    if (!Number.isFinite(fps) || fps <= 0) return undefined;
+    return Math.max(0.2, Math.min(30, fps));
+  };
   const buildManualVideoJob = (
     vehicleId: string,
     channel: number,
@@ -181,6 +215,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     end: Date,
     options?: {
       alertId?: string;
+      windowType?: 'pre' | 'post';
     }
   ) => {
     const id = `JOB-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
@@ -197,6 +232,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       startTime: start.toISOString(),
       endTime: end.toISOString(),
       alertId: options?.alertId,
+      windowType: options?.windowType,
       status: 'queued' as const,
       createdAt: now,
       updatedAt: now,
@@ -306,6 +342,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     startTime: string;
     endTime: string;
     alertId?: string;
+    windowType?: 'pre' | 'post';
     outputPath?: string;
   }) => {
     if (!job.outputPath || !fs.existsSync(job.outputPath)) return;
@@ -354,13 +391,31 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         const rawMeta = alertResult.rows[0].metadata;
         const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
         metadata.videoClips = metadata.videoClips || {};
-        metadata.videoClips.cameraVideo = normalizePublicVideoUrl(
+        const normalized = normalizePublicVideoUrl(
           persistedUrl,
           `/api/videos/jobs/${encodeURIComponent(job.id)}/file`
         );
-        metadata.videoClips.cameraVideoLocalPath = job.outputPath;
-        metadata.videoClips.cameraVideoJobId = job.id;
-        metadata.videoClips.cameraVideoVideoId = String(videoId);
+        if (job.windowType === 'pre') {
+          metadata.videoClips.cameraPreVideo = normalized;
+          metadata.videoClips.cameraPreVideoLocalPath = job.outputPath;
+          metadata.videoClips.cameraPreVideoJobId = job.id;
+          metadata.videoClips.cameraPreVideoVideoId = String(videoId);
+          // Preserve legacy fields for existing clients.
+          metadata.videoClips.cameraVideo = normalized;
+          metadata.videoClips.cameraVideoLocalPath = job.outputPath;
+          metadata.videoClips.cameraVideoJobId = job.id;
+          metadata.videoClips.cameraVideoVideoId = String(videoId);
+        } else if (job.windowType === 'post') {
+          metadata.videoClips.cameraPostVideo = normalized;
+          metadata.videoClips.cameraPostVideoLocalPath = job.outputPath;
+          metadata.videoClips.cameraPostVideoJobId = job.id;
+          metadata.videoClips.cameraPostVideoVideoId = String(videoId);
+        } else {
+          metadata.videoClips.cameraVideo = normalized;
+          metadata.videoClips.cameraVideoLocalPath = job.outputPath;
+          metadata.videoClips.cameraVideoJobId = job.id;
+          metadata.videoClips.cameraVideoVideoId = String(videoId);
+        }
         await dbQuery(
           'UPDATE alerts SET metadata = $1 WHERE id = $2',
           [JSON.stringify(metadata), job.alertId]
@@ -372,14 +427,17 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Auto-capture and persist an alert-linked playback file whenever alert workflow
   // requests camera video. This ensures alert APIs return a video URL once ready.
   const alertManager = tcpServer.getAlertManager();
-  alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
+  alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId, windowType }) => {
     if (!alertId || !vehicleId) return;
+    const dedupeKey = `${String(alertId)}:${String(windowType || 'generic')}`;
+    if (queuedAlertWindows.has(dedupeKey)) return;
+    queuedAlertWindows.add(dedupeKey);
     buildManualVideoJob(
       String(vehicleId),
       Number(channel || 1),
       new Date(startTime),
       new Date(endTime),
-      { alertId: String(alertId) }
+      { alertId: String(alertId), windowType: windowType === 'post' ? 'post' : 'pre' }
     );
   });
 
@@ -1169,8 +1227,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
           ),
-          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
-          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl),
+	          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl) &&
+	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
+	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
+	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
           screenshots: screenshots.rows
         }
       });
@@ -1194,8 +1254,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
           ),
-          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
-          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl)
+	          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl) &&
+	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
+	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
+	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20))
         }
       });
     }
@@ -1314,6 +1376,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
       const videoClips = metadata?.videoClips || {};
       const source = resolveAlertClipSource(videoClips, type);
+      const fpsHint = getAlertClipFpsHint(videoClips, type);
 
       if (!source) {
         return res.status(404).json({
@@ -1356,7 +1419,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       let playablePath = sourcePath;
       let contentType = 'video/mp4';
       try {
-        playablePath = await toPlayableMp4(sourcePath);
+        playablePath = await toPlayableMp4(sourcePath, fpsHint);
       } catch (transcodeErr) {
         console.error(`Transcode failed for alert ${id} ${type}:`, transcodeErr);
         playablePath = sourcePath;
@@ -1466,9 +1529,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       // Extract video paths from metadata
       const videoClips = alert.metadata?.videoClips || {};
 
-      const hasPreEvent = !!(videoClips.pre || videoClips.preStorageUrl);
-      const hasPostEvent = !!(videoClips.post || videoClips.postStorageUrl);
-      const hasCameraVideo = !!(videoClips.cameraVideo || videoClips.cameraVideoLocalPath);
+      const minClipSeconds = Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20));
+      const preDuration = Number(videoClips.preDuration || 0);
+      const postDuration = Number(videoClips.postDuration || 0);
+      const hasPreEvent = !!(videoClips.pre || videoClips.preStorageUrl) && preDuration >= minClipSeconds;
+      const hasPostEvent = !!(videoClips.post || videoClips.postStorageUrl) && postDuration >= minClipSeconds;
+      const hasCameraVideo = !!(
+        videoClips.cameraVideo ||
+        videoClips.cameraVideoLocalPath ||
+        videoClips.cameraPreVideo ||
+        videoClips.cameraPreVideoLocalPath ||
+        videoClips.cameraPostVideo ||
+        videoClips.cameraPostVideoLocalPath
+      );
       const preferredSource = (hasPreEvent || hasPostEvent)
         ? 'buffer_pre_post'
         : (hasCameraVideo ? 'camera_sd' : 'none');
@@ -1494,7 +1567,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
               `/api/alerts/${encodeURIComponent(id)}/video/pre`
             ),
             frames: videoClips.preFrameCount || 0,
-            duration: videoClips.preDuration || 0,
+            duration: preDuration,
             description: 'Primary evidence: 30 seconds before alert (frame-by-frame from circular buffer)'
           },
           post_event: {
@@ -1505,7 +1578,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
               `/api/alerts/${encodeURIComponent(id)}/video/post`
             ),
             frames: videoClips.postFrameCount || 0,
-            duration: videoClips.postDuration || 0,
+            duration: postDuration,
             description: 'Primary evidence: 30 seconds after alert (recorded frame-by-frame live)'
           },
           camera_sd: {
@@ -1517,6 +1590,22 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             ),
             request_url: `/api/alerts/${encodeURIComponent(id)}/request-report-video`,
             description: 'Secondary evidence: retrieved from camera SD card'
+          },
+          camera_sd_pre: {
+            path: videoClips.cameraPreVideo || null,
+            raw_url: normalizePublicVideoUrl(
+              videoClips.cameraPreVideo,
+              `/api/alerts/${encodeURIComponent(id)}/video/camera`
+            ),
+            description: 'Camera SD pre-incident clip requested automatically on alert'
+          },
+          camera_sd_post: {
+            path: videoClips.cameraPostVideo || null,
+            raw_url: normalizePublicVideoUrl(
+              videoClips.cameraPostVideo,
+              `/api/alerts/${encodeURIComponent(id)}/video/camera`
+            ),
+            description: 'Camera SD post-incident clip requested automatically on alert'
           },
           // From videos table (database records)
           database_records: videosResult.rows

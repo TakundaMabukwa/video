@@ -38,6 +38,9 @@ export class CircularVideoBuffer extends EventEmitter {
 
     // If recording post-event, collect frames
     if (this.postEventRecording) {
+      if (this.postEventRecording.frames.length === 0) {
+        this.postEventRecording.startTime = timestamp;
+      }
       this.postEventRecording.frames.push({ data: frameData, timestamp, isIFrame });
       
       const elapsed = (timestamp.getTime() - this.postEventRecording.startTime.getTime()) / 1000;
@@ -47,7 +50,7 @@ export class CircularVideoBuffer extends EventEmitter {
     }
   }
 
-  async captureEventClip(alertId: string, preEventDuration: number = 30): Promise<string | null> {
+  async captureEventClip(alertId: string, preEventDuration: number = 30): Promise<{ clipPath: string; duration: number; frameCount: number } | null> {
     const now = new Date();
     const cutoffTime = new Date(now.getTime() - preEventDuration * 1000);
     const preEventFrames = this.frames.filter(f => f.timestamp >= cutoffTime);
@@ -70,7 +73,7 @@ export class CircularVideoBuffer extends EventEmitter {
     // Start post-event recording
     const postEventTimer = setTimeout(() => {
       this.finalizePostEventRecording();
-    }, (this.maxDuration + 5) * 1000);
+    }, (this.maxDuration * 3 + 5) * 1000);
     
     this.postEventRecording = {
       alertId,
@@ -83,7 +86,7 @@ export class CircularVideoBuffer extends EventEmitter {
     const clipPath = await this.saveClip(alertId, preEventFrames, 'pre');
     console.log(`📹 Pre-event clip saved: ${clipPath} (${preEventFrames.length} frames, ${duration.toFixed(1)}s)`);
 
-    return clipPath;
+    return { clipPath, duration, frameCount: preEventFrames.length };
   }
 
   private async finalizePostEventRecording(): Promise<void> {

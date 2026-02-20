@@ -219,16 +219,18 @@ export class AlertManager extends EventEmitter {
       return;
     }
 
-    const clipPath = await buffer.captureEventClip(alert.id, 30);
+    const preClip = await buffer.captureEventClip(alert.id, 30);
     
     // Only store path if we got a valid clip
-    if (clipPath) {
+    if (preClip?.clipPath) {
       if (!alert.metadata.videoClips) {
         alert.metadata.videoClips = {};
       }
-      alert.metadata.videoClips.pre = clipPath;
-      alert.videoClipPath = clipPath;
-      await this.persistAlertClipVideo(alert, clipPath, 'alert_pre', 30);
+      alert.metadata.videoClips.pre = preClip.clipPath;
+      alert.metadata.videoClips.preFrameCount = preClip.frameCount;
+      alert.metadata.videoClips.preDuration = preClip.duration;
+      alert.videoClipPath = preClip.clipPath;
+      await this.persistAlertClipVideo(alert, preClip.clipPath, 'alert_pre', Math.max(1, Math.round(preClip.duration)));
       
       await this.alertStorage.saveAlert(alert);
       console.log(`✅ Alert ${alert.id}: Pre-event video captured, post-event recording started (30s)`);
@@ -649,35 +651,59 @@ export class AlertManager extends EventEmitter {
   }
 
   private async requestAlertVideoFromCamera(alert: AlertEvent): Promise<void> {
-    // Reporting window: 30 seconds BEFORE alert timestamp
     const alertTime = alert.timestamp;
-    const startTime = new Date(alertTime.getTime() - 30 * 1000);
-    const endTime = new Date(alertTime.getTime());
+    const preStartTime = new Date(alertTime.getTime() - 30 * 1000);
+    const preEndTime = new Date(alertTime.getTime());
+    const postStartTime = new Date(alertTime.getTime());
+    const postEndTime = new Date(alertTime.getTime() + 30 * 1000);
 
-    console.log(`🎥 Requesting camera report video (-30s~0s) for alert ${alert.id}`);
-    
-    // Emit request for camera video retrieval (0x9201 command)
+    console.log(`Requesting camera report videos (-30s..0s and 0s..+30s) for alert ${alert.id}`);
+
     this.emit('request-camera-video', {
       vehicleId: alert.vehicleId,
       channel: alert.channel,
-      startTime,
-      endTime,
+      startTime: preStartTime,
+      endTime: preEndTime,
       alertId: alert.id,
-      audioVideoType: 2, // Video only
-      streamType: 1,     // Main stream
-      memoryType: 1,     // Main storage
-      playbackMethod: 0  // Normal playback
+      windowType: 'pre',
+      audioVideoType: 2,
+      streamType: 1,
+      memoryType: 1,
+      playbackMethod: 0
     });
 
-    // File transfer request (0x9206)
     this.emit('request-camera-video-download', {
       vehicleId: alert.vehicleId,
       channel: alert.channel,
-      startTime,
-      endTime,
-      alertId: alert.id
+      startTime: preStartTime,
+      endTime: preEndTime,
+      alertId: alert.id,
+      windowType: 'pre'
+    });
+
+    this.emit('request-camera-video', {
+      vehicleId: alert.vehicleId,
+      channel: alert.channel,
+      startTime: postStartTime,
+      endTime: postEndTime,
+      alertId: alert.id,
+      windowType: 'post',
+      audioVideoType: 2,
+      streamType: 1,
+      memoryType: 1,
+      playbackMethod: 0
+    });
+
+    this.emit('request-camera-video-download', {
+      vehicleId: alert.vehicleId,
+      channel: alert.channel,
+      startTime: postStartTime,
+      endTime: postEndTime,
+      alertId: alert.id,
+      windowType: 'post'
     });
   }
 }
+
 
 
