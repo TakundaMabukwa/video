@@ -148,8 +148,8 @@ async function startServer() {
   app.use('/hls', express.static('hls'));
   
   const httpServer = createServer(app);
-  const dataWsServer = new DataWebSocketServer(httpServer, '/ws/data');
-  const liveVideoServer = new LiveVideoStreamServer(httpServer, tcpServer);
+  const dataWsServer = new DataWebSocketServer('/ws/data');
+  const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video');
   const sseVideoStream = new SSEVideoStream(tcpServer);
   
   // Connect UDP frames to WebSocket and SSE broadcast
@@ -223,7 +223,36 @@ async function startServer() {
     })));
   });
   
-  const wsServer = new AlertWebSocketServer(httpServer, alertManager);
+  const wsServer = new AlertWebSocketServer(alertManager, '/ws/alerts');
+
+  // Single upgrade router for all websocket paths.
+  httpServer.on('upgrade', (request, socket, head) => {
+    let pathname = '';
+    try {
+      const host = request.headers.host || 'localhost';
+      pathname = new URL(request.url || '', `http://${host}`).pathname;
+    } catch {
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
+    if (pathname === wsServer.getPath()) {
+      wsServer.handleUpgrade(request, socket, head);
+      return;
+    }
+    if (pathname === dataWsServer.getPath()) {
+      dataWsServer.handleUpgrade(request, socket, head);
+      return;
+    }
+    if (pathname === liveVideoServer.getPath()) {
+      liveVideoServer.handleUpgrade(request, socket, head);
+      return;
+    }
+
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+    socket.destroy();
+  });
 
   // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected streams.
   const runAutoScreenshotFanout = async () => {

@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import { Server as HttpServer } from 'http';
+import { IncomingMessage } from 'http';
 import { JTT808Server } from '../tcp/server';
 
 interface StreamSubscription {
@@ -13,12 +13,13 @@ export class LiveVideoStreamServer {
   private wss: WebSocket.Server;
   private subscriptions = new Map<string, StreamSubscription[]>();
   private tcpServer: JTT808Server;
+  private path: string;
 
-  constructor(httpServer: HttpServer, tcpServer: JTT808Server) {
+  constructor(tcpServer: JTT808Server, path = '/ws/video') {
     this.tcpServer = tcpServer;
-    this.wss = new WebSocket.Server({ 
-      server: httpServer, 
-      path: '/ws/video'
+    this.path = path;
+    this.wss = new WebSocket.Server({
+      noServer: true
     });
 
     this.wss.on('connection', (ws) => {
@@ -39,7 +40,17 @@ export class LiveVideoStreamServer {
       });
     });
 
-    console.log('Live video stream WebSocket ready at /ws/video');
+    console.log(`Live video WebSocket initialized on ${this.path}`);
+  }
+
+  public getPath(): string {
+    return this.path;
+  }
+
+  public handleUpgrade(request: IncomingMessage, socket: any, head: Buffer): void {
+    this.wss.handleUpgrade(request, socket, head, (ws) => {
+      this.wss.emit('connection', ws, request);
+    });
   }
 
   private handleClientMessage(ws: WebSocket, msg: any) {
@@ -55,7 +66,7 @@ export class LiveVideoStreamServer {
 
   private subscribe(ws: WebSocket, vehicleId: string, channel: number) {
     const key = `${vehicleId}_${channel}`;
-    
+
     if (!this.subscriptions.has(key)) {
       this.subscriptions.set(key, []);
       this.tcpServer.startVideo(vehicleId, channel);
@@ -73,10 +84,10 @@ export class LiveVideoStreamServer {
   private unsubscribe(ws: WebSocket, vehicleId: string, channel: number) {
     const key = `${vehicleId}_${channel}`;
     const subs = this.subscriptions.get(key);
-    
+
     if (subs) {
       const filtered = subs.filter(s => s.ws !== ws);
-      
+
       if (filtered.length === 0) {
         this.subscriptions.delete(key);
         this.tcpServer.stopVideo(vehicleId, channel);
@@ -90,7 +101,7 @@ export class LiveVideoStreamServer {
   private unsubscribeAll(ws: WebSocket) {
     for (const [key, subs] of this.subscriptions.entries()) {
       const filtered = subs.filter(s => s.ws !== ws);
-      
+
       if (filtered.length === 0) {
         this.subscriptions.delete(key);
         const [vehicleId, channel] = key.split('_');
@@ -104,7 +115,7 @@ export class LiveVideoStreamServer {
   broadcastFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) {
     const key = `${vehicleId}_${channel}`;
     const subs = this.subscriptions.get(key);
-    
+
     if (!subs || subs.length === 0) return;
 
     const message = JSON.stringify({
