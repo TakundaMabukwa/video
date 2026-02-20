@@ -121,10 +121,12 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   };
   const resolveAlertClipSource = (videoClips: any, type: 'pre' | 'post' | 'camera') => {
     if (type === 'pre') {
-      return String(videoClips?.preStorageUrl || videoClips?.pre || '').trim();
+      // Prefer local raw clip path so we can transcode to browser-playable MP4.
+      return String(videoClips?.pre || videoClips?.preStorageUrl || '').trim();
     }
     if (type === 'post') {
-      return String(videoClips?.postStorageUrl || videoClips?.post || '').trim();
+      // Prefer local raw clip path so we can transcode to browser-playable MP4.
+      return String(videoClips?.post || videoClips?.postStorageUrl || '').trim();
     }
     return String(
       videoClips?.cameraVideoLocalPath ||
