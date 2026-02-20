@@ -56,6 +56,82 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (s && s.startsWith('/api/')) return s;
     return fallback;
   };
+  const transcodeCache = new Map<string, Promise<string>>();
+  const getFfmpegBinary = () => {
+    if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const installer = require('@ffmpeg-installer/ffmpeg');
+      if (installer?.path) return installer.path;
+    } catch {}
+    return 'ffmpeg';
+  };
+  const toPlayableMp4 = async (sourcePath: string) => {
+    if (!sourcePath) throw new Error('Missing source file');
+    if (!fs.existsSync(sourcePath)) throw new Error(`Source file not found: ${sourcePath}`);
+    if (/\.mp4$/i.test(sourcePath)) return sourcePath;
+
+    const parsed = path.parse(sourcePath);
+    const outputPath = path.join(parsed.dir, `${parsed.name}.playable.mp4`);
+    const sourceStat = fs.statSync(sourcePath);
+    if (fs.existsSync(outputPath)) {
+      const outStat = fs.statSync(outputPath);
+      if (outStat.size > 0 && outStat.mtimeMs >= sourceStat.mtimeMs) return outputPath;
+    }
+
+    const cacheKey = `${sourcePath}=>${outputPath}`;
+    const existing = transcodeCache.get(cacheKey);
+    if (existing) return existing;
+
+    const task = new Promise<string>((resolve, reject) => {
+      const ffmpeg = spawn(getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-y',
+        '-fflags', '+genpts',
+        '-i', sourcePath,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        outputPath
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
+      ffmpeg.on('error', (err) => {
+        reject(new Error(err?.message || 'Failed to spawn ffmpeg'));
+      });
+      ffmpeg.on('close', (code) => {
+        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          resolve(outputPath);
+          return;
+        }
+        try {
+          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+        } catch {}
+        reject(new Error(stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`));
+      });
+    }).finally(() => {
+      transcodeCache.delete(cacheKey);
+    });
+
+    transcodeCache.set(cacheKey, task);
+    return task;
+  };
+  const resolveAlertClipSource = (videoClips: any, type: 'pre' | 'post' | 'camera') => {
+    if (type === 'pre') {
+      return String(videoClips?.preStorageUrl || videoClips?.pre || '').trim();
+    }
+    if (type === 'post') {
+      return String(videoClips?.postStorageUrl || videoClips?.post || '').trim();
+    }
+    return String(
+      videoClips?.cameraVideoLocalPath ||
+      videoClips?.cameraVideo ||
+      ''
+    ).trim();
+  };
   const buildManualVideoJob = (
     vehicleId: string,
     channel: number,
@@ -954,20 +1030,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         alert: {
           ...withAlertMediaLinks(alert),
           videoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`,
             `/api/alerts/${encodeURIComponent(id)}/video/pre`
           ),
-          preIncidentVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.preStorageUrl,
+          preIncidentVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/pre`,
+          postIncidentVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/post`,
+          cameraVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/camera`,
+          preIncidentRawUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.pre,
             `/api/alerts/${encodeURIComponent(id)}/video/pre`
           ),
-          postIncidentVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.postStorageUrl,
+          postIncidentRawUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
-          ),
-          cameraVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.cameraVideo,
-            `/api/alerts/${encodeURIComponent(id)}/videos`
           ),
           preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
           postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl),
@@ -980,20 +1055,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         alert: {
           ...withAlertMediaLinks(alert),
           videoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.cameraVideo,
+            `/api/alerts/${encodeURIComponent(id)}/video/pre`,
             `/api/alerts/${encodeURIComponent(id)}/video/pre`
           ),
-          preIncidentVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.preStorageUrl,
+          preIncidentVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/pre`,
+          postIncidentVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/post`,
+          cameraVideoUrl: `/api/alerts/${encodeURIComponent(id)}/video/camera`,
+          preIncidentRawUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.preStorageUrl || alert?.metadata?.videoClips?.pre,
             `/api/alerts/${encodeURIComponent(id)}/video/pre`
           ),
-          postIncidentVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.postStorageUrl,
+          postIncidentRawUrl: normalizePublicVideoUrl(
+            alert?.metadata?.videoClips?.postStorageUrl || alert?.metadata?.videoClips?.post,
             `/api/alerts/${encodeURIComponent(id)}/video/post`
-          ),
-          cameraVideoUrl: normalizePublicVideoUrl(
-            alert?.metadata?.videoClips?.cameraVideo,
-            `/api/alerts/${encodeURIComponent(id)}/videos`
           ),
           preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl),
           postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl)
@@ -1078,6 +1152,86 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       res.status(404).json({
         success: false,
         message: 'Video file not found on disk'
+      });
+    }
+  });
+
+  // Get playable video clip for alert by type (pre/post/camera)
+  router.get('/alerts/:id/video/:type', async (req, res) => {
+    const { id } = req.params;
+    const rawType = String(req.params.type || '').toLowerCase();
+    const type = rawType === 'pre' || rawType === 'post' || rawType === 'camera'
+      ? (rawType as 'pre' | 'post' | 'camera')
+      : null;
+
+    if (!type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid type. Use pre, post, or camera'
+      });
+    }
+
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, metadata FROM alerts WHERE id = $1`,
+        [id]
+      );
+
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      const rawMeta = result.rows[0].metadata;
+      const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
+      const videoClips = metadata?.videoClips || {};
+      const source = resolveAlertClipSource(videoClips, type);
+
+      if (!source) {
+        return res.status(404).json({
+          success: false,
+          message: `${type} clip not found`
+        });
+      }
+
+      if (/^https?:\/\//i.test(source)) {
+        return res.redirect(source);
+      }
+      if (source.startsWith('/api/')) {
+        return res.redirect(source);
+      }
+
+      const sourcePath = path.isAbsolute(source)
+        ? source
+        : path.join(process.cwd(), source);
+      if (!fs.existsSync(sourcePath)) {
+        return res.status(404).json({
+          success: false,
+          message: `Source clip missing: ${source}`
+        });
+      }
+
+      let playablePath = sourcePath;
+      let contentType = 'video/mp4';
+      try {
+        playablePath = await toPlayableMp4(sourcePath);
+      } catch (transcodeErr) {
+        console.error(`Transcode failed for alert ${id} ${type}:`, transcodeErr);
+        playablePath = sourcePath;
+        contentType = /\.mp4$/i.test(sourcePath) ? 'video/mp4' : 'video/h264';
+      }
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', `inline; filename="${id}_${type}${contentType === 'video/mp4' ? '.mp4' : '.h264'}"`);
+      return res.sendFile(path.resolve(playablePath));
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert video',
+        error: error?.message || String(error)
       });
     }
   });
@@ -1173,9 +1327,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       // Extract video paths from metadata
       const videoClips = alert.metadata?.videoClips || {};
 
-      const hasPreEvent = !!videoClips.pre;
-      const hasPostEvent = !!videoClips.post;
-      const hasCameraVideo = !!videoClips.cameraVideo;
+      const hasPreEvent = !!(videoClips.pre || videoClips.preStorageUrl);
+      const hasPostEvent = !!(videoClips.post || videoClips.postStorageUrl);
+      const hasCameraVideo = !!(videoClips.cameraVideo || videoClips.cameraVideoLocalPath);
       const preferredSource = (hasPreEvent || hasPostEvent)
         ? 'buffer_pre_post'
         : (hasCameraVideo ? 'camera_sd' : 'none');
@@ -1195,8 +1349,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           // Primary evidence: frame-by-frame clips from circular buffer
           pre_event: {
             path: videoClips.pre || null,
-            url: normalizePublicVideoUrl(
-              videoClips.preStorageUrl,
+            url: `/api/alerts/${encodeURIComponent(id)}/video/pre`,
+            raw_url: normalizePublicVideoUrl(
+              videoClips.preStorageUrl || videoClips.pre,
               `/api/alerts/${encodeURIComponent(id)}/video/pre`
             ),
             frames: videoClips.preFrameCount || 0,
@@ -1205,8 +1360,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           },
           post_event: {
             path: videoClips.post || null,
-            url: normalizePublicVideoUrl(
-              videoClips.postStorageUrl,
+            url: `/api/alerts/${encodeURIComponent(id)}/video/post`,
+            raw_url: normalizePublicVideoUrl(
+              videoClips.postStorageUrl || videoClips.post,
               `/api/alerts/${encodeURIComponent(id)}/video/post`
             ),
             frames: videoClips.postFrameCount || 0,
@@ -1215,9 +1371,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           },
           camera_sd: {
             path: videoClips.cameraVideo || null,
-            url: normalizePublicVideoUrl(
+            url: `/api/alerts/${encodeURIComponent(id)}/video/camera`,
+            raw_url: normalizePublicVideoUrl(
               videoClips.cameraVideo,
-              `/api/alerts/${encodeURIComponent(id)}/videos`
+              `/api/alerts/${encodeURIComponent(id)}/video/camera`
             ),
             request_url: `/api/alerts/${encodeURIComponent(id)}/request-report-video`,
             description: 'Secondary evidence: retrieved from camera SD card'
