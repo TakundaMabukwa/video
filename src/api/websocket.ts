@@ -5,6 +5,7 @@ import { AlertManager } from '../alerts/alertManager';
 export class AlertWebSocketServer {
   private wss: WebSocketServer;
   private clients = new Set<WebSocket>();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
 
   constructor(httpServer: HTTPServer, alertManager: AlertManager) {
     this.wss = new WebSocketServer({
@@ -18,28 +19,38 @@ export class AlertWebSocketServer {
     });
 
     this.wss.on('connection', (ws: WebSocket) => {
-      console.log('🔌 WebSocket client connected');
+      console.log('Alert WebSocket client connected');
+      (ws as any).isAlive = true;
       this.clients.add(ws);
 
+      ws.on('pong', () => {
+        (ws as any).isAlive = true;
+      });
+
       ws.on('close', () => {
-        console.log('🔌 WebSocket client disconnected');
+        console.log('Alert WebSocket client disconnected');
         this.clients.delete(ws);
       });
 
       ws.on('error', (error) => {
-        console.error('WebSocket error:', error);
+        console.error('Alert WebSocket error:', error);
         this.clients.delete(ws);
       });
 
-      // Send initial connection message
       ws.send(JSON.stringify({
         type: 'connected',
         message: 'Connected to alert notification system',
+        timestamp: new Date(),
+        activeAlertCount: alertManager.getActiveAlerts().length
+      }));
+
+      ws.send(JSON.stringify({
+        type: 'active_alerts_snapshot',
+        data: alertManager.getActiveAlerts(),
         timestamp: new Date()
       }));
     });
 
-    // Listen to alert manager events
     alertManager.on('notification', (notification) => {
       this.broadcast(notification);
     });
@@ -72,7 +83,24 @@ export class AlertWebSocketServer {
       });
     });
 
-    console.log('🔔 WebSocket alert notification server initialized');
+    this.heartbeatTimer = setInterval(() => {
+      this.clients.forEach((client) => {
+        if ((client as any).isAlive === false) {
+          try { client.terminate(); } catch {}
+          this.clients.delete(client);
+          return;
+        }
+        (client as any).isAlive = false;
+        try { client.ping(); } catch {}
+      });
+    }, 25000);
+
+    this.wss.on('close', () => {
+      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    });
+
+    console.log('Alert WebSocket server initialized on /ws/alerts');
   }
 
   public broadcast(message: any): void {
