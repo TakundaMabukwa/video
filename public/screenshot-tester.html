@@ -826,10 +826,23 @@
         if (recentScreenshotsCache.length === 0) {
           recentScreenshotsCache = await fetchRecentScreenshots();
         }
-        const res = await fetch('/api/alerts/active');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const alerts = data.alerts || [];
+        let alerts = [];
+        try {
+          const res = await fetch('/api/alerts/active');
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json().catch(() => ({}));
+          alerts = Array.isArray(data.alerts) ? data.alerts : [];
+        } catch (_) {
+          alerts = [];
+        }
+
+        // Fallback to persisted history when in-memory active set is empty/unavailable.
+        if (alerts.length === 0) {
+          const histRes = await fetch('/api/alerts/history');
+          if (!histRes.ok) throw new Error(`HTTP ${histRes.status}`);
+          const histData = await histRes.json().catch(() => ({}));
+          alerts = Array.isArray(histData.data) ? histData.data : [];
+        }
 
         const byAlertId = new Map();
         for (const s of recentScreenshotsCache) {
@@ -865,7 +878,7 @@
           byAlertVideos.set(String(baseAlert.id), videos);
         }
 
-        summaryEl.textContent = `${alerts.length} active alert(s) | last update: ${new Date().toLocaleTimeString()}`;
+        summaryEl.textContent = `${alerts.length} alert(s) | last update: ${new Date().toLocaleTimeString()}`;
         alertsEl.innerHTML = alerts.map((a) => {
           const id = String(a.id);
           const linked = byAlertDetailScreens.get(id);
@@ -874,9 +887,10 @@
           const videosInfo = byAlertVideos.get(id);
           return alertCard(a, screenshots, videosInfo);
         }).join('')
-          || '<div class="meta">No active alerts.</div>';
+          || '<div class="meta">No alerts found.</div>';
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
+        alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
       }
     }
 
