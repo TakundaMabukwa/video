@@ -67,6 +67,33 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     } catch {}
     return 'ffmpeg';
   };
+  const runFfmpegProfiles = async (profiles: string[][], outputPath: string) => {
+    let lastError = 'ffmpeg failed';
+    for (const args of profiles) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const ffmpeg = spawn(getFfmpegBinary(), args, { stdio: ['ignore', 'ignore', 'pipe'] });
+          let stderr = '';
+          ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
+          ffmpeg.on('error', (err) => reject(new Error(err?.message || 'Failed to spawn ffmpeg')));
+          ffmpeg.on('close', (code) => {
+            if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+              resolve();
+              return;
+            }
+            try {
+              if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+            } catch {}
+            reject(new Error(stderr?.slice(0, 800) || `ffmpeg exited with code ${code}`));
+          });
+        });
+        return;
+      } catch (err: any) {
+        lastError = err?.message || String(err);
+      }
+    }
+    throw new Error(lastError);
+  };
   const toPlayableMp4 = async (sourcePath: string) => {
     if (!sourcePath) throw new Error('Missing source file');
     if (!fs.existsSync(sourcePath)) throw new Error(`Source file not found: ${sourcePath}`);
@@ -84,36 +111,16 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const existing = transcodeCache.get(cacheKey);
     if (existing) return existing;
 
-    const task = new Promise<string>((resolve, reject) => {
-      const ffmpeg = spawn(getFfmpegBinary(), [
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-y',
-        '-fflags', '+genpts',
-        '-i', sourcePath,
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        outputPath
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-      let stderr = '';
-      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
-      ffmpeg.on('error', (err) => {
-        reject(new Error(err?.message || 'Failed to spawn ffmpeg'));
-      });
-      ffmpeg.on('close', (code) => {
-        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
-          resolve(outputPath);
-          return;
-        }
-        try {
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        } catch {}
-        reject(new Error(stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`));
-      });
-    }).finally(() => {
+    const task = (async () => {
+      const commonOut = ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outputPath];
+      const profiles: string[][] = [
+        ['-hide_banner', '-loglevel', 'error', '-y', '-fflags', '+genpts', '-i', sourcePath, ...commonOut],
+        ['-hide_banner', '-loglevel', 'error', '-y', '-r', '25', '-fflags', '+genpts', '-f', 'h264', '-i', sourcePath, ...commonOut],
+        ['-hide_banner', '-loglevel', 'error', '-y', '-r', '20', '-f', 'h264', '-i', sourcePath, ...commonOut]
+      ];
+      await runFfmpegProfiles(profiles, outputPath);
+      return outputPath;
+    })().finally(() => {
       transcodeCache.delete(cacheKey);
     });
 
@@ -137,34 +144,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const existing = transcodeCache.get(cacheKey);
     if (existing) return existing;
 
-    const task = new Promise<string>((resolve, reject) => {
-      const ffmpeg = spawn(getFfmpegBinary(), [
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-y',
-        '-fflags', '+genpts',
-        '-i', sourceUrl,
-        '-c:v', 'libx264',
-        '-preset', 'veryfast',
-        '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart',
-        outputPath
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-      let stderr = '';
-      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
-      ffmpeg.on('error', (err) => reject(new Error(err?.message || 'Failed to spawn ffmpeg')));
-      ffmpeg.on('close', (code) => {
-        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
-          resolve(outputPath);
-          return;
-        }
-        try {
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        } catch {}
-        reject(new Error(stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`));
-      });
-    }).finally(() => {
+    const task = (async () => {
+      const commonOut = ['-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', outputPath];
+      const profiles: string[][] = [
+        ['-hide_banner', '-loglevel', 'error', '-y', '-fflags', '+genpts', '-i', sourceUrl, ...commonOut],
+        ['-hide_banner', '-loglevel', 'error', '-y', '-reconnect', '1', '-reconnect_streamed', '1', '-reconnect_delay_max', '2', '-i', sourceUrl, ...commonOut]
+      ];
+      await runFfmpegProfiles(profiles, outputPath);
+      return outputPath;
+    })().finally(() => {
       transcodeCache.delete(cacheKey);
     });
 
