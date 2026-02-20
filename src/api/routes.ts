@@ -5,6 +5,7 @@ import { SpeedingManager } from '../services/speedingManager';
 import { VideoStorage } from '../storage/videoStorage';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { query as dbQuery } from '../storage/database';
 
@@ -102,6 +103,57 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       ffmpeg.on('error', (err) => {
         reject(new Error(err?.message || 'Failed to spawn ffmpeg'));
       });
+      ffmpeg.on('close', (code) => {
+        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          resolve(outputPath);
+          return;
+        }
+        try {
+          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+        } catch {}
+        reject(new Error(stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`));
+      });
+    }).finally(() => {
+      transcodeCache.delete(cacheKey);
+    });
+
+    transcodeCache.set(cacheKey, task);
+    return task;
+  };
+  const toPlayableMp4FromHttp = async (sourceUrl: string, cacheId: string) => {
+    if (!sourceUrl) throw new Error('Missing source URL');
+    if (/\.mp4(?:$|\?)/i.test(sourceUrl)) return sourceUrl;
+
+    const outputDir = path.join(process.cwd(), 'recordings', 'transcoded', 'remote');
+    try { fs.mkdirSync(outputDir, { recursive: true }); } catch {}
+    const hash = crypto.createHash('sha1').update(`${cacheId}:${sourceUrl}`).digest('hex').slice(0, 16);
+    const outputPath = path.join(outputDir, `${hash}.playable.mp4`);
+
+    if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+      return outputPath;
+    }
+
+    const cacheKey = `http:${sourceUrl}=>${outputPath}`;
+    const existing = transcodeCache.get(cacheKey);
+    if (existing) return existing;
+
+    const task = new Promise<string>((resolve, reject) => {
+      const ffmpeg = spawn(getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-y',
+        '-fflags', '+genpts',
+        '-i', sourceUrl,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-pix_fmt', 'yuv420p',
+        '-movflags', '+faststart',
+        outputPath
+      ], { stdio: ['ignore', 'ignore', 'pipe'] });
+
+      let stderr = '';
+      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
+      ffmpeg.on('error', (err) => reject(new Error(err?.message || 'Failed to spawn ffmpeg')));
       ffmpeg.on('close', (code) => {
         if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
           resolve(outputPath);
@@ -1200,7 +1252,21 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
 
       if (/^https?:\/\//i.test(source)) {
-        return res.redirect(source);
+        let playablePath: string = source;
+        let contentType = 'video/mp4';
+        try {
+          playablePath = await toPlayableMp4FromHttp(source, `${id}:${type}`);
+        } catch (transcodeErr) {
+          console.error(`HTTP transcode failed for alert ${id} ${type}:`, transcodeErr);
+          playablePath = source;
+          contentType = /\.mp4(?:$|\?)/i.test(source) ? 'video/mp4' : 'video/h264';
+        }
+        if (/^https?:\/\//i.test(playablePath)) {
+          return res.redirect(playablePath);
+        }
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `inline; filename="${id}_${type}${contentType === 'video/mp4' ? '.mp4' : '.h264'}"`);
+        return res.sendFile(path.resolve(playablePath));
       }
       if (source.startsWith('/api/')) {
         return res.redirect(source);
