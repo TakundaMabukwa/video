@@ -274,6 +274,42 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     return { id, outputUrl };
   };
+  const toNumericLimit = (value: unknown, fallback: number, min = 1, max = 500) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(n)));
+  };
+  const toNumericMinutes = (value: unknown, fallback: number, min = 1, max = 7 * 24 * 60) => {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.floor(n)));
+  };
+  const normalizeAlertRecord = (alert: any) => {
+    const metadata = typeof alert?.metadata === 'string'
+      ? (() => { try { return JSON.parse(alert.metadata || '{}'); } catch { return {}; } })()
+      : (alert?.metadata || {});
+    return {
+      ...alert,
+      metadata,
+      vehicleId: alert?.vehicleId || alert?.device_id || alert?.deviceId,
+      type: alert?.type || alert?.alert_type,
+      priority: alert?.priority || 'high',
+      status: alert?.status || (alert?.resolved ? 'resolved' : 'new'),
+      timestamp: alert?.timestamp
+    };
+  };
+  const mergeRecentAlerts = (lists: any[][], limit: number) => {
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    lists.flat().forEach((a: any) => {
+      const id = String(a?.id || '').trim();
+      if (!id || seen.has(id)) return;
+      seen.add(id);
+      merged.push(a);
+    });
+    merged.sort((a: any, b: any) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime());
+    return merged.slice(0, limit);
+  };
 
   const persistManualJobVideo = async (job: {
     id: string;
@@ -704,32 +740,52 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   });
 
   // Get alerts
-  router.get('/alerts', (req, res) => {
-    const alertManager = tcpServer.getAlertManager();
-    const allAlerts = alertManager.getActiveAlerts();
-    
-    // Apply filters
-    const status = req.query.status as string;
-    const priority = req.query.priority as string;
-    const limit = parseInt(req.query.limit as string) || 100;
-    
-    let filtered = allAlerts;
-    
-    if (status) {
-      filtered = filtered.filter(a => a.status === status);
+  router.get('/alerts', async (req, res) => {
+    try {
+      const alertManager = tcpServer.getAlertManager();
+      const status = String(req.query.status || '').trim();
+      const priority = String(req.query.priority || '').trim();
+      const limit = toNumericLimit(req.query.limit, 10);
+      const minutes = toNumericMinutes(req.query.minutes, 180);
+
+      const memAlertsRaw = alertManager.getActiveAlerts();
+      let memAlerts = memAlertsRaw.map((a: any) => normalizeAlertRecord(a));
+      if (status) memAlerts = memAlerts.filter((a: any) => String(a?.status || '').toLowerCase() === status.toLowerCase());
+      if (priority) memAlerts = memAlerts.filter((a: any) => String(a?.priority || '').toLowerCase() === priority.toLowerCase());
+
+      const where: string[] = [`timestamp >= NOW() - ($1::int * INTERVAL '1 minute')`];
+      const params: any[] = [minutes];
+      let p = 2;
+      if (status) {
+        where.push(`status = $${p++}`);
+        params.push(status);
+      }
+      if (priority) {
+        where.push(`priority = $${p++}`);
+        params.push(priority);
+      }
+      params.push(Math.max(limit * 5, 50));
+      const dbResult = await require('../storage/database').query(
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+         FROM alerts
+         WHERE ${where.join(' AND ')}
+         ORDER BY timestamp DESC
+         LIMIT $${p}`,
+        params
+      );
+      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+
+      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
+      res.json({
+        success: true,
+        alerts,
+        count: alerts.length,
+        source: 'merged',
+        window_minutes: minutes
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch alerts' });
     }
-    
-    if (priority) {
-      filtered = filtered.filter(a => a.priority === priority);
-    }
-    
-    filtered = filtered.slice(0, limit);
-    
-    res.json({
-      success: true,
-      alerts: filtered,
-      count: filtered.length
-    });
   });
 
   // Get vehicle images
@@ -832,14 +888,39 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // IMPORTANT: Specific routes MUST come BEFORE parameterized routes (/alerts/:id)
 
   // Get active alerts
-  router.get('/alerts/active', (req, res) => {
-    const alertManager = tcpServer.getAlertManager();
-    const alerts = alertManager.getActiveAlerts();
-    res.json({
-      success: true,
-      alerts: alerts.map(withAlertMediaLinks),
-      count: alerts.length
-    });
+  router.get('/alerts/active', async (req, res) => {
+    try {
+      const alertManager = tcpServer.getAlertManager();
+      const limit = toNumericLimit(req.query.limit, 10);
+      const minutes = toNumericMinutes(req.query.minutes, 180);
+
+      const memAlerts = alertManager
+        .getActiveAlerts()
+        .map((a: any) => normalizeAlertRecord(a))
+        .filter((a: any) => ['new', 'acknowledged', 'escalated'].includes(String(a?.status || '').toLowerCase()));
+
+      const dbResult = await require('../storage/database').query(
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+         FROM alerts
+         WHERE status IN ('new', 'acknowledged', 'escalated')
+           AND timestamp >= NOW() - ($1::int * INTERVAL '1 minute')
+         ORDER BY timestamp DESC
+         LIMIT $2`,
+        [minutes, Math.max(limit * 5, 50)]
+      );
+      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
+
+      res.json({
+        success: true,
+        alerts,
+        count: alerts.length,
+        source: 'merged',
+        window_minutes: minutes
+      });
+    } catch (error) {
+      res.status(500).json({ success: false, message: 'Failed to fetch active alerts' });
+    }
   });
 
   // Get alert statistics (moved before :id)
@@ -913,13 +994,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   router.get('/alerts/history', async (req, res) => {
     try {
       const { device_id, days = 7 } = req.query;
+      const limit = toNumericLimit(req.query.limit, 100, 1, 1000);
       let query = `SELECT * FROM alerts WHERE timestamp > NOW() - INTERVAL '${days} days'`;
       const params: any[] = [];
       if (device_id) {
         query += ' AND device_id = $1';
         params.push(device_id);
       }
-      query += ' ORDER BY timestamp DESC';
+      query += ' ORDER BY timestamp DESC LIMIT $' + (params.length + 1);
+      params.push(limit);
       const result = await require('../storage/database').query(query, params);
       res.json({ success: true, total: result.rows.length, data: result.rows });
     } catch (error) {
