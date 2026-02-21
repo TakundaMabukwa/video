@@ -11,7 +11,7 @@ import { AlertVideoCommands } from './alertVideoCommands';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { DeviceStorage } from '../storage/deviceStorage';
 import { ImageStorage } from '../storage/imageStorage';
-import { AlertManager } from '../alerts/alertManager';
+import { AlertManager, AlertPriority } from '../alerts/alertManager';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
 type ScreenshotFallbackResult = {
@@ -53,6 +53,7 @@ export class JTT808Server {
   private alertManager: AlertManager;
   private latestResourceLists = new Map<string, { receivedAt: number; items: ResourceVideoItem[] }>();
   private pendingResourceLists = new Map<string, PendingResourceList>();
+  private lastKnownLocation = new Map<string, { latitude: number; longitude: number; timestamp: Date }>();
 
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
@@ -482,6 +483,11 @@ export class JTT808Server {
     const alert = AlertParser.parseLocationReport(message.body, message.terminalPhone);
     
     if (alert) {
+      this.lastKnownLocation.set(alert.vehicleId, {
+        latitude: alert.latitude,
+        longitude: alert.longitude,
+        timestamp: alert.timestamp
+      });
       this.processAlert(alert);
     }
     
@@ -1208,6 +1214,39 @@ export class JTT808Server {
   }
 
   private handleMultimediaEvent(message: any, socket: net.Socket): void {
+    if (message.body.length >= 8) {
+      const multimediaId = message.body.readUInt32BE(0);
+      const multimediaType = message.body.readUInt8(4);
+      const multimediaFormat = message.body.readUInt8(5);
+      const eventCode = message.body.readUInt8(6);
+      const channel = message.body.readUInt8(7);
+
+      console.log(
+        `Multimedia event from ${message.terminalPhone}: id=${multimediaId}, type=${multimediaType}, format=${multimediaFormat}, event=${eventCode}, ch=${channel}`
+      );
+
+      const mapped = this.mapMultimediaEvent(eventCode);
+      if (mapped) {
+        const last = this.lastKnownLocation.get(message.terminalPhone);
+        void this.alertManager.processExternalAlert({
+          vehicleId: message.terminalPhone,
+          channel: channel || 1,
+          type: mapped.type,
+          signalCode: `external_multimedia_event_${eventCode}`,
+          priority: mapped.priority,
+          timestamp: new Date(),
+          location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+          metadata: {
+            sourceMessageId: '0x0800',
+            multimediaId,
+            multimediaType,
+            multimediaFormat,
+            eventCode
+          }
+        });
+      }
+    }
+
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
       this.getNextSerial(),
@@ -1219,6 +1258,27 @@ export class JTT808Server {
   }
 
   private handleCustomMessage(message: any, socket: net.Socket): void {
+    const decoded = this.decodeCustomPayloadText(message.body);
+    if (decoded) {
+      const keywordAlert = this.extractKeywordAlert(decoded);
+      if (keywordAlert) {
+        const last = this.lastKnownLocation.get(message.terminalPhone);
+        void this.alertManager.processExternalAlert({
+          vehicleId: message.terminalPhone,
+          channel: keywordAlert.channel || 1,
+          type: keywordAlert.type,
+          signalCode: keywordAlert.signalCode,
+          priority: keywordAlert.priority,
+          timestamp: new Date(),
+          location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+          metadata: {
+            sourceMessageId: '0x0704',
+            customText: decoded
+          }
+        });
+      }
+    }
+
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
       this.getNextSerial(),
@@ -1227,6 +1287,84 @@ export class JTT808Server {
       0
     );
     socket.write(response);
+  }
+
+  private mapMultimediaEvent(eventCode: number): { type: string; priority: AlertPriority } | null {
+    // JT/T 808 multimedia event codes commonly used by terminals:
+    // 0 platform command, 1 scheduled action, 2 alarm-triggered capture, 3 collision/rollover.
+    if (eventCode === 0 || eventCode === 1) return null;
+
+    if (eventCode === 2) {
+      return { type: 'Emergency Alarm Trigger', priority: AlertPriority.CRITICAL };
+    }
+    if (eventCode === 3) {
+      return { type: 'Collision/Rollover Trigger', priority: AlertPriority.CRITICAL };
+    }
+
+    return { type: `Multimedia Alarm Event ${eventCode}`, priority: AlertPriority.MEDIUM };
+  }
+
+  private decodeCustomPayloadText(payload: Buffer): string | null {
+    if (!payload || payload.length === 0) return null;
+
+    const candidates = [
+      payload.toString('utf8'),
+      payload.toString('latin1')
+    ]
+      .map((v) => v.replace(/\0/g, '').trim())
+      .filter((v) => v.length > 0);
+
+    let best: string | null = null;
+    let bestScore = 0;
+    for (const text of candidates) {
+      let printable = 0;
+      for (const ch of text) {
+        const code = ch.charCodeAt(0);
+        if ((code >= 32 && code <= 126) || ch === '\r' || ch === '\n' || ch === '\t') printable++;
+      }
+      const score = printable / Math.max(text.length, 1);
+      if (score > bestScore) {
+        bestScore = score;
+        best = text;
+      }
+    }
+
+    if (!best || bestScore < 0.75) return null;
+    return best.slice(0, 400);
+  }
+
+  private extractKeywordAlert(text: string): {
+    type: string;
+    priority: AlertPriority;
+    signalCode: string;
+    channel?: number;
+  } | null {
+    const patterns: Array<{ re: RegExp; type: string; priority: AlertPriority; signalCode: string }> = [
+      { re: /\b(panic|sos|emergency)\b/i, type: 'Emergency Alarm', priority: AlertPriority.CRITICAL, signalCode: 'custom_keyword_emergency' },
+      { re: /\b(collision|rollover|crash|accident)\b/i, type: 'Collision/Accident', priority: AlertPriority.CRITICAL, signalCode: 'custom_keyword_collision' },
+      { re: /\b(fatigue|yawn|drowsy|sleepy)\b/i, type: 'Driver Fatigue', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_fatigue' },
+      { re: /\b(seat\s*belt|seatbelt|unbelted|no\s*seat\s*belt|without\s*seat\s*belt)\b/i, type: 'No Seatbelt', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_no_seatbelt' },
+      { re: /\b(smok|cigarette)\b/i, type: 'Smoking While Driving', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_smoking' },
+      { re: /\b(phone|cellphone|mobile)\b/i, type: 'Phone Use While Driving', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_phone' },
+      { re: /\b(speed|overspeed)\b/i, type: 'Overspeed Alert', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_speed' },
+      { re: /\b(camera).*(covered|blocked|mask|obstruct)/i, type: 'Camera Covered', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_camera_covered' },
+      { re: /\b(storage|memory).*(fail|error|fault)/i, type: 'Storage Failure', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_storage_failure' },
+      { re: /\b(gnss|gps).*(antenna).*(disconnect|fault|error)/i, type: 'GNSS Antenna Issue', priority: AlertPriority.MEDIUM, signalCode: 'custom_keyword_gnss_antenna' },
+      { re: /\b(alert|alarm|warning|violation)\b/i, type: 'Custom Alert', priority: AlertPriority.MEDIUM, signalCode: 'custom_keyword_alert' }
+    ];
+
+    const matched = patterns.find((p) => p.re.test(text));
+    if (!matched) return null;
+
+    const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
+    const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+
+    return {
+      type: matched.type,
+      priority: matched.priority,
+      signalCode: matched.signalCode,
+      channel
+    };
   }
 
   private async handleMultimediaData(message: any, socket: net.Socket): Promise<void> {

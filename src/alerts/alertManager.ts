@@ -10,6 +10,7 @@ export enum AlertPriority {
   LOW = 'low',
   MEDIUM = 'medium',
   HIGH = 'high',
+
   CRITICAL = 'critical'
 }
 
@@ -39,6 +40,17 @@ export interface AlertEvent {
       postStorageUrl?: string;
     };
   };
+}
+
+export interface ExternalAlertInput {
+  vehicleId: string;
+  type: string;
+  signalCode?: string;
+  channel?: number;
+  timestamp?: Date;
+  priority?: AlertPriority;
+  location?: { latitude: number; longitude: number };
+  metadata?: Record<string, any>;
 }
 
 export class AlertManager extends EventEmitter {
@@ -174,6 +186,60 @@ export class AlertManager extends EventEmitter {
     this.emit('alert', alertEvent);
 
     console.log(`🚨 Alert ${alertId}: ${alertEvent.type} [${priority}]`);
+  }
+
+  async processExternalAlert(input: ExternalAlertInput): Promise<void> {
+    const timestamp = input.timestamp || new Date();
+    const channel = input.channel || 1;
+    const signalCode =
+      input.signalCode ||
+      `external_${String(input.type || 'alert')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')}`;
+    const signature = this.buildAlertSignature(input.vehicleId, channel, signalCode);
+
+    if (this.shouldSuppressDuplicate(signature, timestamp)) {
+      return;
+    }
+
+    const priority = input.priority || AlertPriority.MEDIUM;
+    const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
+    const location = input.location || { latitude: 0, longitude: 0 };
+    const alertSignalDetails = [this.getSignalDetail(signalCode)];
+
+    const alertEvent: AlertEvent = {
+      id: alertId,
+      vehicleId: input.vehicleId,
+      channel,
+      priority,
+      type: input.type || alertSignalDetails[0].label || 'External Alert',
+      timestamp,
+      location,
+      status: 'new',
+      escalationLevel: 0,
+      metadata: {
+        source: 'external',
+        alertSignals: [signalCode],
+        alertLabels: [alertSignalDetails[0].label],
+        alertSignalDetails,
+        ...input.metadata
+      }
+    };
+
+    this.activeAlerts.set(alertId, alertEvent);
+    await this.alertStorage.saveAlert(alertEvent);
+
+    // Keep evidence workflow consistent across alert sources.
+    this.emit('request-screenshot', { vehicleId: input.vehicleId, channel, alertId });
+    await this.captureEventVideo(alertEvent);
+    await this.requestAlertVideoFromCamera(alertEvent);
+
+    this.notifier.sendAlertNotification(alertEvent);
+    this.escalation.monitorAlert(alertEvent);
+    this.emit('alert', alertEvent);
+
+    console.log(`External alert ${alertId}: ${alertEvent.type} [${priority}]`);
   }
 
   private buildAlertSignature(vehicleId: string, channel: number, primaryType: string): string {
@@ -585,9 +651,113 @@ export class AlertManager extends EventEmitter {
     if (signal.startsWith('jt808_alarm_bit_')) {
       const bit = Number(signal.replace('jt808_alarm_bit_', ''));
       const knownBits: Record<number, { label: string; meaning: string }> = {
+        0: {
+          label: 'Emergency Alarm',
+          meaning: 'Terminal emergency/SOS alarm bit is set.'
+        },
+        1: {
+          label: 'Overspeed Alarm',
+          meaning: 'Vehicle overspeed alarm bit is set.'
+        },
+        2: {
+          label: 'Fatigue Driving Alarm',
+          meaning: 'Fatigue driving alarm bit is set.'
+        },
+        3: {
+          label: 'Dangerous Driving Behavior',
+          meaning: 'Dangerous driving behavior alarm bit is set.'
+        },
+        4: {
+          label: 'GNSS Module Failure',
+          meaning: 'GNSS module fault alarm bit is set.'
+        },
         5: {
           label: 'GNSS Antenna Disconnected',
           meaning: 'GNSS antenna open/disconnected alarm bit is set.'
+        },
+        6: {
+          label: 'GNSS Antenna Short Circuit',
+          meaning: 'GNSS antenna short-circuit alarm bit is set.'
+        },
+        7: {
+          label: 'Main Power Undervoltage',
+          meaning: 'Terminal main power undervoltage alarm bit is set.'
+        },
+        8: {
+          label: 'Main Power Power-Down',
+          meaning: 'Terminal main power down alarm bit is set.'
+        },
+        9: {
+          label: 'Display Failure',
+          meaning: 'LCD/display failure alarm bit is set.'
+        },
+        10: {
+          label: 'TTS Module Failure',
+          meaning: 'TTS module failure alarm bit is set.'
+        },
+        11: {
+          label: 'Camera Failure',
+          meaning: 'Camera failure alarm bit is set.'
+        },
+        12: {
+          label: 'Transport IC Card Module Failure',
+          meaning: 'Road transport certificate IC module failure bit is set.'
+        },
+        13: {
+          label: 'Overspeed Warning',
+          meaning: 'Overspeed warning bit is set.'
+        },
+        14: {
+          label: 'Fatigue Warning',
+          meaning: 'Fatigue warning bit is set.'
+        },
+        18: {
+          label: 'Daily Cumulative Driving Timeout',
+          meaning: 'Cumulative driving timeout alarm bit is set.'
+        },
+        19: {
+          label: 'Parking Timeout',
+          meaning: 'Parking timeout alarm bit is set.'
+        },
+        22: {
+          label: 'Route Entry/Exit Alarm',
+          meaning: 'Route entry/exit alarm bit is set.'
+        },
+        23: {
+          label: 'Route Entry/Exit Alarm',
+          meaning: 'Route entry/exit alarm bit is set.'
+        },
+        24: {
+          label: 'Route Driving Time Abnormal',
+          meaning: 'Route driving time too short/too long alarm bit is set.'
+        },
+        25: {
+          label: 'Route Deviation',
+          meaning: 'Route deviation alarm bit is set.'
+        },
+        26: {
+          label: 'Vehicle VSS Failure',
+          meaning: 'Vehicle VSS fault alarm bit is set.'
+        },
+        27: {
+          label: 'Vehicle Fuel Abnormality',
+          meaning: 'Fuel abnormality alarm bit is set.'
+        },
+        28: {
+          label: 'Vehicle Theft Alarm',
+          meaning: 'Vehicle theft/displacement alarm bit is set.'
+        },
+        29: {
+          label: 'Illegal Ignition',
+          meaning: 'Illegal ignition alarm bit is set.'
+        },
+        30: {
+          label: 'Illegal Displacement',
+          meaning: 'Illegal displacement alarm bit is set.'
+        },
+        31: {
+          label: 'Collision Warning',
+          meaning: 'Collision warning alarm bit is set.'
         }
       };
       const mapped = knownBits[bit] || {
@@ -639,6 +809,40 @@ export class AlertManager extends EventEmitter {
         label: `Abnormal Driving: Custom Type ${custom}`,
         meaning: `Custom abnormal-driving type ${custom} reported by terminal.`,
         source: 'JT/T 1078 Table 15 bit11~bit15'
+      };
+    }
+
+    if (signal.startsWith('external_multimedia_event_')) {
+      const code = Number(signal.replace('external_multimedia_event_', ''));
+      const eventMap: Record<number, { label: string; meaning: string }> = {
+        2: {
+          label: 'Multimedia Event: Robbery/Emergency Trigger',
+          meaning: 'Terminal multimedia event indicates emergency/robbery trigger.'
+        },
+        3: {
+          label: 'Multimedia Event: Collision/Rollover Trigger',
+          meaning: 'Terminal multimedia event indicates collision/rollover trigger.'
+        }
+      };
+      const mapped = eventMap[code] || {
+        label: `Multimedia Alarm Event ${code}`,
+        meaning: `Terminal reported multimedia event code ${code}.`
+      };
+      return {
+        code: signal,
+        label: mapped.label,
+        meaning: mapped.meaning,
+        source: 'JT/T 808 multimedia event (0x0800)'
+      };
+    }
+
+    if (signal.startsWith('custom_keyword_')) {
+      const keyword = signal.replace('custom_keyword_', '').replace(/_/g, ' ');
+      return {
+        code: signal,
+        label: `Custom Alert: ${keyword}`,
+        meaning: `Keyword-derived alert extracted from custom message payload (${keyword}).`,
+        source: 'Custom/proprietary terminal message'
       };
     }
 

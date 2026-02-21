@@ -177,6 +177,42 @@
       border: 1px solid var(--border);
       background: #0a1020;
     }
+    .alert-videos {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .alert-video-item {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: #0a1222;
+    }
+    .alert-video-item video {
+      width: 100%;
+      height: 150px;
+      background: #000;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      display: block;
+      object-fit: cover;
+    }
+    .alert-video-title {
+      font-size: 12px;
+      color: #9bc1ff;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .alert-video-empty {
+      font-size: 12px;
+      color: var(--muted);
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      margin-top: 8px;
+      background: #0a1222;
+    }
 
     @media (max-width: 900px) {
       .row {
@@ -350,7 +386,12 @@
     let recentScreenshotsCache = [];
     let lastAlertCount = null;
     let videoJobPollTimer = null;
+    let alertRefreshInFlight = false;
+    let autoVideoRequestsInFlight = 0;
     const alertVideoState = new Map();
+    const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
+    const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 4;
+    const MIN_READY_SECONDS = 3;
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -408,6 +449,59 @@
       `;
     }
 
+    function getAlertVideoInfo(alert, videosInfo) {
+      const alertId = String(alert?.id || '').trim();
+      const metadataClips = alert?.metadata?.videoClips || {};
+      const apiVideos = videosInfo?.videos || {};
+
+      const preDuration = Number(apiVideos?.pre_event?.duration ?? metadataClips?.preDuration ?? 0);
+      const postDuration = Number(apiVideos?.post_event?.duration ?? metadataClips?.postDuration ?? 0);
+      const prePath = apiVideos?.pre_event?.path || metadataClips?.pre || metadataClips?.preStorageUrl || '';
+      const postPath = apiVideos?.post_event?.path || metadataClips?.post || metadataClips?.postStorageUrl || '';
+      const cameraPath =
+        apiVideos?.camera_sd?.path ||
+        metadataClips?.cameraVideo ||
+        metadataClips?.cameraVideoLocalPath ||
+        metadataClips?.cameraPreVideo ||
+        metadataClips?.cameraPostVideo ||
+        '';
+
+      const preReady = !!(videosInfo?.has_pre_event || (prePath && preDuration >= MIN_READY_SECONDS));
+      const postReady = !!(videosInfo?.has_post_event || (postPath && postDuration >= MIN_READY_SECONDS));
+      const cameraReady = !!(videosInfo?.has_camera_video || cameraPath);
+
+      const preUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/pre`;
+      const postUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/post`;
+      const cameraUrl = `/api/alerts/${encodeURIComponent(alertId)}/video/camera`;
+
+      return {
+        preReady,
+        postReady,
+        cameraReady,
+        preUrl,
+        postUrl,
+        cameraUrl,
+        preDuration,
+        postDuration,
+        dbRecords: Array.isArray(apiVideos?.database_records) ? apiVideos.database_records : []
+      };
+    }
+
+    function buildAlertVideoTile(label, url, durationSec) {
+      const durationText = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
+        ? ` | ${Number(durationSec).toFixed(1)}s`
+        : '';
+      return `
+        <div class="alert-video-item">
+          <div class="alert-video-title">${label}${durationText}</div>
+          <video controls preload="metadata" playsinline src="${url}"></video>
+          <div class="meta" style="margin-top:6px;">
+            <a href="${url}" target="_blank" rel="noopener" class="meta">Open</a>
+          </div>
+        </div>
+      `;
+    }
+
     function alertCard(alert, screenshots, videosInfo) {
       const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
       const pr = (alert.priority || 'low').toLowerCase();
@@ -415,35 +509,32 @@
         const url = s.storage_url && s.storage_url !== 'upload-failed' && s.storage_url !== 'local-only' ? s.storage_url : '';
         return url ? `<img src="${url}" alt="${s.id}" loading="lazy" />` : '';
       }).join('');
-      const dbRecords = videosInfo?.videos?.database_records || [];
-      const hasPre = !!videosInfo?.videos?.pre_event?.path;
-      const hasPost = !!videosInfo?.videos?.post_event?.path;
-      const hasCamera = !!videosInfo?.videos?.camera_sd?.path;
-      const preUrl = videosInfo?.videos?.pre_event?.url || '';
-      const postUrl = videosInfo?.videos?.post_event?.url || '';
-      const cameraUrl = videosInfo?.videos?.camera_sd?.url || '';
-      const videoCount = (hasPre ? 1 : 0) + (hasPost ? 1 : 0) + (hasCamera ? 1 : 0) + dbRecords.length;
-      const videoLinks = [
-        hasPre ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/video/pre" target="_blank" class="meta">Pre-event video</a>` : '',
-        hasPost ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/video/post" target="_blank" class="meta">Post-event video</a>` : '',
-        hasCamera ? `<a href="/api/alerts/${encodeURIComponent(alert.id)}/videos" target="_blank" class="meta">Camera SD video info</a>` : ''
-      ].filter(Boolean).join(' | ');
-      const dbVideoLinks = dbRecords.slice(0, 3).map((v) => {
-        if (v.storage_url && v.storage_url.startsWith('http')) {
-          return `<a href="${v.storage_url}" target="_blank" class="meta">${v.video_type || 'video'} (${v.id})</a>`;
-        }
-        if (v.file_path) {
-          return `<span class="meta">${v.video_type || 'video'}: ${v.file_path}</span>`;
-        }
-        return '';
-      }).filter(Boolean).join('<br/>');
+      const videoInfo = getAlertVideoInfo(alert, videosInfo);
+      const videoTiles = [];
+      if (videoInfo.preReady) {
+        videoTiles.push(buildAlertVideoTile('Pre-incident (30s before)', videoInfo.preUrl, videoInfo.preDuration));
+      }
+      if (videoInfo.postReady) {
+        videoTiles.push(buildAlertVideoTile('Post-incident (30s after)', videoInfo.postUrl, videoInfo.postDuration));
+      }
+      if (videoInfo.cameraReady) {
+        videoTiles.push(buildAlertVideoTile('Camera SD clip', videoInfo.cameraUrl));
+      }
+
+      const videoCount =
+        (videoInfo.preReady ? 1 : 0) +
+        (videoInfo.postReady ? 1 : 0) +
+        (videoInfo.cameraReady ? 1 : 0) +
+        videoInfo.dbRecords.length;
       const state = alertVideoState.get(String(alert.id));
       const stateHtml = state
         ? `<div class="meta" style="margin-top:6px; color:#9bc1ff;">
-             Request: query=${state.querySent ? 'yes' : 'no'}, stream=${state.requestSent ? 'yes' : 'no'}, download=${state.downloadRequestSent ? 'yes' : 'no'}<br/>
+             Video auto-request: ${state.autoRequested ? 'yes' : 'no'}${state.requestStartedAt ? ` | started: ${new Date(state.requestStartedAt).toLocaleTimeString()}` : ''}<br/>
+             Query: ${state.querySent ? 'yes' : 'no'} | Stream: ${state.requestSent ? 'yes' : 'no'} | Download: ${state.downloadRequestSent ? 'yes' : 'no'}<br/>
              Job: ${state.jobId || 'n/a'} | Status: ${state.jobStatus || 'n/a'}${state.error ? ` | Error: ${state.error}` : ''}
            </div>`
-        : '<div class="meta" style="margin-top:6px;">No alert-video test run yet.</div>';
+        : '<div class="meta" style="margin-top:6px;">Video auto-request: pending check</div>';
+      const hasAnyVideo = videoTiles.length > 0;
 
       return `
         <div class="alert-item">
@@ -460,24 +551,13 @@
           <div class="meta">Screenshots: ${(screenshots || []).length}</div>
           <div class="thumbs">${imgs || '<div class="meta">No screenshots linked yet.</div>'}</div>
           <div class="meta" style="margin-top:8px;">Videos: ${videoCount}</div>
-          <div class="meta">${videoLinks || 'No pre/post/camera video path yet.'}</div>
-          <div class="meta">
-            ${preUrl ? `<a href="${preUrl}" target="_blank" class="meta">Open Pre URL</a>` : ''}
-            ${postUrl ? `${preUrl ? ' | ' : ''}<a href="${postUrl}" target="_blank" class="meta">Open Post URL</a>` : ''}
-            ${cameraUrl ? `${(preUrl || postUrl) ? ' | ' : ''}<a href="${cameraUrl}" target="_blank" class="meta">Open Camera URL</a>` : ''}
+          <div class="alert-videos">
+            ${videoTiles.join('')}
           </div>
-          <div class="meta">${dbVideoLinks || ''}</div>
+          ${hasAnyVideo ? '' : '<div class="alert-video-empty">No ready video yet. System is auto-requesting camera playback for missing clips.</div>'}
           ${stateHtml}
-          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button data-request-video="${String(alert.id)}" class="primary" style="width:auto; padding:8px 10px;">
-              Test Alert Video (-30s)
-            </button>
-            <button data-refresh-alert-video="${String(alert.id)}" style="width:auto; padding:8px 10px;">
-              Refresh Alert Video Status
-            </button>
-            <button data-open-videos="${String(alert.id)}" style="width:auto; padding:8px 10px;">
-              Open Video JSON
-            </button>
+          <div class="meta" style="margin-top:8px;">
+            <a href="/api/alerts/${encodeURIComponent(String(alert.id))}/videos" target="_blank" rel="noopener">Open alert video JSON</a>
           </div>
         </div>
       `;
@@ -559,6 +639,80 @@
         // Keep silent; alert state remains visible from last success.
       } finally {
         refreshAlerts();
+      }
+    }
+
+    async function ensureAlertVideoRequested(alert, videosInfo) {
+      const alertId = String(alert?.id || '').trim();
+      if (!alertId) return false;
+
+      const videoInfo = getAlertVideoInfo(alert, videosInfo);
+      if (videoInfo.preReady && videoInfo.postReady) return false;
+
+      const existing = alertVideoState.get(alertId) || {};
+      if (existing.autoRequesting) return false;
+      if (existing.autoRequested && !existing.error) return false;
+      if (existing.autoRequested && existing.error) {
+        const startedMs = existing.requestStartedAt ? new Date(existing.requestStartedAt).getTime() : 0;
+        const cooldownMs = 2 * 60 * 1000;
+        if (startedMs && (Date.now() - startedMs) < cooldownMs) return false;
+      }
+      if (autoVideoRequestsInFlight >= AUTO_VIDEO_REQUEST_MAX_CONCURRENCY) return false;
+
+      autoVideoRequestsInFlight += 1;
+      alertVideoState.set(alertId, {
+        ...existing,
+        autoRequested: true,
+        autoRequesting: true,
+        requestStartedAt: new Date().toISOString(),
+        error: ''
+      });
+
+      try {
+        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/request-report-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            lookbackSeconds: 30,
+            forwardSeconds: 30,
+            queryResources: true,
+            requestDownload: true
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+
+        const d = body.data || {};
+        alertVideoState.set(alertId, {
+          ...existing,
+          autoRequested: true,
+          autoRequesting: false,
+          requestStartedAt: new Date().toISOString(),
+          querySent: !!d.querySent,
+          requestSent: !!d.requestSent,
+          downloadRequestSent: !!d.downloadRequestSent,
+          jobId: d.playbackJobId || null,
+          jobStatus: d.playbackJobId ? 'queued' : 'none',
+          error: ''
+        });
+
+        if (d.playbackJobId) {
+          pollAlertVideoJob(alertId, d.playbackJobId);
+        }
+        return true;
+      } catch (err) {
+        alertVideoState.set(alertId, {
+          ...existing,
+          autoRequested: true,
+          autoRequesting: false,
+          requestStartedAt: new Date().toISOString(),
+          error: err?.message || String(err)
+        });
+        return false;
+      } finally {
+        autoVideoRequestsInFlight = Math.max(0, autoVideoRequestsInFlight - 1);
       }
     }
 
@@ -800,9 +954,9 @@
       }
     }
 
-    async function fetchRecentScreenshots() {
-      const minutes = Number(minutesEl.value || 30);
-      const limit = Number(limitEl.value || 50);
+    async function fetchRecentScreenshots(limitOverride, minutesOverride) {
+      const minutes = Number((minutesOverride ?? minutesEl.value) || 30);
+      const limit = Number((limitOverride ?? limitEl.value) || 50);
       const res = await fetch(`/api/screenshots/recent?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -822,13 +976,18 @@
     }
 
     async function refreshAlerts() {
+      if (alertRefreshInFlight) return;
+      alertRefreshInFlight = true;
       try {
-        if (recentScreenshotsCache.length === 0) {
-          recentScreenshotsCache = await fetchRecentScreenshots();
-        }
+        const limit = Math.max(1, Math.min(500, Number(limitEl.value || 50)));
+        const minutes = Math.max(1, Math.min(10080, Number(minutesEl.value || 180)));
+        const screenshotLimit = Math.max(200, Math.min(3000, limit * 8));
+
+        recentScreenshotsCache = await fetchRecentScreenshots(screenshotLimit, minutes);
+
         let alerts = [];
         try {
-          const res = await fetch('/api/alerts/active');
+          const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           alerts = Array.isArray(data.alerts) ? data.alerts : [];
@@ -836,13 +995,33 @@
           alerts = [];
         }
 
-        // Fallback to persisted history when in-memory active set is empty/unavailable.
+        try {
+          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json().catch(() => ({}));
+          const activeAlerts = Array.isArray(data.alerts) ? data.alerts : [];
+          if (activeAlerts.length) {
+            alerts = [...alerts, ...activeAlerts];
+          }
+        } catch (_) {
+          // keep existing list
+        }
+
         if (alerts.length === 0) {
-          const histRes = await fetch('/api/alerts/history');
+          const histRes = await fetch(`/api/alerts/history?limit=${encodeURIComponent(limit)}&days=30`, { cache: 'no-store' });
           if (!histRes.ok) throw new Error(`HTTP ${histRes.status}`);
           const histData = await histRes.json().catch(() => ({}));
           alerts = Array.isArray(histData.data) ? histData.data : [];
         }
+
+        alerts.sort((a, b) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime());
+        const seen = new Set();
+        alerts = alerts.filter((a) => {
+          const id = String(a?.id || '').trim();
+          if (!id || seen.has(id)) return false;
+          seen.add(id);
+          return true;
+        }).slice(0, limit);
 
         const byAlertId = new Map();
         for (const s of recentScreenshotsCache) {
@@ -852,45 +1031,26 @@
           byAlertId.get(key).push(s);
         }
 
-        const alertDetails = await Promise.allSettled(
-          alerts.map((a) => fetch(`/api/alerts/${encodeURIComponent(a.id)}`).then((r) => r.ok ? r.json() : null))
-        );
-        const alertVideos = await Promise.allSettled(
-          alerts.map((a) => fetch(`/api/alerts/${encodeURIComponent(a.id)}/videos`).then((r) => r.ok ? r.json() : null))
-        );
-
-        const byAlertDetailScreens = new Map();
-        for (let i = 0; i < alerts.length; i++) {
-          const baseAlert = alerts[i];
-          const detailResult = alertDetails[i];
-          const detailedShots = detailResult.status === 'fulfilled'
-            ? (detailResult.value?.alert?.screenshots || [])
-            : [];
-          byAlertDetailScreens.set(String(baseAlert.id), detailedShots);
-        }
-        const byAlertVideos = new Map();
-        for (let i = 0; i < alerts.length; i++) {
-          const baseAlert = alerts[i];
-          const videosResult = alertVideos[i];
-          const videos = videosResult.status === 'fulfilled'
-            ? (videosResult.value || null)
-            : null;
-          byAlertVideos.set(String(baseAlert.id), videos);
+        let autoRequestedCount = 0;
+        for (const alert of alerts) {
+          if (autoRequestedCount >= AUTO_VIDEO_REQUEST_MAX_PER_REFRESH) break;
+          const requested = await ensureAlertVideoRequested(alert, null);
+          if (requested) autoRequestedCount += 1;
         }
 
-        summaryEl.textContent = `${alerts.length} alert(s) | last update: ${new Date().toLocaleTimeString()}`;
+        const nowText = new Date().toLocaleTimeString();
+        summaryEl.textContent = `${alerts.length} alert(s) | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
         alertsEl.innerHTML = alerts.map((a) => {
           const id = String(a.id);
-          const linked = byAlertDetailScreens.get(id);
-          const recent = byAlertId.get(id);
-          const screenshots = (linked && linked.length) ? linked : (recent || []);
-          const videosInfo = byAlertVideos.get(id);
-          return alertCard(a, screenshots, videosInfo);
+          const screenshots = byAlertId.get(id) || [];
+          return alertCard(a, screenshots, null);
         }).join('')
           || '<div class="meta">No alerts found.</div>';
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
         alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
+      } finally {
+        alertRefreshInFlight = false;
       }
     }
 
@@ -1065,8 +1225,17 @@
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type === 'screenshot-received' || msg.type === 'new_alert') {
-            refreshCurrentTab();
+          const type = String(msg?.type || '').toLowerCase();
+          if (type === 'new_alert' || type === 'alert-video-complete' || type === 'alert-updated') {
+            refreshAlerts();
+            return;
+          }
+          if (type === 'screenshot-received') {
+            if (activeTab === 'alerts') {
+              refreshAlerts();
+            } else {
+              refreshScreenshots();
+            }
           }
         } catch (_) {}
       };
@@ -1179,7 +1348,7 @@
     loadVehicles();
     setDefaultVideoWindow();
     refreshVideoJobs();
-    refreshCurrentTab();
+    setTab('alerts');
     startAutoRefresh();
     startAutoCapture();
     startAlertCheck();
