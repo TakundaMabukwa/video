@@ -1360,27 +1360,36 @@ export class JTT808Server {
 
   private handleCustomMessage(message: any, socket: net.Socket): void {
     const decoded = this.decodeCustomPayloadText(message.body);
-    const keywordAlert = this.extractKeywordAlert(decoded || '');
-    const binaryAlert = this.extractKeywordAlertFromBinary(message.body);
-    const selectedAlert = keywordAlert || binaryAlert;
+    const rawText = this.buildPayloadPreview(message.body, 220);
+    const keywordAlert = this.extractKeywordAlert(rawText);
+    const enableBinaryFallback = String(process.env.ENABLE_BINARY_CUSTOM_ALARM_FALLBACK ?? 'false').toLowerCase() === 'true';
+    const binaryAlert = enableBinaryFallback ? this.extractKeywordAlertFromBinary(message.body) : null;
+    const selectedAlert = keywordAlert || binaryAlert || null;
 
-    if (selectedAlert) {
-      const last = this.lastKnownLocation.get(message.terminalPhone);
-      void this.alertManager.processExternalAlert({
-        vehicleId: message.terminalPhone,
-        channel: selectedAlert.channel || 1,
-        type: selectedAlert.type,
-        signalCode: selectedAlert.signalCode,
-        priority: selectedAlert.priority,
-        timestamp: new Date(),
-        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-        metadata: {
-          sourceMessageId: '0x0704',
-          customText: decoded || null,
-          binaryAlertFallbackUsed: !keywordAlert
-        }
-      });
-    }
+    const channelMatch = rawText.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
+    const inferredChannel = channelMatch ? Number(channelMatch[1]) : 1;
+    const last = this.lastKnownLocation.get(message.terminalPhone);
+
+    // For 0x0704 we store what terminal actually sent as the alert text.
+    // This avoids over-classifying binary/gibberish payloads into wrong semantic alarms.
+    void this.alertManager.processExternalAlert({
+      vehicleId: message.terminalPhone,
+      channel: selectedAlert?.channel || inferredChannel || 1,
+      type: `0x0704 Raw: ${rawText.slice(0, 120)}`,
+      signalCode: 'custom_raw_0704',
+      priority: selectedAlert?.priority || AlertPriority.MEDIUM,
+      timestamp: new Date(),
+      location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+      metadata: {
+        sourceMessageId: '0x0704',
+        customText: decoded || null,
+        rawPayloadText: rawText,
+        rawPayloadHex: message.body.toString('hex').slice(0, 512),
+        keywordMatch: keywordAlert || null,
+        binaryFallbackMatch: binaryAlert || null,
+        binaryAlertFallbackUsed: !!binaryAlert && !keywordAlert
+      }
+    });
 
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
@@ -1390,6 +1399,20 @@ export class JTT808Server {
       0
     );
     socket.write(response);
+  }
+
+  private buildPayloadPreview(payload: Buffer, maxLen: number = 220): string {
+    if (!payload || payload.length === 0) return '(empty payload)';
+    const ascii = payload
+      .toString('latin1')
+      .replace(/[^\x20-\x7E]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (ascii.length > 0) {
+      return ascii.slice(0, maxLen);
+    }
+    const hex = payload.toString('hex');
+    return `[hex] ${hex.slice(0, maxLen)}`;
   }
 
   private mapMultimediaEvent(eventCode: number): { type: string; priority: AlertPriority } | null {
