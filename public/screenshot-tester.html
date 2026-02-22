@@ -987,7 +987,7 @@
 
         let alerts = [];
         try {
-          const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
+          const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           alerts = Array.isArray(data.alerts) ? data.alerts : [];
@@ -996,7 +996,7 @@
         }
 
         try {
-          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
+          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           const activeAlerts = Array.isArray(data.alerts) ? data.alerts : [];
