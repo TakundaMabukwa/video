@@ -1241,6 +1241,28 @@ export class JTT808Server {
     return true;
   }
 
+  setImageAnalysisAlarmParams(
+    vehicleId: string,
+    approvedPassengers: number,
+    fatigueThreshold: number
+  ): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildSetImageAnalysisAlarmParamsCommand(
+      vehicleId,
+      this.getNextSerial(),
+      approvedPassengers,
+      fatigueThreshold
+    );
+    socket.write(command);
+    return true;
+  }
+
   switchStream(vehicleId: string, channel: number, streamType: 0 | 1): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);

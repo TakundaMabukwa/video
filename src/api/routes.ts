@@ -588,6 +588,31 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Configure image analysis alarm params (0x007B)
+  router.post('/vehicles/:id/config/image-analysis', (req, res) => {
+    const { id } = req.params;
+    const approvedPassengers = Number(req.body?.approvedPassengers ?? 0);
+    const fatigueThreshold = Number(req.body?.fatigueThreshold ?? 70);
+    const success = tcpServer.setImageAnalysisAlarmParams(id, approvedPassengers, fatigueThreshold);
+
+    if (success) {
+      return res.json({
+        success: true,
+        message: `Image analysis parameters set for ${id}`,
+        data: {
+          vehicleId: id,
+          approvedPassengers,
+          fatigueThreshold
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: `Vehicle ${id} not found or not connected`
+    });
+  });
+
   // Switch stream quality
   router.post('/vehicles/:id/switch-stream', (req, res) => {
     const { id } = req.params;

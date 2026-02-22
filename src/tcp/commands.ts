@@ -288,6 +288,23 @@ export class JTT1078Commands {
     ]);
   }
 
+  // Build 0x8103 command - Set image analysis alarm params (0x007B)
+  // Table 8: [approvedPassengers(BYTE), fatigueThreshold(BYTE)]
+  static buildSetImageAnalysisAlarmParamsCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    approvedPassengers: number,
+    fatigueThreshold: number
+  ): Buffer {
+    const value = Buffer.alloc(2);
+    value.writeUInt8(Math.max(0, Math.min(255, approvedPassengers)), 0);
+    value.writeUInt8(Math.max(0, Math.min(255, fatigueThreshold)), 1);
+
+    return this.buildSetTerminalParametersCommand(terminalPhone, serialNumber, [
+      { id: 0x007B, value }
+    ]);
+  }
+
   // Build 0x9102 command - Audio/video transmission control (switch stream, pause, resume)
   static buildStreamControlCommand(
     terminalPhone: string,
