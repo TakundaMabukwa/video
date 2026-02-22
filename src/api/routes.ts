@@ -457,6 +457,46 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Diagnostics: inspect recent raw JT/T 808 packets and parser output.
+  // Useful to compare real payloads against documented 0x0200/0x0704 format.
+  router.get('/diag/messages', (req, res) => {
+    const vehicleId = String(req.query.vehicleId || '').trim();
+    const messageIdRaw = String(req.query.messageId || '').trim();
+    const limit = Math.max(1, Math.min(Number(req.query.limit || 50), 300));
+
+    let messageId: number | undefined;
+    if (messageIdRaw) {
+      if (/^0x[0-9a-f]+$/i.test(messageIdRaw)) {
+        messageId = parseInt(messageIdRaw, 16);
+      } else if (/^\d+$/.test(messageIdRaw)) {
+        messageId = parseInt(messageIdRaw, 10);
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid messageId. Use decimal (e.g. 516) or hex (e.g. 0x0204).'
+        });
+      }
+    }
+
+    const messages = tcpServer.getRecentMessageTraces({
+      vehicleId: vehicleId || undefined,
+      messageId,
+      limit
+    });
+
+    res.json({
+      success: true,
+      filters: {
+        vehicleId: vehicleId || null,
+        messageId: typeof messageId === 'number' ? messageId : null,
+        messageIdHex: typeof messageId === 'number' ? `0x${messageId.toString(16).padStart(4, '0')}` : null,
+        limit
+      },
+      count: messages.length,
+      messages
+    });
+  });
+
   // Start all video channels for a vehicle
   router.post('/vehicles/:id/start-all-streams', (req, res) => {
     const { id } = req.params;

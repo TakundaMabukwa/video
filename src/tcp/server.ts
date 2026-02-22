@@ -42,6 +42,23 @@ type PendingResourceList = {
   parts: Map<number, Buffer>;
 };
 
+type MessageTraceEntry = {
+  id: number;
+  receivedAt: string;
+  vehicleId: string;
+  messageId: number;
+  messageIdHex: string;
+  serialNumber: number;
+  bodyLength: number;
+  isSubpackage: boolean;
+  packetCount?: number;
+  packetIndex?: number;
+  rawFrameHex: string;
+  bodyHex: string;
+  bodyTextPreview: string;
+  parse?: Record<string, unknown>;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -57,6 +74,12 @@ export class JTT808Server {
   private latestResourceLists = new Map<string, { receivedAt: number; items: ResourceVideoItem[] }>();
   private pendingResourceLists = new Map<string, PendingResourceList>();
   private lastKnownLocation = new Map<string, { latitude: number; longitude: number; timestamp: Date }>();
+  private messageTraceSeq = 0;
+  private recentMessageTraces: MessageTraceEntry[] = [];
+  private readonly maxMessageTraceBuffer = Math.max(
+    50,
+    Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
+  );
 
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
@@ -228,7 +251,7 @@ export class JTT808Server {
         this.handleHeartbeat(message, socket);
         break;
       case JTT808MessageType.LOCATION_REPORT:
-        this.handleLocationReport(message, socket);
+        this.handleLocationReport(message, socket, buffer);
         break;
       case 0x0001:
         console.log(`Terminal general response from ${message.terminalPhone}:`);
@@ -282,8 +305,8 @@ export class JTT808Server {
         }
         await this.handleMultimediaData(message, socket);
         break;
-      case 0x0704: // Custom/proprietary message
-        this.handleCustomMessage(message, socket);
+      case 0x0704: // JT/T 808 location batch upload
+        this.handleLocationBatchUpload(message, socket, buffer);
         break;
       default:
         
@@ -451,7 +474,7 @@ export class JTT808Server {
     socket.write(response);
   }
 
-  private handleLocationReport(message: any, socket: net.Socket): void {
+  private handleLocationReport(message: any, socket: net.Socket, rawFrame?: Buffer): void {
     console.log(`\n📍 Location Report from ${message.terminalPhone}`);
     console.log(`Body length: ${message.body.length} bytes`);
     console.log(`Body hex: ${message.body.toString('hex')}`);
@@ -495,6 +518,7 @@ export class JTT808Server {
     
     // Parse location and alert data
     const alert = AlertParser.parseLocationReport(message.body, message.terminalPhone);
+    const additionalInfo = this.extractLocationAdditionalInfoFields(message.body);
     
     if (alert) {
       this.lastKnownLocation.set(alert.vehicleId, {
@@ -504,6 +528,35 @@ export class JTT808Server {
       });
       this.processAlert(alert);
     }
+
+    this.pushMessageTrace(message, rawFrame, {
+      parser: 'location-report-0x0200',
+      parseSuccess: !!alert,
+      additionalInfo,
+      parsedAlert: alert
+        ? {
+            timestamp: alert.timestamp?.toISOString?.() || null,
+            latitude: alert.latitude,
+            longitude: alert.longitude,
+            speed: alert.speed,
+            direction: alert.direction,
+            altitude: alert.altitude,
+            rawAlarmFlagHex: typeof alert.rawAlarmFlag === 'number'
+              ? `0x${alert.rawAlarmFlag.toString(16).padStart(8, '0')}`
+              : null,
+            rawStatusFlagHex: typeof alert.rawStatusFlag === 'number'
+              ? `0x${alert.rawStatusFlag.toString(16).padStart(8, '0')}`
+              : null,
+            baseAlarmSetBits: alert.alarmFlagSetBits || [],
+            alarmFlags: alert.alarmFlags || null,
+            videoAlarms: alert.videoAlarms || null,
+            signalLossChannels: alert.signalLossChannels || [],
+            blockingChannels: alert.blockingChannels || [],
+            memoryFailures: alert.memoryFailures || null,
+            drivingBehavior: alert.drivingBehavior || null
+          }
+        : null
+    });
     
     // Send location report response
     const response = JTT1078Commands.buildGeneralResponse(
@@ -514,6 +567,112 @@ export class JTT808Server {
       0
     );
     
+    socket.write(response);
+  }
+
+  private handleLocationBatchUpload(message: any, socket: net.Socket, rawFrame?: Buffer): void {
+    const body: Buffer = message.body;
+    if (body.length < 3) {
+      this.pushMessageTrace(message, rawFrame, {
+        parser: 'location-batch-0x0704',
+        parseSuccess: false,
+        error: 'Body too short for batch upload'
+      });
+      const response = JTT1078Commands.buildGeneralResponse(
+        message.terminalPhone,
+        this.getNextSerial(),
+        message.serialNumber,
+        message.messageId,
+        2 // message error
+      );
+      socket.write(response);
+      return;
+    }
+
+    const declaredCount = body.readUInt16BE(0);
+    const uploadType = body.readUInt8(2); // 0 normal, 1 blind-area补传 (terminal dependent)
+    let offset = 3;
+    let parsed = 0;
+    let processedAlerts = 0;
+    const itemDiagnostics: Array<Record<string, unknown>> = [];
+
+    while (offset + 2 <= body.length) {
+      const itemLen = body.readUInt16BE(offset);
+      offset += 2;
+      if (itemLen <= 0 || offset + itemLen > body.length) {
+        break;
+      }
+
+      const itemBody = body.slice(offset, offset + itemLen);
+      offset += itemLen;
+      parsed++;
+
+      const alert = AlertParser.parseLocationReport(itemBody, message.terminalPhone);
+      if (itemDiagnostics.length < 20) {
+        itemDiagnostics.push({
+          index: parsed,
+          length: itemLen,
+          parseSuccess: !!alert,
+          bodyHex: itemBody.toString('hex').slice(0, 1024),
+          additionalInfo: this.extractLocationAdditionalInfoFields(itemBody),
+          parsedAlert: alert
+            ? {
+                timestamp: alert.timestamp?.toISOString?.() || null,
+                latitude: alert.latitude,
+                longitude: alert.longitude,
+                rawAlarmFlagHex: typeof alert.rawAlarmFlag === 'number'
+                  ? `0x${alert.rawAlarmFlag.toString(16).padStart(8, '0')}`
+                  : null,
+                rawStatusFlagHex: typeof alert.rawStatusFlag === 'number'
+                  ? `0x${alert.rawStatusFlag.toString(16).padStart(8, '0')}`
+                  : null,
+                baseAlarmSetBits: alert.alarmFlagSetBits || [],
+                alarmFlags: alert.alarmFlags || null,
+                videoAlarms: alert.videoAlarms || null,
+                signalLossChannels: alert.signalLossChannels || [],
+                blockingChannels: alert.blockingChannels || [],
+                memoryFailures: alert.memoryFailures || null,
+                drivingBehavior: alert.drivingBehavior || null
+              }
+            : null
+        });
+      }
+      if (!alert) {
+        continue;
+      }
+
+      this.lastKnownLocation.set(alert.vehicleId, {
+        latitude: alert.latitude,
+        longitude: alert.longitude,
+        timestamp: alert.timestamp
+      });
+
+      const hadBefore = this.alertManager.getAlertStats().total;
+      this.processAlert(alert);
+      const hadAfter = this.alertManager.getAlertStats().total;
+      if (hadAfter > hadBefore) {
+        processedAlerts += hadAfter - hadBefore;
+      }
+    }
+
+    console.log(`Location batch 0x0704 from ${message.terminalPhone}: declared=${declaredCount}, parsed=${parsed}, uploadType=${uploadType}, alerts=${processedAlerts}`);
+    this.pushMessageTrace(message, rawFrame, {
+      parser: 'location-batch-0x0704',
+      parseSuccess: true,
+      declaredCount,
+      parsedItems: parsed,
+      uploadType,
+      processedAlerts,
+      itemDiagnostics
+    });
+
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.getNextSerial(),
+      message.serialNumber,
+      message.messageId,
+      0
+    );
     socket.write(response);
   }
 
@@ -1306,12 +1465,93 @@ export class JTT808Server {
     return this.latestResourceLists.get(vehicleId);
   }
 
+  getRecentMessageTraces(options?: {
+    vehicleId?: string;
+    messageId?: number;
+    limit?: number;
+  }): MessageTraceEntry[] {
+    const vehicleId = options?.vehicleId ? String(options.vehicleId).trim() : '';
+    const messageId = typeof options?.messageId === 'number' ? options?.messageId : undefined;
+    const limit = Math.max(1, Math.min(Number(options?.limit || 50), this.maxMessageTraceBuffer));
+
+    let rows = [...this.recentMessageTraces];
+    if (vehicleId) {
+      rows = rows.filter((row) => row.vehicleId === vehicleId);
+    }
+    if (typeof messageId === 'number' && Number.isFinite(messageId)) {
+      rows = rows.filter((row) => row.messageId === messageId);
+    }
+
+    return rows.slice(-limit).reverse();
+  }
+
   async getAlerts() {
     return await this.alertStorage.getActiveAlerts();
   }
 
   async getDevices() {
     return await this.deviceStorage.getDevices();
+  }
+
+  private pushMessageTrace(message: any, rawFrame?: Buffer, parse?: Record<string, unknown>): void {
+    const trace: MessageTraceEntry = {
+      id: ++this.messageTraceSeq,
+      receivedAt: new Date().toISOString(),
+      vehicleId: String(message?.terminalPhone || ''),
+      messageId: Number(message?.messageId || 0),
+      messageIdHex: `0x${Number(message?.messageId || 0).toString(16).padStart(4, '0')}`,
+      serialNumber: Number(message?.serialNumber || 0),
+      bodyLength: Number(message?.body?.length || 0),
+      isSubpackage: !!message?.isSubpackage,
+      packetCount: message?.packetCount,
+      packetIndex: message?.packetIndex,
+      rawFrameHex: (rawFrame || Buffer.alloc(0)).toString('hex').slice(0, 8192),
+      bodyHex: (message?.body || Buffer.alloc(0)).toString('hex').slice(0, 8192),
+      bodyTextPreview: this.buildPayloadPreview(message?.body || Buffer.alloc(0), 320),
+      parse: parse || undefined
+    };
+
+    this.recentMessageTraces.push(trace);
+    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
+      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
+      this.recentMessageTraces.splice(0, overflow);
+    }
+  }
+
+  private extractLocationAdditionalInfoFields(body: Buffer): Array<{
+    idHex: string;
+    idDec: number;
+    length: number;
+    dataHex: string;
+  }> {
+    const fields: Array<{
+      idHex: string;
+      idDec: number;
+      length: number;
+      dataHex: string;
+    }> = [];
+
+    if (!body || body.length < 30) return fields;
+
+    let offset = 28;
+    while (offset + 2 <= body.length) {
+      const infoId = body.readUInt8(offset);
+      const infoLength = body.readUInt8(offset + 1);
+      if (offset + 2 + infoLength > body.length) break;
+
+      const infoData = body.slice(offset + 2, offset + 2 + infoLength);
+      fields.push({
+        idHex: `0x${infoId.toString(16).padStart(2, '0')}`,
+        idDec: infoId,
+        length: infoLength,
+        dataHex: infoData.toString('hex').slice(0, 512)
+      });
+
+      offset += 2 + infoLength;
+      if (fields.length >= 64) break;
+    }
+
+    return fields;
   }
 
   private handleMultimediaEvent(message: any, socket: net.Socket): void {
