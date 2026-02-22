@@ -564,6 +564,30 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Configure video alarm mask (0x007A). maskWord=0 un-masks all video alarms.
+  router.post('/vehicles/:id/config/video-alarm-mask', (req, res) => {
+    const { id } = req.params;
+    const maskWord = Number(req.body?.maskWord ?? 0) >>> 0;
+    const success = tcpServer.setVideoAlarmMask(id, maskWord);
+
+    if (success) {
+      return res.json({
+        success: true,
+        message: `Video alarm mask set for ${id}`,
+        data: {
+          vehicleId: id,
+          maskWord,
+          maskHex: `0x${maskWord.toString(16).padStart(8, '0')}`
+        }
+      });
+    }
+
+    return res.status(404).json({
+      success: false,
+      message: `Vehicle ${id} not found or not connected`
+    });
+  });
+
   // Switch stream quality
   router.post('/vehicles/:id/switch-stream', (req, res) => {
     const { id } = req.params;

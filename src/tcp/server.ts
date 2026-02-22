@@ -26,6 +26,9 @@ type ResourceVideoItem = {
   channel: number;
   startTime: string;
   endTime: string;
+  alarmFlag64Hex: string;
+  alarmBits: number[];
+  alarmLabels: string[];
   alarmType: number;
   mediaType: number;
   streamType: number;
@@ -406,6 +409,17 @@ export class JTT808Server {
         console.log(`🔍 Querying capabilities for ${message.terminalPhone}...`);
         this.queryCapabilities(message.terminalPhone);
       }, 1000);
+
+      const autoConfigureMask = String(process.env.AUTO_CONFIGURE_VIDEO_ALARM_MASK ?? 'true').toLowerCase() !== 'false';
+      if (autoConfigureMask) {
+        const configuredMask = Number(process.env.VIDEO_ALARM_MASK_WORD ?? 0) >>> 0;
+        setTimeout(() => {
+          const ok = this.setVideoAlarmMask(message.terminalPhone, configuredMask);
+          if (ok) {
+            console.log(`Set video alarm mask (0x007A)=0x${configuredMask.toString(16).padStart(8, '0')} for ${message.terminalPhone}`);
+          }
+        }, 1500);
+      }
     }
     
     const response = JTT1078Commands.buildGeneralResponse(
@@ -742,18 +756,26 @@ export class JTT808Server {
       const channel = body.readUInt8(offset);
       const startTime = this.parseBcdTime(body.slice(offset + 1, offset + 7));
       const endTime = this.parseBcdTime(body.slice(offset + 7, offset + 13));
-      // alarm flag is 64-bit (offset 13..20); use low byte for quick UI indication
-      const alarmType = body.readUInt8(offset + 20);
+      const alarmFlag64 = body.readBigUInt64BE(offset + 13);
+      const alarmBits = this.getSetBits64(alarmFlag64);
+      const alarmLabels = alarmBits.map((bit) => this.describeResourceAlarmBit(bit));
+      const alarmFlag64Hex = `0x${alarmFlag64.toString(16).padStart(16, '0')}`;
+      // Keep legacy low-byte compatibility for existing UI fields.
+      const alarmType = Number(alarmFlag64 & 0xFFn);
       const mediaType = body.readUInt8(offset + 21);
       const streamType = body.readUInt8(offset + 22);
       const storageType = body.readUInt8(offset + 23);
       const fileSize = body.readUInt32BE(offset + 24);
 
-      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm:${alarmType})`);
+      const alarmSummary = alarmLabels.length > 0 ? alarmLabels.join(', ') : 'none';
+      console.log(`  File ${i + 1}: Ch${channel} ${startTime} to ${endTime} (${fileSize} bytes, alarm64=${alarmFlag64Hex}, flags=${alarmSummary})`);
       items.push({
         channel,
         startTime,
         endTime,
+        alarmFlag64Hex,
+        alarmBits,
+        alarmLabels,
         alarmType,
         mediaType,
         streamType,
@@ -782,6 +804,46 @@ export class JTT808Server {
     const minute = this.fromBcd(buffer[4]);
     const second = this.fromBcd(buffer[5]);
     return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:${String(second).padStart(2, '0')}`;
+  }
+
+  private getSetBits64(value: bigint): number[] {
+    const bits: number[] = [];
+    for (let i = 0; i < 64; i++) {
+      if (((value >> BigInt(i)) & 1n) === 1n) {
+        bits.push(i);
+      }
+    }
+    return bits;
+  }
+
+  private describeResourceAlarmBit(bit: number): string {
+    const known: Record<number, string> = {
+      0: 'Emergency alarm',
+      1: 'Overspeed alarm',
+      2: 'Fatigue driving alarm',
+      3: 'Dangerous driving behavior',
+      4: 'GNSS module failure',
+      5: 'GNSS antenna disconnected',
+      6: 'GNSS antenna short-circuit',
+      7: 'Main power undervoltage',
+      8: 'Main power power-down',
+      9: 'Display failure',
+      10: 'TTS module failure',
+      11: 'Camera failure',
+      12: 'IC module failure',
+      13: 'Overspeed warning',
+      14: 'Fatigue warning',
+      31: 'Collision warning',
+      // 32-63 extend with JT/T 1078 Table 13 / Table 14 semantics.
+      32: 'Video signal loss',
+      33: 'Video signal blocking',
+      34: 'Storage unit failure',
+      35: 'Other video equipment failure',
+      36: 'Bus overcrowding',
+      37: 'Abnormal driving behavior',
+      38: 'Special alarm recording threshold reached'
+    };
+    return known[bit] || `Alarm bit ${bit}`;
   }
   
   private fromBcd(byte: number): number {
@@ -1162,6 +1224,23 @@ export class JTT808Server {
     return true;
   }
 
+  setVideoAlarmMask(vehicleId: string, maskWord: number = 0): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    
+    if (!vehicle || !socket || !vehicle.connected) {
+      return false;
+    }
+
+    const command = JTT1078Commands.buildSetVideoAlarmMaskCommand(
+      vehicleId,
+      this.getNextSerial(),
+      maskWord >>> 0
+    );
+    socket.write(command);
+    return true;
+  }
+
   switchStream(vehicleId: string, channel: number, streamType: 0 | 1): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
@@ -1259,24 +1338,26 @@ export class JTT808Server {
 
   private handleCustomMessage(message: any, socket: net.Socket): void {
     const decoded = this.decodeCustomPayloadText(message.body);
-    if (decoded) {
-      const keywordAlert = this.extractKeywordAlert(decoded);
-      if (keywordAlert) {
-        const last = this.lastKnownLocation.get(message.terminalPhone);
-        void this.alertManager.processExternalAlert({
-          vehicleId: message.terminalPhone,
-          channel: keywordAlert.channel || 1,
-          type: keywordAlert.type,
-          signalCode: keywordAlert.signalCode,
-          priority: keywordAlert.priority,
-          timestamp: new Date(),
-          location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-          metadata: {
-            sourceMessageId: '0x0704',
-            customText: decoded
-          }
-        });
-      }
+    const keywordAlert = this.extractKeywordAlert(decoded || '');
+    const binaryAlert = this.extractKeywordAlertFromBinary(message.body);
+    const selectedAlert = keywordAlert || binaryAlert;
+
+    if (selectedAlert) {
+      const last = this.lastKnownLocation.get(message.terminalPhone);
+      void this.alertManager.processExternalAlert({
+        vehicleId: message.terminalPhone,
+        channel: selectedAlert.channel || 1,
+        type: selectedAlert.type,
+        signalCode: selectedAlert.signalCode,
+        priority: selectedAlert.priority,
+        timestamp: new Date(),
+        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+        metadata: {
+          sourceMessageId: '0x0704',
+          customText: decoded || null,
+          binaryAlertFallbackUsed: !keywordAlert
+        }
+      });
     }
 
     const response = JTT1078Commands.buildGeneralResponse(
@@ -1307,9 +1388,16 @@ export class JTT808Server {
   private decodeCustomPayloadText(payload: Buffer): string | null {
     if (!payload || payload.length === 0) return null;
 
+    const asciiSanitized = payload
+      .toString('latin1')
+      .replace(/[^\x20-\x7E]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
     const candidates = [
       payload.toString('utf8'),
-      payload.toString('latin1')
+      payload.toString('latin1'),
+      asciiSanitized
     ]
       .map((v) => v.replace(/\0/g, '').trim())
       .filter((v) => v.length > 0);
@@ -1329,8 +1417,46 @@ export class JTT808Server {
       }
     }
 
-    if (!best || bestScore < 0.75) return null;
+    if (!best || bestScore < 0.45) return null;
     return best.slice(0, 400);
+  }
+
+  private extractKeywordAlertFromBinary(payload: Buffer): {
+    type: string;
+    priority: AlertPriority;
+    signalCode: string;
+    channel?: number;
+  } | null {
+    if (!payload || payload.length === 0) return null;
+
+    // 1) Try keyword extraction from a binary-tolerant sanitized text stream.
+    const sanitizedText = payload
+      .toString('latin1')
+      .replace(/[^\x20-\x7E]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const keywordMatch = this.extractKeywordAlert(sanitizedText);
+    if (keywordMatch) return keywordMatch;
+
+    // 2) Try protocol alarm type codes (Table 38 style): 0x0101..0x0107.
+    const codeMap: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
+      0x0101: { type: 'Video Signal Loss', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0101' },
+      0x0102: { type: 'Video Signal Blocking', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0102' },
+      0x0103: { type: 'Storage Unit Failure', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0103' },
+      0x0104: { type: 'Other Video Equipment Failure', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0104' },
+      0x0105: { type: 'Bus Overcrowding', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0105' },
+      0x0106: { type: 'Abnormal Driving Behavior', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0106' },
+      0x0107: { type: 'Special Alarm Threshold', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0107' }
+    };
+
+    for (let i = 0; i <= payload.length - 2; i++) {
+      const code = payload.readUInt16BE(i);
+      if (codeMap[code]) {
+        return { ...codeMap[code] };
+      }
+    }
+
+    return null;
   }
 
   private extractKeywordAlert(text: string): {

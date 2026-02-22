@@ -1,6 +1,29 @@
 import { JTT808MessageType } from '../types/jtt';
 
 export class JTT1078Commands {
+  private static buildSetTerminalParametersCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    params: Array<{ id: number; value: Buffer }>
+  ): Buffer {
+    const bodyLength =
+      1 +
+      params.reduce((sum, item) => sum + 4 + 1 + item.value.length, 0);
+    const body = Buffer.alloc(bodyLength);
+    let offset = 0;
+
+    body.writeUInt8(params.length, offset++);
+    for (const item of params) {
+      body.writeUInt32BE(item.id >>> 0, offset);
+      offset += 4;
+      body.writeUInt8(item.value.length, offset++);
+      item.value.copy(body, offset);
+      offset += item.value.length;
+    }
+
+    return this.buildMessage(0x8103, terminalPhone, serialNumber, body);
+  }
+
   // Build 0x9003 command - Query audio/video capabilities
   static buildQueryCapabilitiesCommand(
     terminalPhone: string,
@@ -231,29 +254,38 @@ export class JTT1078Commands {
     frameRate: number = 15,
     bitrate: number = 512
   ): Buffer {
-    const paramId = 0x0077;
-    const paramLength = 21;
-    
-    const body = Buffer.alloc(4 + 1 + paramLength);
+    const value = Buffer.alloc(21);
     let offset = 0;
-    
-    body.writeUInt32BE(paramId, offset); offset += 4;
-    body.writeUInt8(paramLength, offset); offset += 1;
-    
-    body.writeUInt8(channel, offset++);           // Logical channel
-    body.writeUInt8(0, offset++);                 // CBR encoding
-    body.writeUInt8(resolution, offset++);        // Resolution
-    body.writeUInt16BE(2, offset); offset += 2;   // I-frame every 2s
-    body.writeUInt8(frameRate, offset++);         // Frame rate
-    body.writeUInt32BE(bitrate, offset); offset += 4; // Bitrate
-    body.writeUInt8(0, offset++);                 // Save: CBR
-    body.writeUInt8(resolution, offset++);        // Save: Resolution
-    body.writeUInt16BE(2, offset); offset += 2;   // Save: I-frame
-    body.writeUInt8(frameRate, offset++);         // Save: Frame rate
-    body.writeUInt32BE(bitrate, offset); offset += 4; // Save: Bitrate
-    body.writeUInt16BE(0, offset);                // OSD settings
-    
-    return this.buildMessage(0x8103, terminalPhone, serialNumber, body);
+
+    value.writeUInt8(channel, offset++);           // Logical channel
+    value.writeUInt8(0, offset++);                 // CBR encoding
+    value.writeUInt8(resolution, offset++);        // Resolution
+    value.writeUInt16BE(2, offset); offset += 2;   // I-frame every 2s
+    value.writeUInt8(frameRate, offset++);         // Frame rate
+    value.writeUInt32BE(bitrate, offset); offset += 4; // Bitrate
+    value.writeUInt8(0, offset++);                 // Save: CBR
+    value.writeUInt8(resolution, offset++);        // Save: Resolution
+    value.writeUInt16BE(2, offset); offset += 2;   // Save: I-frame
+    value.writeUInt8(frameRate, offset++);         // Save: Frame rate
+    value.writeUInt32BE(bitrate, offset); offset += 4; // Save: Bitrate
+    value.writeUInt16BE(0, offset);                // OSD settings
+
+    return this.buildSetTerminalParametersCommand(terminalPhone, serialNumber, [
+      { id: 0x0077, value }
+    ]);
+  }
+
+  // Build 0x8103 command - Set video alarm masking word (0x007A)
+  static buildSetVideoAlarmMaskCommand(
+    terminalPhone: string,
+    serialNumber: number,
+    maskWord: number = 0
+  ): Buffer {
+    const value = Buffer.alloc(4);
+    value.writeUInt32BE(maskWord >>> 0, 0);
+    return this.buildSetTerminalParametersCommand(terminalPhone, serialNumber, [
+      { id: 0x007A, value }
+    ]);
   }
 
   // Build 0x9102 command - Audio/video transmission control (switch stream, pause, resume)

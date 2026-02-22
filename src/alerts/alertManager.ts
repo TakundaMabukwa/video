@@ -62,7 +62,7 @@ export class AlertManager extends EventEmitter {
   private alertStorage = new AlertStorageDB();
   private videoStorage = new VideoStorage();
   private alertCounter = 0;
-  private readonly duplicateWindowMs = 0;
+  private readonly duplicateWindowMs = Math.max(0, Number(process.env.ALERT_DEDUP_WINDOW_MS || 30000));
 
   constructor() {
     super();
@@ -128,7 +128,8 @@ export class AlertManager extends EventEmitter {
   }
 
   async processAlert(alert: LocationAlert): Promise<void> {
-    const alertSignals = this.extractAlertSignals(alert);
+    const allAlertSignals = this.extractAlertSignals(alert);
+    const alertSignals = this.filterActionableSignals(allAlertSignals);
     if (alertSignals.length === 0) return;
     const alertSignalDetails = alertSignals.map((s) => this.getSignalDetail(s));
     const alertLabels = alertSignalDetails.map((d) => d.label);
@@ -156,6 +157,7 @@ export class AlertManager extends EventEmitter {
       metadata: {
         ...alert,
         alertSignals,
+        rawAlertSignals: allAlertSignals,
         alertLabels,
         alertSignalDetails,
         primaryAlertType: primaryType
@@ -548,6 +550,24 @@ export class AlertManager extends EventEmitter {
     return Array.from(new Set(signals));
   }
 
+  private filterActionableSignals(signals: string[]): string[] {
+    // These hardware/terminal fault bits are valid per JT/T 808 but tend to remain latched
+    // for long periods and flood operational incident queues.
+    const suppressed = new Set([
+      'jt808_alarm_bit_4',  // GNSS module failure
+      'jt808_alarm_bit_5',  // GNSS antenna disconnected
+      'jt808_alarm_bit_6',  // GNSS antenna short circuit
+      'jt808_alarm_bit_7',  // Main power undervoltage
+      'jt808_alarm_bit_8',  // Main power power-down
+      'jt808_alarm_bit_9',  // Display failure
+      'jt808_alarm_bit_10', // TTS module failure
+      'jt808_alarm_bit_11', // Camera failure
+      'jt808_alarm_bit_12'  // Transport IC card module failure
+    ]);
+
+    return signals.filter((s) => !suppressed.has(s));
+  }
+
   private getSignalDetail(signal: string): { code: string; label: string; meaning: string; source: string } {
     const directMap: Record<string, { label: string; meaning: string; source: string }> = {
       jt808_emergency: {
@@ -641,6 +661,41 @@ export class AlertManager extends EventEmitter {
         label: 'Abnormal Driving: Smoking',
         meaning: 'Abnormal driving detail indicates smoking.',
         source: 'JT/T 1078 Table 15 bit2'
+      },
+      platform_video_alarm_0101: {
+        label: 'Video Signal Loss',
+        meaning: 'Platform-level video alarm code 0x0101 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0102: {
+        label: 'Video Signal Blocking',
+        meaning: 'Platform-level video alarm code 0x0102 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0103: {
+        label: 'Storage Unit Failure',
+        meaning: 'Platform-level video alarm code 0x0103 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0104: {
+        label: 'Other Video Equipment Failure',
+        meaning: 'Platform-level video alarm code 0x0104 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0105: {
+        label: 'Bus Overcrowding',
+        meaning: 'Platform-level video alarm code 0x0105 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0106: {
+        label: 'Abnormal Driving Behavior',
+        meaning: 'Platform-level video alarm code 0x0106 reported.',
+        source: 'JT/T 1078 Table 38'
+      },
+      platform_video_alarm_0107: {
+        label: 'Special Alarm Recording Threshold',
+        meaning: 'Platform-level video alarm code 0x0107 reported.',
+        source: 'JT/T 1078 Table 38'
       }
     };
 
@@ -908,6 +963,4 @@ export class AlertManager extends EventEmitter {
     });
   }
 }
-
-
 
