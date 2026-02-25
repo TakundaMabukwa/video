@@ -510,7 +510,7 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.fatigueWarning) signals.push('jt808_fatigue_warning');
     if (alert.alarmFlags?.collisionWarning) signals.push('jt808_collision_warning');
 
-    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 31]);
+    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 29]);
     for (const bit of alert.alarmFlagSetBits || []) {
       if (!knownAlarmBits.has(bit)) {
         signals.push(`jt808_alarm_bit_${bit}`);
@@ -775,44 +775,44 @@ export class AlertManager extends EventEmitter {
           meaning: 'Parking timeout alarm bit is set.'
         },
         22: {
-          label: 'Route Entry/Exit Alarm',
-          meaning: 'Route entry/exit alarm bit is set.'
-        },
-        23: {
-          label: 'Route Entry/Exit Alarm',
-          meaning: 'Route entry/exit alarm bit is set.'
-        },
-        24: {
           label: 'Route Driving Time Abnormal',
           meaning: 'Route driving time too short/too long alarm bit is set.'
         },
-        25: {
-          label: 'Route Deviation',
-          meaning: 'Route deviation alarm bit is set.'
+        23: {
+          label: 'Off-Track Alarm',
+          meaning: 'Route deviation/off-track alarm bit is set.'
         },
-        26: {
+        24: {
           label: 'Vehicle VSS Failure',
           meaning: 'Vehicle VSS fault alarm bit is set.'
         },
-        27: {
+        25: {
           label: 'Vehicle Fuel Abnormality',
           meaning: 'Fuel abnormality alarm bit is set.'
         },
-        28: {
+        26: {
           label: 'Vehicle Theft Alarm',
-          meaning: 'Vehicle theft/displacement alarm bit is set.'
+          meaning: 'Vehicle theft/burglar alarm bit is set.'
         },
-        29: {
+        27: {
           label: 'Illegal Ignition',
           meaning: 'Illegal ignition alarm bit is set.'
         },
-        30: {
+        28: {
           label: 'Illegal Displacement',
           meaning: 'Illegal displacement alarm bit is set.'
         },
-        31: {
+        29: {
           label: 'Collision Warning',
           meaning: 'Collision warning alarm bit is set.'
+        },
+        30: {
+          label: 'Rollover Warning',
+          meaning: 'Rollover warning alarm bit is set.'
+        },
+        31: {
+          label: 'Illegal Door Open',
+          meaning: 'Illegal door open alarm bit is set.'
         }
       };
       const mapped = knownBits[bit] || {
@@ -963,4 +963,3 @@ export class AlertManager extends EventEmitter {
     });
   }
 }
-

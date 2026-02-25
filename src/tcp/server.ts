@@ -308,6 +308,9 @@ export class JTT808Server {
       case 0x0704: // JT/T 808 location batch upload
         this.handleLocationBatchUpload(message, socket, buffer);
         break;
+      case 0x0900: // JT/T 808 data uplink pass-through
+        this.handleDataUplinkPassThrough(message, socket, buffer);
+        break;
       default:
         
     }
@@ -676,6 +679,140 @@ export class JTT808Server {
     socket.write(response);
   }
 
+  private handleDataUplinkPassThrough(message: any, socket: net.Socket, rawFrame?: Buffer): void {
+    const body: Buffer = message.body || Buffer.alloc(0);
+    const passThroughType = body.length > 0 ? body.readUInt8(0) : -1;
+    const payload = body.length > 1 ? body.slice(1) : Buffer.alloc(0);
+    const decoded = this.decodeCustomPayloadText(payload) || '';
+    const preview = this.buildPayloadPreview(payload, 320);
+    const combinedText = `${decoded} ${preview}`.trim();
+    const parsed = this.extractPassThroughAlarm(payload, combinedText);
+    const last = this.lastKnownLocation.get(message.terminalPhone);
+
+    if (parsed) {
+      void this.alertManager.processExternalAlert({
+        vehicleId: message.terminalPhone,
+        channel: parsed.channel || 1,
+        type: parsed.type,
+        signalCode: parsed.signalCode,
+        priority: parsed.priority,
+        timestamp: new Date(),
+        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+        metadata: {
+          sourceMessageId: '0x0900',
+          passThroughType,
+          passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
+          alarmCode: parsed.alarmCode ?? null,
+          decodedText: decoded || null,
+          payloadPreview: preview,
+          rawPayloadHex: payload.toString('hex').slice(0, 1024)
+        }
+      });
+    }
+
+    this.pushMessageTrace(message, rawFrame, {
+      parser: 'data-uplink-pass-through-0x0900',
+      passThroughType,
+      passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
+      payloadPreview: preview,
+      decodedText: decoded || null,
+      parsedAlert: parsed
+        ? {
+            type: parsed.type,
+            signalCode: parsed.signalCode,
+            priority: parsed.priority,
+            alarmCode: parsed.alarmCode ?? null,
+            channel: parsed.channel || 1
+          }
+        : null
+    });
+
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.getNextSerial(),
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    socket.write(response);
+  }
+
+  private extractPassThroughAlarm(
+    payload: Buffer,
+    text: string
+  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+    const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
+    const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+
+    const codeFromText = this.extractAlarmCodeFromText(text);
+    if (codeFromText !== null) {
+      const mapped = this.mapVendorAlarmCode(codeFromText);
+      if (mapped) {
+        return { ...mapped, channel, alarmCode: codeFromText };
+      }
+    }
+
+    if (payload.length >= 2) {
+      for (let i = 0; i <= payload.length - 2; i++) {
+        const be = payload.readUInt16BE(i);
+        const mappedBe = this.mapVendorAlarmCode(be);
+        if (mappedBe) {
+          return { ...mappedBe, channel, alarmCode: be };
+        }
+
+        const le = payload.readUInt16LE(i);
+        const mappedLe = this.mapVendorAlarmCode(le);
+        if (mappedLe) {
+          return { ...mappedLe, channel, alarmCode: le };
+        }
+      }
+    }
+
+    const keyword = this.extractKeywordAlert(text);
+    if (keyword) {
+      return { ...keyword, channel: keyword.channel ?? channel };
+    }
+
+    return null;
+  }
+
+  private extractAlarmCodeFromText(text: string): number | null {
+    if (!text) return null;
+    const match = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/);
+    return match ? Number(match[1]) : null;
+  }
+
+  private mapVendorAlarmCode(code: number): { type: string; priority: AlertPriority; signalCode: string } | null {
+    const map: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
+      10001: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
+      10002: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
+      10003: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
+      10004: { type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' },
+      10005: { type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' },
+      10006: { type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' },
+      10007: { type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' },
+      10008: { type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' },
+      10016: { type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' },
+      10017: { type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' },
+
+      10101: { type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
+      10102: { type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
+      10103: { type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
+      10104: { type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' },
+      10105: { type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' },
+      10106: { type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' },
+      10107: { type: 'DMS: Driver behavior monitoring failure', priority: AlertPriority.MEDIUM, signalCode: 'dms_10107_behavior_monitoring_failure' },
+      10116: { type: 'DMS: Automatic capture event', priority: AlertPriority.LOW, signalCode: 'dms_10116_automatic_capture_event' },
+      10117: { type: 'DMS: Driver change', priority: AlertPriority.LOW, signalCode: 'dms_10117_driver_change' },
+
+      11201: { type: 'Rapid acceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11201_rapid_acceleration' },
+      11202: { type: 'Rapid deceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11202_rapid_deceleration' },
+      11203: { type: 'Sharp turn', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11203_sharp_turn' }
+    };
+
+    return map[code] || null;
+  }
+
   private processAlert(alert: LocationAlert): void {
     // Check if there are any actual alerts
     const hasKnownBaseAlarmFlags = !!(alert.alarmFlags && (
@@ -992,7 +1129,9 @@ export class JTT808Server {
       12: 'IC module failure',
       13: 'Overspeed warning',
       14: 'Fatigue warning',
-      31: 'Collision warning',
+      29: 'Collision warning',
+      30: 'Rollover warning',
+      31: 'Illegal door open alarm',
       // 32-63 extend with JT/T 1078 Table 13 / Table 14 semantics.
       32: 'Video signal loss',
       33: 'Video signal blocking',
@@ -1754,7 +1893,7 @@ export class JTT808Server {
       { re: /\b(panic|sos|emergency)\b/i, type: 'Emergency Alarm', priority: AlertPriority.CRITICAL, signalCode: 'custom_keyword_emergency' },
       { re: /\b(collision|rollover|crash|accident)\b/i, type: 'Collision/Accident', priority: AlertPriority.CRITICAL, signalCode: 'custom_keyword_collision' },
       { re: /\b(fatigue|yawn|drowsy|sleepy)\b/i, type: 'Driver Fatigue', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_fatigue' },
-      { re: /\b(seat\s*belt|seatbelt|unbelted|no\s*seat\s*belt|without\s*seat\s*belt)\b/i, type: 'No Seatbelt', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_no_seatbelt' },
+      { re: /\b(seat\s*belt|seatbelt|seatbelt\s*detected|unbelted|no\s*seat\s*belt|without\s*seat\s*belt)\b/i, type: 'No Seatbelt', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_no_seatbelt' },
       { re: /\b(smok|cigarette)\b/i, type: 'Smoking While Driving', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_smoking' },
       { re: /\b(phone|cellphone|mobile)\b/i, type: 'Phone Use While Driving', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_phone' },
       { re: /\b(speed|overspeed)\b/i, type: 'Overspeed Alert', priority: AlertPriority.HIGH, signalCode: 'custom_keyword_speed' },

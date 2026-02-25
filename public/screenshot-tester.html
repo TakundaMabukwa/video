@@ -389,8 +389,13 @@
     let alertRefreshInFlight = false;
     let autoVideoRequestsInFlight = 0;
     const alertVideoState = new Map();
+    const alertMediaCache = new Map();
     const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
     const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 4;
+    const ALERT_FETCH_LIMIT = 500;
+    const ALERT_MEDIA_FETCH_CONCURRENCY = 8;
+    const ALERT_MEDIA_TTL_MS = 15000;
+    const ALERT_VIDEO_RETRY_MS = 60000;
     const MIN_READY_SECONDS = 3;
 
     function setStatus(text, kind = 'status') {
@@ -651,7 +656,10 @@
 
       const existing = alertVideoState.get(alertId) || {};
       if (existing.autoRequesting) return false;
-      if (existing.autoRequested && !existing.error) return false;
+      if (existing.autoRequested && !existing.error) {
+        const startedMs = existing.requestStartedAt ? new Date(existing.requestStartedAt).getTime() : 0;
+        if (startedMs && (Date.now() - startedMs) < ALERT_VIDEO_RETRY_MS) return false;
+      }
       if (existing.autoRequested && existing.error) {
         const startedMs = existing.requestStartedAt ? new Date(existing.requestStartedAt).getTime() : 0;
         const cooldownMs = 2 * 60 * 1000;
@@ -975,13 +983,137 @@
       }
     }
 
+    function getFallbackScreenshotsByAlertId() {
+      const byAlertId = new Map();
+      for (const s of recentScreenshotsCache) {
+        if (!s?.alert_id) continue;
+        const key = String(s.alert_id);
+        if (!byAlertId.has(key)) byAlertId.set(key, []);
+        byAlertId.get(key).push(s);
+      }
+      return byAlertId;
+    }
+
+    function getAlertRenderModels(alerts, byAlertId) {
+      return alerts.map((alert) => {
+        const id = String(alert?.id || '').trim();
+        const cached = alertMediaCache.get(id) || {};
+        const screenshots = Array.isArray(cached.screenshots) && cached.screenshots.length > 0
+          ? cached.screenshots
+          : (byAlertId.get(id) || []);
+        return {
+          alert,
+          screenshots,
+          videosInfo: cached.videosInfo || null
+        };
+      });
+    }
+
+    function renderAlertsFromModels(models) {
+      alertsEl.innerHTML = models.map((m) => alertCard(m.alert, m.screenshots, m.videosInfo)).join('')
+        || '<div class="meta">No alerts found.</div>';
+    }
+
+    async function fetchAlertMedia(alertId, force = false) {
+      const id = String(alertId || '').trim();
+      if (!id) return null;
+
+      const cached = alertMediaCache.get(id);
+      const now = Date.now();
+      if (!force && cached && cached.fetchedAt && (now - cached.fetchedAt) < ALERT_MEDIA_TTL_MS && !cached.pendingPromise) {
+        return cached;
+      }
+      if (cached?.pendingPromise) {
+        return cached.pendingPromise;
+      }
+
+      const pendingPromise = (async () => {
+        let screenshots = Array.isArray(cached?.screenshots) ? cached.screenshots : [];
+        let videosInfo = cached?.videosInfo || null;
+        let error = '';
+
+        const [alertRes, videosRes] = await Promise.allSettled([
+          fetch(`/api/alerts/${encodeURIComponent(id)}`, { cache: 'no-store' }),
+          fetch(`/api/alerts/${encodeURIComponent(id)}/videos`, { cache: 'no-store' })
+        ]);
+
+        if (alertRes.status === 'fulfilled') {
+          try {
+            if (alertRes.value.ok) {
+              const body = await alertRes.value.json().catch(() => ({}));
+              const fromAlert = body?.alert?.screenshots;
+              if (Array.isArray(fromAlert)) screenshots = fromAlert;
+            } else {
+              error = `alert:${alertRes.value.status}`;
+            }
+          } catch (_) {}
+        } else {
+          error = alertRes.reason?.message || 'alert fetch failed';
+        }
+
+        if (videosRes.status === 'fulfilled') {
+          try {
+            if (videosRes.value.ok) {
+              const body = await videosRes.value.json().catch(() => ({}));
+              if (body?.success) {
+                videosInfo = body;
+              } else if (!error) {
+                error = body?.message || 'videos response not successful';
+              }
+            } else if (!error) {
+              error = `videos:${videosRes.value.status}`;
+            }
+          } catch (_) {}
+        } else if (!error) {
+          error = videosRes.reason?.message || 'videos fetch failed';
+        }
+
+        const next = { screenshots, videosInfo, fetchedAt: Date.now(), error };
+        alertMediaCache.set(id, next);
+        return next;
+      })().catch((err) => {
+        const next = {
+          screenshots: Array.isArray(cached?.screenshots) ? cached.screenshots : [],
+          videosInfo: cached?.videosInfo || null,
+          fetchedAt: Date.now(),
+          error: err?.message || String(err)
+        };
+        alertMediaCache.set(id, next);
+        return next;
+      });
+
+      alertMediaCache.set(id, {
+        ...(cached || {}),
+        pendingPromise
+      });
+      return pendingPromise;
+    }
+
+    async function hydrateAlertsMedia(alerts, force = false) {
+      const ids = alerts
+        .map((a) => String(a?.id || '').trim())
+        .filter(Boolean);
+      if (ids.length === 0) return;
+
+      let idx = 0;
+      const workerCount = Math.min(ALERT_MEDIA_FETCH_CONCURRENCY, ids.length);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (idx < ids.length) {
+          const currentIndex = idx++;
+          const id = ids[currentIndex];
+          await fetchAlertMedia(id, force);
+        }
+      });
+      await Promise.all(workers);
+    }
+
     async function refreshAlerts() {
       if (alertRefreshInFlight) return;
       alertRefreshInFlight = true;
       try {
-        const limit = Math.max(1, Math.min(500, Number(limitEl.value || 50)));
+        const limit = ALERT_FETCH_LIMIT;
         const minutes = Math.max(1, Math.min(10080, Number(minutesEl.value || 180)));
-        const screenshotLimit = Math.max(200, Math.min(3000, limit * 8));
+        const screenshotLimit = Math.max(500, Math.min(6000, limit * 8));
 
         recentScreenshotsCache = await fetchRecentScreenshots(screenshotLimit, minutes);
 
@@ -1023,29 +1155,28 @@
           return true;
         }).slice(0, limit);
 
-        const byAlertId = new Map();
-        for (const s of recentScreenshotsCache) {
-          if (!s.alert_id) continue;
-          const key = String(s.alert_id);
-          if (!byAlertId.has(key)) byAlertId.set(key, []);
-          byAlertId.get(key).push(s);
-        }
+        const byAlertId = getFallbackScreenshotsByAlertId();
+        const initialModels = getAlertRenderModels(alerts, byAlertId);
+        renderAlertsFromModels(initialModels);
+
+        await hydrateAlertsMedia(alerts);
+        const hydratedModels = getAlertRenderModels(alerts, byAlertId);
 
         let autoRequestedCount = 0;
-        for (const alert of alerts) {
+        for (const model of hydratedModels) {
           if (autoRequestedCount >= AUTO_VIDEO_REQUEST_MAX_PER_REFRESH) break;
-          const requested = await ensureAlertVideoRequested(alert, null);
+          const requested = await ensureAlertVideoRequested(model.alert, model.videosInfo);
           if (requested) autoRequestedCount += 1;
         }
 
+        renderAlertsFromModels(hydratedModels);
+        const withAnyScreenshots = hydratedModels.filter((m) => (m.screenshots || []).length > 0).length;
+        const withAnyVideos = hydratedModels.filter((m) => {
+          const info = getAlertVideoInfo(m.alert, m.videosInfo);
+          return info.preReady || info.postReady || info.cameraReady;
+        }).length;
         const nowText = new Date().toLocaleTimeString();
-        summaryEl.textContent = `${alerts.length} alert(s) | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
-        alertsEl.innerHTML = alerts.map((a) => {
-          const id = String(a.id);
-          const screenshots = byAlertId.get(id) || [];
-          return alertCard(a, screenshots, null);
-        }).join('')
-          || '<div class="meta">No alerts found.</div>';
+        summaryEl.textContent = `${alerts.length} alert(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
         alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
