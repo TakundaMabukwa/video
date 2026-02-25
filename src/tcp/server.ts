@@ -773,6 +773,13 @@ export class JTT808Server {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
+    // 1) Pattern-first matching (basis list from ADAS/DMS/behavior alert catalog).
+    // Matches explicit text labels before any code heuristics.
+    const mappedByText = this.mapVendorAlarmText(text);
+    if (mappedByText) {
+      return { ...mappedByText, channel };
+    }
+
     // Always attempt explicit documented code extraction from text preview.
     // This is deterministic and does not rely on payload-type assumptions.
     const codeFromText = this.extractAlarmCodeFromText(text);
@@ -880,6 +887,43 @@ export class JTT808Server {
     };
 
     return map[code] || null;
+  }
+
+  private mapVendorAlarmText(text: string): { type: string; priority: AlertPriority; signalCode: string } | null {
+    if (!text) return null;
+    const candidates: Array<{ re: RegExp; map: { type: string; priority: AlertPriority; signalCode: string } }> = [
+      { re: /\bforward\s+collision\s+warning\b/i, map: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' } },
+      { re: /\blane\s+departure\s+alarm\b/i, map: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' } },
+      { re: /\b(distance\s+is\s+too\s+close|too\s+close\s+to\s+the\s+alarm|following\s+distance)\b/i, map: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' } },
+      { re: /\bpedestrian\s+collision\s+alarm\b/i, map: { type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' } },
+      { re: /\bfrequent\s+lane\s+change\s+alarm\b/i, map: { type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' } },
+      { re: /\broad\s+sign\s+over[-\s]?limit\s+alarm\b/i, map: { type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' } },
+      { re: /\bobstruction\s+alarm\b/i, map: { type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' } },
+      { re: /\b(driver\s+assistance\s+function\s+failure\s+alarm|assist(?:ance)?\s+function\s+failure)\b/i, map: { type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' } },
+      { re: /\broad\s+sign\s+identification\s+event\b/i, map: { type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' } },
+      { re: /\b(active(?:ly)?\s+capture(?:\s+the)?\s+event)\b/i, map: { type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' } },
+
+      { re: /\bfatigue\s+driving\s+alarm\b/i, map: { type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' } },
+      { re: /\b(handheld\s+phone\s+alarm|receive\s+handheld\s+phone\s+alarm)\b/i, map: { type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' } },
+      { re: /\bsmoking\s+alarm\b/i, map: { type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' } },
+      { re: /\b(invisible\s+forward\s+alarm\s+for\s+a\s+long\s+time|forward\s+camera\s+invisible)\b/i, map: { type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' } },
+      { re: /\bdriver\s+alarm\s+not\s+detected\b/i, map: { type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' } },
+      { re: /\b(both\s+hands?\s+are\s+off\s+the\s+steering\s+wheel|hands?\s+off\s+steering)\b/i, map: { type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' } },
+      { re: /\b(driver\s+behavior\s+monitoring\s+function\s+failure|behavior\s+monitoring\s+failure)\b/i, map: { type: 'DMS: Driver behavior monitoring failure', priority: AlertPriority.MEDIUM, signalCode: 'dms_10107_behavior_monitoring_failure' } },
+      { re: /\bautomatic\s+capture\s+event\b/i, map: { type: 'DMS: Automatic capture event', priority: AlertPriority.LOW, signalCode: 'dms_10116_automatic_capture_event' } },
+      { re: /\bdriver\s+change\b/i, map: { type: 'DMS: Driver change', priority: AlertPriority.LOW, signalCode: 'dms_10117_driver_change' } },
+
+      { re: /\brapid\s+acceleration\b/i, map: { type: 'Rapid acceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11201_rapid_acceleration' } },
+      { re: /\brapid\s+deceleration\b/i, map: { type: 'Rapid deceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11202_rapid_deceleration' } },
+      { re: /\bsharp\s+turn\b/i, map: { type: 'Sharp turn', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11203_sharp_turn' } }
+    ];
+
+    for (const entry of candidates) {
+      if (entry.re.test(text)) {
+        return entry.map;
+      }
+    }
+    return null;
   }
 
   private processAlert(alert: LocationAlert): void {
