@@ -529,7 +529,27 @@ export class JTT808Server {
         longitude: alert.longitude,
         timestamp: alert.timestamp
       });
-      this.processAlert(alert);
+
+      const vendorMapped = this.detectVendorAlarmFromLocationBody(message.body);
+      if (vendorMapped) {
+        void this.alertManager.processExternalAlert({
+          vehicleId: alert.vehicleId,
+          channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
+          type: vendorMapped.type,
+          signalCode: vendorMapped.signalCode,
+          priority: vendorMapped.priority,
+          timestamp: alert.timestamp,
+          location: { latitude: alert.latitude, longitude: alert.longitude },
+          metadata: {
+            sourceMessageId: '0x0200',
+            vendorCodeMapped: true,
+            alarmCode: vendorMapped.alarmCode ?? null,
+            locationAdditionalInfoId: vendorMapped.infoId ?? null
+          }
+        });
+      } else {
+        this.processAlert(alert);
+      }
     }
 
     this.pushMessageTrace(message, rawFrame, {
@@ -651,7 +671,26 @@ export class JTT808Server {
       });
 
       const hadBefore = this.alertManager.getAlertStats().total;
-      this.processAlert(alert);
+      const vendorMapped = this.detectVendorAlarmFromLocationBody(itemBody);
+      if (vendorMapped) {
+        void this.alertManager.processExternalAlert({
+          vehicleId: alert.vehicleId,
+          channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
+          type: vendorMapped.type,
+          signalCode: vendorMapped.signalCode,
+          priority: vendorMapped.priority,
+          timestamp: alert.timestamp,
+          location: { latitude: alert.latitude, longitude: alert.longitude },
+          metadata: {
+            sourceMessageId: '0x0704',
+            vendorCodeMapped: true,
+            alarmCode: vendorMapped.alarmCode ?? null,
+            locationAdditionalInfoId: vendorMapped.infoId ?? null
+          }
+        });
+      } else {
+        this.processAlert(alert);
+      }
       const hadAfter = this.alertManager.getAlertStats().total;
       if (hadAfter > hadBefore) {
         processedAlerts += hadAfter - hadBefore;
@@ -828,6 +867,72 @@ export class JTT808Server {
 
     // Conservative fallback: for serial pass-through types, try first WORD only if explicitly mappable.
     if (!allowBinaryScan && payload.length >= 2 && (passThroughType === 0x41 || passThroughType === 0x42)) {
+      const be = payload.readUInt16BE(0);
+      const mappedBe = this.mapVendorAlarmCode(be);
+      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
+
+      const le = payload.readUInt16LE(0);
+      const mappedLe = this.mapVendorAlarmCode(le);
+      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
+    }
+
+    return null;
+  }
+
+  private inferLocationAlertChannel(alert: LocationAlert): number {
+    if (alert.signalLossChannels && alert.signalLossChannels.length > 0) {
+      return alert.signalLossChannels[0];
+    }
+    if (alert.blockingChannels && alert.blockingChannels.length > 0) {
+      return alert.blockingChannels[0];
+    }
+    return 1;
+  }
+
+  private detectVendorAlarmFromLocationBody(
+    body: Buffer
+  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number } | null {
+    if (!body || body.length <= 28) return null;
+
+    let offset = 28;
+    while (offset + 2 <= body.length) {
+      const infoId = body.readUInt8(offset);
+      const infoLength = body.readUInt8(offset + 1);
+      if (offset + 2 + infoLength > body.length) break;
+
+      const infoData = body.slice(offset + 2, offset + 2 + infoLength);
+      const mapped = this.detectVendorAlarmFromPayload(infoData);
+      if (mapped) {
+        return { ...mapped, infoId };
+      }
+      offset += 2 + infoLength;
+    }
+    return null;
+  }
+
+  private detectVendorAlarmFromPayload(
+    payload: Buffer
+  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+    if (!payload || payload.length === 0) return null;
+
+    const decoded = this.decodeCustomPayloadText(payload) || '';
+    const preview = this.buildPayloadPreview(payload, 320);
+    const combined = `${decoded} ${preview}`.trim();
+    const channelMatch = combined.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
+    const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+
+    const mappedByText = this.mapVendorAlarmText(combined);
+    if (mappedByText) {
+      return { ...mappedByText, channel };
+    }
+
+    const codeFromText = this.extractAlarmCodeFromText(combined);
+    if (codeFromText !== null) {
+      const mapped = this.mapVendorAlarmCode(codeFromText);
+      if (mapped) return { ...mapped, channel, alarmCode: codeFromText };
+    }
+
+    if (payload.length >= 2) {
       const be = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(be);
       if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
