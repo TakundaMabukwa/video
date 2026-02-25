@@ -783,6 +783,19 @@ export class JTT808Server {
       }
     }
 
+    // Deterministic fallback: some terminals place the alarm code in the first WORD
+    // but use a pass-through type outside the documented alarm-carrying values.
+    // We only accept it if it maps to a known documented code.
+    if (payload.length >= 2) {
+      const firstBe = payload.readUInt16BE(0);
+      const mappedBe = this.mapVendorAlarmCode(firstBe);
+      if (mappedBe) return { ...mappedBe, channel, alarmCode: firstBe };
+
+      const firstLe = payload.readUInt16LE(0);
+      const mappedLe = this.mapVendorAlarmCode(firstLe);
+      if (mappedLe) return { ...mappedLe, channel, alarmCode: firstLe };
+    }
+
     // Heuristic binary decode is only attempted for pass-through types aligned to alarm payloads.
     if (!allowHeuristicBinaryDecode) {
       return null;

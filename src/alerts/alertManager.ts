@@ -56,6 +56,7 @@ export interface ExternalAlertInput {
 export class AlertManager extends EventEmitter {
   private videoBuffers = new Map<string, CircularVideoBuffer>();
   private activeAlerts = new Map<string, AlertEvent>();
+  private signalStateByVehicleChannel = new Map<string, Set<string>>();
   private recentAlertSignatures = new Map<string, number>();
   private escalation: AlertEscalation;
   private notifier: AlertNotifier;
@@ -131,17 +132,31 @@ export class AlertManager extends EventEmitter {
     const allAlertSignals = this.extractAlertSignals(alert);
     const alertSignals = this.filterActionableSignals(allAlertSignals);
     if (alertSignals.length === 0) return;
-    const alertSignalDetails = alertSignals.map((s) => this.getSignalDetail(s));
-    const alertLabels = alertSignalDetails.map((d) => d.label);
     const channel = this.extractChannelFromAlert(alert);
-    const primaryType = this.getPrimaryAlertType(alert, alertSignals);
+    const stateKey = `${alert.vehicleId}|${channel}`;
+    const previousSignals = this.signalStateByVehicleChannel.get(stateKey) || new Set<string>();
+    const currentSignals = new Set(alertSignals);
+    const newlyRaisedSignals = alertSignals.filter((s) => !previousSignals.has(s));
+
+    if (currentSignals.size > 0) {
+      this.signalStateByVehicleChannel.set(stateKey, currentSignals);
+    } else {
+      this.signalStateByVehicleChannel.delete(stateKey);
+    }
+
+    // Edge-triggered behavior: only create an alert when a new signal appears.
+    if (newlyRaisedSignals.length === 0) return;
+
+    const alertSignalDetails = newlyRaisedSignals.map((s) => this.getSignalDetail(s));
+    const alertLabels = alertSignalDetails.map((d) => d.label);
+    const primaryType = this.getPrimaryAlertType(alert, newlyRaisedSignals);
     const signature = this.buildAlertSignature(alert.vehicleId, channel, primaryType);
 
     if (this.shouldSuppressDuplicate(signature, alert.timestamp)) {
       return;
     }
 
-    const priority = this.determinePriority(alert, alertSignals);
+    const priority = this.determinePriority(alert, newlyRaisedSignals);
     const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
 
     const alertEvent: AlertEvent = {
@@ -156,7 +171,8 @@ export class AlertManager extends EventEmitter {
       escalationLevel: 0,
       metadata: {
         ...alert,
-        alertSignals,
+        alertSignals: newlyRaisedSignals,
+        activeSignalsSnapshot: alertSignals,
         rawAlertSignals: allAlertSignals,
         alertLabels,
         alertSignalDetails,
@@ -193,12 +209,15 @@ export class AlertManager extends EventEmitter {
   async processExternalAlert(input: ExternalAlertInput): Promise<void> {
     const timestamp = input.timestamp || new Date();
     const channel = input.channel || 1;
-    const signalCode =
+    const baseSignalCode =
       input.signalCode ||
       `external_${String(input.type || 'alert')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '')}`;
+    const filtered = this.filterActionableSignals([baseSignalCode]);
+    if (filtered.length === 0) return;
+    const signalCode = filtered[0];
     const signature = this.buildAlertSignature(input.vehicleId, channel, signalCode);
 
     if (this.shouldSuppressDuplicate(signature, timestamp)) {
