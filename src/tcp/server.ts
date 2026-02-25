@@ -312,7 +312,7 @@ export class JTT808Server {
         this.handleDataUplinkPassThrough(message, socket, buffer);
         break;
       default:
-        
+        this.handleUnknownMessage(message, socket, buffer);
     }
   }
 
@@ -783,6 +783,43 @@ export class JTT808Server {
     socket.write(response);
   }
 
+  private handleUnknownMessage(message: any, socket: net.Socket, rawFrame?: Buffer): void {
+    const mapped = this.detectVendorAlarmFromPayload(message.body || Buffer.alloc(0));
+    const sourceMessageId = `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`;
+    const last = this.lastKnownLocation.get(message.terminalPhone);
+
+    if (mapped) {
+      void this.alertManager.processExternalAlert({
+        vehicleId: message.terminalPhone,
+        channel: mapped.channel || 1,
+        type: mapped.type,
+        signalCode: mapped.signalCode,
+        priority: mapped.priority,
+        timestamp: new Date(),
+        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+        metadata: {
+          sourceMessageId,
+          alarmCode: mapped.alarmCode ?? null,
+          parser: 'unknown-message-vendor-map'
+        }
+      });
+    }
+
+    this.pushMessageTrace(message, rawFrame, {
+      parser: 'unknown-message',
+      mappedAlert: mapped || null
+    });
+
+    const response = JTT1078Commands.buildGeneralResponse(
+      message.terminalPhone,
+      this.getNextSerial(),
+      message.serialNumber,
+      message.messageId,
+      0
+    );
+    socket.write(response);
+  }
+
   private isAlarmPassThroughType(passThroughType: number): boolean {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
@@ -915,6 +952,28 @@ export class JTT808Server {
   ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
     if (!payload || payload.length === 0) return null;
 
+    // JT/T 808 Appendix A peripheral frames are commonly embedded in pass-through payloads.
+    // Decode framed content first and inspect user-data for known alarm codes/text.
+    const peripheralFrames = this.decodePeripheralProtocolFrames(payload);
+    for (const frame of peripheralFrames) {
+      const mapped = this.mapVendorAlarmFromBytes(frame.userData);
+      if (mapped) {
+        return mapped;
+      }
+    }
+
+    // Fallback: inspect the raw payload directly.
+    const mappedRaw = this.mapVendorAlarmFromBytes(payload);
+    if (mappedRaw) return mappedRaw;
+
+    return null;
+  }
+
+  private mapVendorAlarmFromBytes(
+    payload: Buffer
+  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+    if (!payload || payload.length === 0) return null;
+
     const decoded = this.decodeCustomPayloadText(payload) || '';
     const preview = this.buildPayloadPreview(payload, 320);
     const combined = `${decoded} ${preview}`.trim();
@@ -932,6 +991,7 @@ export class JTT808Server {
       if (mapped) return { ...mapped, channel, alarmCode: codeFromText };
     }
 
+    // Check first WORD BE/LE.
     if (payload.length >= 2) {
       const be = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(be);
@@ -942,7 +1002,103 @@ export class JTT808Server {
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
+    // Broader deterministic scan: known alarm codes at any 2-byte offset.
+    for (let i = 0; i <= payload.length - 2; i++) {
+      const be = payload.readUInt16BE(i);
+      const mappedBe = this.mapVendorAlarmCode(be);
+      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
+
+      const le = payload.readUInt16LE(i);
+      const mappedLe = this.mapVendorAlarmCode(le);
+      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
+    }
+
     return null;
+  }
+
+  private decodePeripheralProtocolFrames(payload: Buffer): Array<{
+    validChecksum: boolean;
+    version: number;
+    vendor: number;
+    peripheralType: number;
+    commandType: number;
+    userData: Buffer;
+  }> {
+    const frames: Buffer[] = [];
+    const marker = 0x7e;
+
+    let start = -1;
+    for (let i = 0; i < payload.length; i++) {
+      if (payload[i] !== marker) continue;
+      if (start >= 0 && i > start + 1) {
+        frames.push(payload.slice(start + 1, i));
+      }
+      start = i;
+    }
+
+    // Some terminals strip 0x7e markers before pass-through; treat entire payload as one candidate too.
+    if (frames.length === 0 && payload.length >= 6) {
+      frames.push(payload);
+    }
+
+    const decoded: Array<{
+      validChecksum: boolean;
+      version: number;
+      vendor: number;
+      peripheralType: number;
+      commandType: number;
+      userData: Buffer;
+    }> = [];
+
+    for (const frame of frames) {
+      const unescaped = this.unescapePeripheralFrame(frame);
+      if (unescaped.length < 6) continue;
+
+      const checkCode = unescaped.readUInt8(0);
+      const version = unescaped.readUInt8(1);
+      const vendor = unescaped.readUInt16BE(2);
+      const peripheralType = unescaped.readUInt8(4);
+      const commandType = unescaped.readUInt8(5);
+      const userData = unescaped.slice(6);
+      let sum = 0;
+      for (let i = 2; i < unescaped.length; i++) {
+        sum = (sum + unescaped[i]) & 0xff;
+      }
+      const validChecksum = sum === checkCode;
+
+      decoded.push({
+        validChecksum,
+        version,
+        vendor,
+        peripheralType,
+        commandType,
+        userData
+      });
+    }
+
+    return decoded;
+  }
+
+  private unescapePeripheralFrame(frame: Buffer): Buffer {
+    const out: number[] = [];
+    for (let i = 0; i < frame.length; i++) {
+      const b = frame[i];
+      if (b === 0x7d && i + 1 < frame.length) {
+        const n = frame[i + 1];
+        if (n === 0x02) {
+          out.push(0x7e);
+          i++;
+          continue;
+        }
+        if (n === 0x01) {
+          out.push(0x7d);
+          i++;
+          continue;
+        }
+      }
+      out.push(b);
+    }
+    return Buffer.from(out);
   }
 
   private extractAlarmCodeFromText(text: string): number | null {
@@ -2015,7 +2171,8 @@ export class JTT808Server {
 
   private mapMultimediaEvent(eventCode: number): { type: string; priority: AlertPriority } | null {
     // JT/T 808 multimedia event codes commonly used by terminals:
-    // 0 platform command, 1 scheduled action, 2 alarm-triggered capture, 3 collision/rollover.
+    // 0 platform command, 1 scheduled action, 2 robbery alarm, 3 collision/rollover,
+    // 4/5 door open/close photos, 6 door open->close with speed crossing threshold, 7 fixed-distance photos.
     if (eventCode === 0 || eventCode === 1) return null;
 
     if (eventCode === 2) {
@@ -2024,8 +2181,20 @@ export class JTT808Server {
     if (eventCode === 3) {
       return { type: 'Collision/Rollover Trigger', priority: AlertPriority.CRITICAL };
     }
+    if (eventCode === 4) {
+      return { type: 'Door Open Photo Event', priority: AlertPriority.LOW };
+    }
+    if (eventCode === 5) {
+      return { type: 'Door Close Photo Event', priority: AlertPriority.LOW };
+    }
+    if (eventCode === 6) {
+      return { type: 'Door Transition Speed Event', priority: AlertPriority.MEDIUM };
+    }
+    if (eventCode === 7) {
+      return { type: 'Fixed Distance Photo Event', priority: AlertPriority.LOW };
+    }
 
-    // Other values are reserved/terminal-specific in standard references; skip to avoid false alerts.
+    // Other values are reserved/terminal-specific.
     return null;
   }
 
