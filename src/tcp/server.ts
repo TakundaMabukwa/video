@@ -687,9 +687,12 @@ export class JTT808Server {
     const preview = this.buildPayloadPreview(payload, 320);
     const combinedText = `${decoded} ${preview}`.trim();
     const alarmParsingEnabled = this.isAlarmPassThroughType(passThroughType);
-    const parsed = alarmParsingEnabled
-      ? this.extractPassThroughAlarm(passThroughType, payload, combinedText)
-      : null;
+    const parsed = this.extractPassThroughAlarm(
+      passThroughType,
+      payload,
+      combinedText,
+      alarmParsingEnabled
+    );
     const last = this.lastKnownLocation.get(message.terminalPhone);
 
     if (parsed) {
@@ -764,17 +767,25 @@ export class JTT808Server {
   private extractPassThroughAlarm(
     passThroughType: number,
     payload: Buffer,
-    text: string
+    text: string,
+    allowHeuristicBinaryDecode: boolean
   ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
+    // Always attempt explicit documented code extraction from text preview.
+    // This is deterministic and does not rely on payload-type assumptions.
     const codeFromText = this.extractAlarmCodeFromText(text);
     if (codeFromText !== null) {
       const mapped = this.mapVendorAlarmCode(codeFromText);
       if (mapped) {
         return { ...mapped, channel, alarmCode: codeFromText };
       }
+    }
+
+    // Heuristic binary decode is only attempted for pass-through types aligned to alarm payloads.
+    if (!allowHeuristicBinaryDecode) {
+      return null;
     }
 
     // Binary scan is intentionally opt-in; without vendor payload framing spec it can create false positives.
@@ -1846,13 +1857,14 @@ export class JTT808Server {
     if (eventCode === 0 || eventCode === 1) return null;
 
     if (eventCode === 2) {
-      return { type: 'Emergency Alarm Trigger', priority: AlertPriority.CRITICAL };
+      return { type: 'Robbery Alarm Trigger', priority: AlertPriority.CRITICAL };
     }
     if (eventCode === 3) {
       return { type: 'Collision/Rollover Trigger', priority: AlertPriority.CRITICAL };
     }
 
-    return { type: `Multimedia Alarm Event ${eventCode}`, priority: AlertPriority.MEDIUM };
+    // Other values are reserved/terminal-specific in standard references; skip to avoid false alerts.
+    return null;
   }
 
   private decodeCustomPayloadText(payload: Buffer): string | null {

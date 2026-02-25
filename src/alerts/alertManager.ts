@@ -504,34 +504,83 @@ export class AlertManager extends EventEmitter {
   private extractAlertSignals(alert: LocationAlert): string[] {
     const signals: string[] = [];
 
-    if (alert.alarmFlags?.emergency) signals.push('jt808_emergency');
-    if (alert.alarmFlags?.overspeed) signals.push('jt808_overspeed');
-    if (alert.alarmFlags?.fatigue) signals.push('jt808_fatigue');
-    if (alert.alarmFlags?.dangerousDriving) signals.push('jt808_dangerous_driving');
-    if (alert.alarmFlags?.overspeedWarning) signals.push('jt808_overspeed_warning');
-    if (alert.alarmFlags?.fatigueWarning) signals.push('jt808_fatigue_warning');
-    if (alert.alarmFlags?.collisionWarning) signals.push('jt808_collision_warning');
-    if (alert.alarmFlags?.rolloverWarning) signals.push('jt808_rollover_warning');
+    // JT/T 808 Table 24 documented alarm bits.
+    // bit15~bit17 are reserved in the standard and intentionally ignored.
+    const jt808BitSignalMap: Record<number, string> = {
+      0: 'jt808_emergency',
+      1: 'jt808_overspeed',
+      2: 'jt808_fatigue',
+      3: 'jt808_dangerous_driving',
+      4: 'jt808_alarm_bit_4',
+      5: 'jt808_alarm_bit_5',
+      6: 'jt808_alarm_bit_6',
+      7: 'jt808_alarm_bit_7',
+      8: 'jt808_alarm_bit_8',
+      9: 'jt808_alarm_bit_9',
+      10: 'jt808_alarm_bit_10',
+      11: 'jt808_alarm_bit_11',
+      12: 'jt808_alarm_bit_12',
+      13: 'jt808_overspeed_warning',
+      14: 'jt808_fatigue_warning',
+      18: 'jt808_alarm_bit_18',
+      19: 'jt808_alarm_bit_19',
+      20: 'jt808_alarm_bit_20',
+      21: 'jt808_alarm_bit_21',
+      22: 'jt808_alarm_bit_22',
+      23: 'jt808_alarm_bit_23',
+      24: 'jt808_alarm_bit_24',
+      25: 'jt808_alarm_bit_25',
+      26: 'jt808_alarm_bit_26',
+      27: 'jt808_alarm_bit_27',
+      28: 'jt808_alarm_bit_28',
+      29: 'jt808_collision_warning',
+      30: 'jt808_rollover_warning',
+      31: 'jt808_alarm_bit_31'
+    };
 
-    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 29, 30]);
-    for (const bit of alert.alarmFlagSetBits || []) {
-      if (!knownAlarmBits.has(bit)) {
-        signals.push(`jt808_alarm_bit_${bit}`);
+    const baseBits = new Set<number>(alert.alarmFlagSetBits || []);
+    if (baseBits.size === 0 && alert.alarmFlags) {
+      if (alert.alarmFlags.emergency) baseBits.add(0);
+      if (alert.alarmFlags.overspeed) baseBits.add(1);
+      if (alert.alarmFlags.fatigue) baseBits.add(2);
+      if (alert.alarmFlags.dangerousDriving) baseBits.add(3);
+      if (alert.alarmFlags.overspeedWarning) baseBits.add(13);
+      if (alert.alarmFlags.fatigueWarning) baseBits.add(14);
+      if (alert.alarmFlags.collisionWarning) baseBits.add(29);
+      if (alert.alarmFlags.rolloverWarning) baseBits.add(30);
+    }
+    for (const bit of Array.from(baseBits).sort((a, b) => a - b)) {
+      const signal = jt808BitSignalMap[bit];
+      if (signal) {
+        signals.push(signal);
       }
     }
 
-    if (alert.videoAlarms?.videoSignalLoss) signals.push('jtt1078_video_signal_loss');
-    if (alert.videoAlarms?.videoSignalBlocking) signals.push('jtt1078_video_signal_blocking');
-    if (alert.videoAlarms?.storageFailure) signals.push('jtt1078_storage_failure');
-    if (alert.videoAlarms?.otherVideoFailure) signals.push('jtt1078_other_video_failure');
-    if (alert.videoAlarms?.busOvercrowding) signals.push('jtt1078_bus_overcrowding');
-    if (alert.videoAlarms?.abnormalDriving) signals.push('jtt1078_abnormal_driving');
-    if (alert.videoAlarms?.specialAlarmThreshold) signals.push('jtt1078_special_alarm_threshold');
+    // JT/T 1078 Table 14 documented video alarm bits.
+    const jtt1078VideoBitSignalMap: Record<number, string> = {
+      0: 'jtt1078_video_signal_loss',
+      1: 'jtt1078_video_signal_blocking',
+      2: 'jtt1078_storage_failure',
+      3: 'jtt1078_other_video_failure',
+      4: 'jtt1078_bus_overcrowding',
+      5: 'jtt1078_abnormal_driving',
+      6: 'jtt1078_special_alarm_threshold'
+    };
 
-    const knownVideoBits = new Set([0, 1, 2, 3, 4, 5, 6]);
-    for (const bit of alert.videoAlarms?.setBits || []) {
-      if (!knownVideoBits.has(bit)) {
-        signals.push(`jtt1078_video_alarm_bit_${bit}`);
+    const videoBits = new Set<number>(alert.videoAlarms?.setBits || []);
+    if (videoBits.size === 0 && alert.videoAlarms) {
+      if (alert.videoAlarms.videoSignalLoss) videoBits.add(0);
+      if (alert.videoAlarms.videoSignalBlocking) videoBits.add(1);
+      if (alert.videoAlarms.storageFailure) videoBits.add(2);
+      if (alert.videoAlarms.otherVideoFailure) videoBits.add(3);
+      if (alert.videoAlarms.busOvercrowding) videoBits.add(4);
+      if (alert.videoAlarms.abnormalDriving) videoBits.add(5);
+      if (alert.videoAlarms.specialAlarmThreshold) videoBits.add(6);
+    }
+    for (const bit of Array.from(videoBits).sort((a, b) => a - b)) {
+      const signal = jtt1078VideoBitSignalMap[bit];
+      if (signal) {
+        signals.push(signal);
       }
     }
 
@@ -554,12 +603,15 @@ export class AlertManager extends EventEmitter {
   }
 
   private filterActionableSignals(signals: string[]): string[] {
-    // Default behavior: keep all alerts that terminals report (spec-accurate capture).
-    // Optional env-based suppression can be enabled only when operations explicitly want it.
-    const suppressHardwareBits = String(process.env.ALERT_SUPPRESS_HARDWARE_BITS ?? 'false').toLowerCase() === 'true';
-    if (!suppressHardwareBits) return signals;
+    // Profiles:
+    // - operational (default): hide persistent infrastructure faults to surface safety/behavior alerts
+    // - full/all/raw: keep every documented signal
+    const profile = String(process.env.ALERT_SIGNAL_PROFILE ?? 'operational').toLowerCase().trim();
+    if (profile === 'full' || profile === 'all' || profile === 'raw') {
+      return signals;
+    }
 
-    const suppressed = new Set([
+    const suppressedExact = new Set([
       'jt808_alarm_bit_4',
       'jt808_alarm_bit_5',
       'jt808_alarm_bit_6',
@@ -568,9 +620,19 @@ export class AlertManager extends EventEmitter {
       'jt808_alarm_bit_9',
       'jt808_alarm_bit_10',
       'jt808_alarm_bit_11',
-      'jt808_alarm_bit_12'
+      'jt808_alarm_bit_12',
+      'jtt1078_video_signal_loss',
+      'jtt1078_video_signal_blocking',
+      'platform_video_alarm_0101',
+      'platform_video_alarm_0102'
     ]);
-    return signals.filter((s) => !suppressed.has(s));
+
+    return signals.filter((s) => {
+      if (suppressedExact.has(s)) return false;
+      if (s.startsWith('jtt1078_signal_loss_channels_')) return false;
+      if (s.startsWith('jtt1078_signal_blocking_channels_')) return false;
+      return true;
+    });
   }
 
   private getSignalDetail(signal: string): { code: string; label: string; meaning: string; source: string } {
