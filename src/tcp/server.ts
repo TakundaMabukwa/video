@@ -686,7 +686,10 @@ export class JTT808Server {
     const decoded = this.decodeCustomPayloadText(payload) || '';
     const preview = this.buildPayloadPreview(payload, 320);
     const combinedText = `${decoded} ${preview}`.trim();
-    const parsed = this.extractPassThroughAlarm(payload, combinedText);
+    const alarmParsingEnabled = this.isAlarmPassThroughType(passThroughType);
+    const parsed = alarmParsingEnabled
+      ? this.extractPassThroughAlarm(passThroughType, payload, combinedText)
+      : null;
     const last = this.lastKnownLocation.get(message.terminalPhone);
 
     if (parsed) {
@@ -714,6 +717,7 @@ export class JTT808Server {
       parser: 'data-uplink-pass-through-0x0900',
       passThroughType,
       passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
+      alarmParsingEnabled,
       payloadPreview: preview,
       decodedText: decoded || null,
       parsedAlert: parsed
@@ -737,7 +741,28 @@ export class JTT808Server {
     socket.write(response);
   }
 
+  private isAlarmPassThroughType(passThroughType: number): boolean {
+    if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
+      return false;
+    }
+    // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
+    // are the only types likely to carry proprietary ADAS/DMS alarm payloads.
+    if (passThroughType === 0x41 || passThroughType === 0x42) return true;
+    if (passThroughType >= 0xF0 && passThroughType <= 0xFF) return true;
+
+    const extraRaw = String(process.env.ALARM_PASS_THROUGH_TYPES ?? '').trim();
+    if (!extraRaw) return false;
+    const extraTypes = extraRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xFF);
+    return extraTypes.includes(passThroughType);
+  }
+
   private extractPassThroughAlarm(
+    passThroughType: number,
     payload: Buffer,
     text: string
   ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
@@ -752,7 +777,9 @@ export class JTT808Server {
       }
     }
 
-    if (payload.length >= 2) {
+    // Binary scan is intentionally opt-in; without vendor payload framing spec it can create false positives.
+    const allowBinaryScan = String(process.env.PASS_THROUGH_BINARY_SCAN_ENABLED ?? 'false').toLowerCase() === 'true';
+    if (allowBinaryScan && payload.length >= 2) {
       for (let i = 0; i <= payload.length - 2; i++) {
         const be = payload.readUInt16BE(i);
         const mappedBe = this.mapVendorAlarmCode(be);
@@ -768,9 +795,15 @@ export class JTT808Server {
       }
     }
 
-    const keyword = this.extractKeywordAlert(text);
-    if (keyword) {
-      return { ...keyword, channel: keyword.channel ?? channel };
+    // Conservative fallback: for serial pass-through types, try first WORD only if explicitly mappable.
+    if (!allowBinaryScan && payload.length >= 2 && (passThroughType === 0x41 || passThroughType === 0x42)) {
+      const be = payload.readUInt16BE(0);
+      const mappedBe = this.mapVendorAlarmCode(be);
+      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
+
+      const le = payload.readUInt16LE(0);
+      const mappedLe = this.mapVendorAlarmCode(le);
+      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
     return null;

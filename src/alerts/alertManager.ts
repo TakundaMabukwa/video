@@ -554,20 +554,22 @@ export class AlertManager extends EventEmitter {
   }
 
   private filterActionableSignals(signals: string[]): string[] {
-    // These hardware/terminal fault bits are valid per JT/T 808 but tend to remain latched
-    // for long periods and flood operational incident queues.
-    const suppressed = new Set([
-      'jt808_alarm_bit_4',  // GNSS module failure
-      'jt808_alarm_bit_5',  // GNSS antenna disconnected
-      'jt808_alarm_bit_6',  // GNSS antenna short circuit
-      'jt808_alarm_bit_7',  // Main power undervoltage
-      'jt808_alarm_bit_8',  // Main power power-down
-      'jt808_alarm_bit_9',  // Display failure
-      'jt808_alarm_bit_10', // TTS module failure
-      'jt808_alarm_bit_11', // Camera failure
-      'jt808_alarm_bit_12'  // Transport IC card module failure
-    ]);
+    // Default behavior: keep all alerts that terminals report (spec-accurate capture).
+    // Optional env-based suppression can be enabled only when operations explicitly want it.
+    const suppressHardwareBits = String(process.env.ALERT_SUPPRESS_HARDWARE_BITS ?? 'false').toLowerCase() === 'true';
+    if (!suppressHardwareBits) return signals;
 
+    const suppressed = new Set([
+      'jt808_alarm_bit_4',
+      'jt808_alarm_bit_5',
+      'jt808_alarm_bit_6',
+      'jt808_alarm_bit_7',
+      'jt808_alarm_bit_8',
+      'jt808_alarm_bit_9',
+      'jt808_alarm_bit_10',
+      'jt808_alarm_bit_11',
+      'jt808_alarm_bit_12'
+    ]);
     return signals.filter((s) => !suppressed.has(s));
   }
 
@@ -774,6 +776,14 @@ export class AlertManager extends EventEmitter {
           label: 'Fatigue Warning',
           meaning: 'Fatigue warning bit is set.'
         },
+        20: {
+          label: 'Enter/Exit Area Alarm',
+          meaning: 'Enter/exit area alarm bit is set.'
+        },
+        21: {
+          label: 'Enter/Exit Route Alarm',
+          meaning: 'Enter/exit route alarm bit is set.'
+        },
         18: {
           label: 'Daily Cumulative Driving Timeout',
           meaning: 'Cumulative driving timeout alarm bit is set.'
@@ -896,6 +906,70 @@ export class AlertManager extends EventEmitter {
         label: mapped.label,
         meaning: mapped.meaning,
         source: 'JT/T 808 multimedia event (0x0800)'
+      };
+    }
+
+    if (signal.startsWith('adas_')) {
+      const codeMatch = signal.match(/^adas_(\d{5})_/);
+      const code = codeMatch ? Number(codeMatch[1]) : null;
+      const adasMap: Record<number, { label: string; meaning: string }> = {
+        10001: { label: 'ADAS: Forward Collision Warning', meaning: 'Forward collision warning event reported by ADAS.' },
+        10002: { label: 'ADAS: Lane Departure Alarm', meaning: 'Lane departure event reported by ADAS.' },
+        10003: { label: 'ADAS: Following Distance Too Close', meaning: 'Following distance too close event reported by ADAS.' },
+        10004: { label: 'ADAS: Pedestrian Collision Alarm', meaning: 'Pedestrian collision warning event reported by ADAS.' },
+        10005: { label: 'ADAS: Frequent Lane Change Alarm', meaning: 'Frequent lane change event reported by ADAS.' },
+        10006: { label: 'ADAS: Road Sign Over-Limit Alarm', meaning: 'Road sign over-limit event reported by ADAS.' },
+        10007: { label: 'ADAS: Obstruction Alarm', meaning: 'Obstruction event reported by ADAS.' },
+        10008: { label: 'ADAS: Assistance Function Failure', meaning: 'Driver assistance function failure reported by ADAS.' },
+        10016: { label: 'ADAS: Road Sign Identification Event', meaning: 'Road sign identification event reported by ADAS.' },
+        10017: { label: 'ADAS: Active Capture Event', meaning: 'Active capture event reported by ADAS.' }
+      };
+      const mapped = code ? adasMap[code] : null;
+      return {
+        code: signal,
+        label: mapped?.label || signal,
+        meaning: mapped?.meaning || 'ADAS vendor pass-through signal.',
+        source: 'Vendor pass-through (0x0900)'
+      };
+    }
+
+    if (signal.startsWith('dms_')) {
+      const codeMatch = signal.match(/^dms_(\d{5})_/);
+      const code = codeMatch ? Number(codeMatch[1]) : null;
+      const dmsMap: Record<number, { label: string; meaning: string }> = {
+        10101: { label: 'DMS: Fatigue Driving Alarm', meaning: 'Fatigue driving event reported by DMS.' },
+        10102: { label: 'DMS: Handheld Phone Alarm', meaning: 'Handheld phone usage event reported by DMS.' },
+        10103: { label: 'DMS: Smoking Alarm', meaning: 'Smoking event reported by DMS.' },
+        10104: { label: 'DMS: Forward Camera Invisible Too Long', meaning: 'Forward camera invisible event reported by DMS.' },
+        10105: { label: 'DMS: Driver Alarm Not Detected', meaning: 'Driver alarm not detected event reported by DMS.' },
+        10106: { label: 'DMS: Both Hands Off Steering Wheel', meaning: 'Hands-off-steering event reported by DMS.' },
+        10107: { label: 'DMS: Behavior Monitoring Failure', meaning: 'Driver behavior monitoring function failure reported by DMS.' },
+        10116: { label: 'DMS: Automatic Capture Event', meaning: 'Automatic capture event reported by DMS.' },
+        10117: { label: 'DMS: Driver Change', meaning: 'Driver change event reported by DMS.' }
+      };
+      const mapped = code ? dmsMap[code] : null;
+      return {
+        code: signal,
+        label: mapped?.label || signal,
+        meaning: mapped?.meaning || 'DMS vendor pass-through signal.',
+        source: 'Vendor pass-through (0x0900)'
+      };
+    }
+
+    if (signal.startsWith('behavior_')) {
+      const codeMatch = signal.match(/^behavior_(\d{5})_/);
+      const code = codeMatch ? Number(codeMatch[1]) : null;
+      const behaviorMap: Record<number, { label: string; meaning: string }> = {
+        11201: { label: 'Rapid Acceleration', meaning: 'Rapid acceleration event reported by terminal behavior analysis.' },
+        11202: { label: 'Rapid Deceleration', meaning: 'Rapid deceleration event reported by terminal behavior analysis.' },
+        11203: { label: 'Sharp Turn', meaning: 'Sharp turn event reported by terminal behavior analysis.' }
+      };
+      const mapped = code ? behaviorMap[code] : null;
+      return {
+        code: signal,
+        label: mapped?.label || signal,
+        meaning: mapped?.meaning || 'Behavior vendor pass-through signal.',
+        source: 'Vendor pass-through (0x0900)'
       };
     }
 
