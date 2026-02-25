@@ -308,9 +308,10 @@ export class AlertManager extends EventEmitter {
   }
 
   private determinePriority(alert: LocationAlert, alertSignals: string[]): AlertPriority {
-    // CRITICAL: emergency, collision warning, or severe fatigue
+    // CRITICAL: emergency, collision/rollover warning, or severe fatigue
     if (alert.alarmFlags?.emergency ||
         alert.alarmFlags?.collisionWarning ||
+        alert.alarmFlags?.rolloverWarning ||
         (alert.drivingBehavior?.fatigueLevel !== undefined && alert.drivingBehavior.fatigueLevel > 80)) {
       return AlertPriority.CRITICAL;
     }
@@ -397,6 +398,7 @@ export class AlertManager extends EventEmitter {
   private getPrimaryAlertType(alert: LocationAlert, alertSignals: string[]): string {
     if (alert.alarmFlags?.emergency) return 'Emergency Alarm';
     if (alert.alarmFlags?.collisionWarning) return 'Collision Warning';
+    if (alert.alarmFlags?.rolloverWarning) return 'Rollover Warning';
     if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Driver Fatigue';
     if (alert.drivingBehavior?.phoneCall || alert.alarmFlags?.dangerousDriving) return 'Dangerous Driving Behavior';
     if (alert.drivingBehavior?.smoking) return 'Smoking While Driving';
@@ -509,8 +511,9 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.overspeedWarning) signals.push('jt808_overspeed_warning');
     if (alert.alarmFlags?.fatigueWarning) signals.push('jt808_fatigue_warning');
     if (alert.alarmFlags?.collisionWarning) signals.push('jt808_collision_warning');
+    if (alert.alarmFlags?.rolloverWarning) signals.push('jt808_rollover_warning');
 
-    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 29]);
+    const knownAlarmBits = new Set([0, 1, 2, 3, 13, 14, 29, 30]);
     for (const bit of alert.alarmFlagSetBits || []) {
       if (!knownAlarmBits.has(bit)) {
         signals.push(`jt808_alarm_bit_${bit}`);
@@ -603,6 +606,11 @@ export class AlertManager extends EventEmitter {
       jt808_collision_warning: {
         label: 'Collision Warning',
         meaning: 'Terminal reports collision warning alarm.',
+        source: 'JT/T 808 extended alarm flag'
+      },
+      jt808_rollover_warning: {
+        label: 'Rollover Warning',
+        meaning: 'Terminal reports rollover warning alarm.',
         source: 'JT/T 808 extended alarm flag'
       },
 

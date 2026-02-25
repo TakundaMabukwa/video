@@ -162,7 +162,9 @@ export class AlertParser {
       overspeedWarning: !!(alarmFlag & (1 << 13)),
       fatigueWarning: !!(alarmFlag & (1 << 14)),
       // JT/T 808 Table 24: collision warning is bit29 (bit31 is illegal door open)
-      collisionWarning: !!(alarmFlag & (1 << 29))
+      collisionWarning: !!(alarmFlag & (1 << 29)),
+      // JT/T 808 Table 24: rollover warning is bit30
+      rolloverWarning: !!(alarmFlag & (1 << 30))
     };
   }
 

@@ -778,12 +778,24 @@ export class JTT808Server {
 
   private extractAlarmCodeFromText(text: string): number | null {
     if (!text) return null;
+    const hexMatch = text.match(/\b0x([0-9a-f]{4})\b/i);
+    if (hexMatch) {
+      return parseInt(hexMatch[1], 16);
+    }
     const match = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/);
     return match ? Number(match[1]) : null;
   }
 
   private mapVendorAlarmCode(code: number): { type: string; priority: AlertPriority; signalCode: string } | null {
     const map: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
+      0x0101: { type: 'Video Signal Loss', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0101' },
+      0x0102: { type: 'Video Signal Blocking', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0102' },
+      0x0103: { type: 'Storage Unit Failure', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0103' },
+      0x0104: { type: 'Other Video Equipment Failure', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0104' },
+      0x0105: { type: 'Bus Overcrowding', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0105' },
+      0x0106: { type: 'Abnormal Driving Behavior', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0106' },
+      0x0107: { type: 'Special Alarm Threshold', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0107' },
+
       10001: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
       10002: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
       10003: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
@@ -822,7 +834,8 @@ export class JTT808Server {
       alert.alarmFlags.dangerousDriving ||
       alert.alarmFlags.overspeedWarning ||
       alert.alarmFlags.fatigueWarning ||
-      alert.alarmFlags.collisionWarning
+      alert.alarmFlags.collisionWarning ||
+      alert.alarmFlags.rolloverWarning
     ));
     const hasAnyBaseAlarmBit = (alert.alarmFlagSetBits?.length || 0) > 0;
     const hasBaseAlarmFlags = hasKnownBaseAlarmFlags || hasAnyBaseAlarmBit;

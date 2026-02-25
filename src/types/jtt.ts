@@ -117,6 +117,7 @@ export interface AlarmFlags {
   overspeedWarning: boolean;
   fatigueWarning: boolean;
   collisionWarning: boolean;
+  rolloverWarning: boolean;
 }
 
 export interface LocationAlert {
