@@ -866,9 +866,19 @@ export class JTT808Server {
       }
     }
 
-    // Deterministic fallback: some terminals place the alarm code in the first WORD
-    // but use a pass-through type outside the documented alarm-carrying values.
-    // We only accept it if it maps to a known documented code.
+    // Binary decode is only attempted for pass-through types aligned to alarm payloads.
+    if (!allowHeuristicBinaryDecode) {
+      return null;
+    }
+
+    // Decode Appendix-A framed peripheral payloads first.
+    const framed = this.decodePeripheralProtocolFrames(payload);
+    for (const frame of framed) {
+      const mapped = this.mapVendorAlarmFromBytes(frame.userData, true);
+      if (mapped) return mapped;
+    }
+
+    // Deterministic fallback: some terminals place the alarm code in the first WORD.
     if (payload.length >= 2) {
       const firstBe = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
@@ -879,12 +889,7 @@ export class JTT808Server {
       if (mappedLe) return { ...mappedLe, channel, alarmCode: firstLe };
     }
 
-    // Heuristic binary decode is only attempted for pass-through types aligned to alarm payloads.
-    if (!allowHeuristicBinaryDecode) {
-      return null;
-    }
-
-    // Binary scan is intentionally opt-in; without vendor payload framing spec it can create false positives.
+    // Offset-scan is intentionally opt-in; without confirmed vendor payload framing it creates false positives.
     const allowBinaryScan = String(process.env.PASS_THROUGH_BINARY_SCAN_ENABLED ?? 'false').toLowerCase() === 'true';
     if (allowBinaryScan && payload.length >= 2) {
       for (let i = 0; i <= payload.length - 2; i++) {
@@ -900,17 +905,6 @@ export class JTT808Server {
           return { ...mappedLe, channel, alarmCode: le };
         }
       }
-    }
-
-    // Conservative fallback: for serial pass-through types, try first WORD only if explicitly mappable.
-    if (!allowBinaryScan && payload.length >= 2 && (passThroughType === 0x41 || passThroughType === 0x42)) {
-      const be = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes: true });
-      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
-
-      const le = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes: true });
-      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
     return null;
@@ -938,10 +932,9 @@ export class JTT808Server {
       if (offset + 2 + infoLength > body.length) break;
 
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
-      // Keep vendor alarm-code matching constrained to extension-style additional IDs.
-      // Standard JT/T 808 additional items (e.g. 0x11~0x18) can contain values that
-      // accidentally resemble short codes like 0x0104.
-      const isVendorExtensionInfo = infoId >= 0x64;
+      // Keep vendor alarm-code matching constrained to configured extension IDs.
+      // Default IDs align with common extension blocks used by ADAS/DMS vendors.
+      const isVendorExtensionInfo = this.isVendorAlarmLocationInfoId(infoId);
       const mapped = isVendorExtensionInfo ? this.detectVendorAlarmFromPayload(infoData) : null;
       if (mapped) {
         return { ...mapped, infoId };
@@ -1007,18 +1000,31 @@ export class JTT808Server {
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
-    // Broader deterministic scan: known alarm codes at any 2-byte offset.
-    for (let i = 0; i <= payload.length - 2; i++) {
-      const be = payload.readUInt16BE(i);
-      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
-      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
+    const allowOffsetScan = String(process.env.VENDOR_ALARM_BINARY_OFFSET_SCAN ?? 'false').toLowerCase() === 'true';
+    if (allowOffsetScan) {
+      for (let i = 0; i <= payload.length - 2; i++) {
+        const be = payload.readUInt16BE(i);
+        const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
+        if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
 
-      const le = payload.readUInt16LE(i);
-      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
-      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
+        const le = payload.readUInt16LE(i);
+        const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
+        if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
+      }
     }
 
     return null;
+  }
+
+  private isVendorAlarmLocationInfoId(infoId: number): boolean {
+    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0x64,0x65,0x66,0x67');
+    const ids = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((s) => (s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10)))
+      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xff);
+    return ids.includes(infoId);
   }
 
   private decodePeripheralProtocolFrames(payload: Buffer): Array<{
