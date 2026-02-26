@@ -823,7 +823,8 @@ export class JTT808Server {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
     }
-    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'true').toLowerCase() === 'true';
+    // Strict JT/T 808 default: only documented pass-through families should be parsed for vendor alarms.
+    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'false').toLowerCase() === 'true';
     if (parseAllTypes) return true;
 
     // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
@@ -850,6 +851,17 @@ export class JTT808Server {
   ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+
+    // Vendor-observed compact video alarm payload on pass-through type 0xA1:
+    // byte0 = subtype (0x01..0x07) mapping to JT/T 1078 Table 38 0x0101..0x0107.
+    // This is deterministic (numeric code based), not keyword inference.
+    const compactA1 = this.decodeCompactA1VideoAlarm(passThroughType, payload);
+    if (compactA1) {
+      return {
+        ...compactA1,
+        channel: compactA1.channel || channel
+      };
+    }
 
     // Always attempt explicit documented code extraction from text preview.
     // This is deterministic and does not rely on payload-type assumptions.
@@ -885,6 +897,27 @@ export class JTT808Server {
     }
 
     return null;
+  }
+
+  private decodeCompactA1VideoAlarm(
+    passThroughType: number,
+    payload: Buffer
+  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+    if (passThroughType !== 0xA1) return null;
+    if (!payload || payload.length < 1) return null;
+
+    const subtype = payload.readUInt8(0);
+    if (subtype < 0x01 || subtype > 0x07) return null;
+
+    const alarmCode = 0x0100 + subtype;
+    const mapped = this.mapVendorAlarmCode(alarmCode, { allowPlatformVideoCodes: true });
+    if (!mapped) return null;
+
+    // Some devices place logical channel in byte1.
+    const maybeChannel = payload.length >= 2 ? payload.readUInt8(1) : 0;
+    const channel = maybeChannel >= 1 && maybeChannel <= 32 ? maybeChannel : undefined;
+
+    return { ...mapped, channel, alarmCode };
   }
 
   private inferLocationAlertChannel(alert: LocationAlert): number {
@@ -976,7 +1009,9 @@ export class JTT808Server {
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
-    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0x64-0x67,0xE0-0xFF');
+    // JT/T 808-2011 location additional-info defines custom extension area as 0xE1~0xFF.
+    // Keep strict default on documented custom range; allow override by env when a vendor spec is confirmed.
+    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0xE1-0xFF');
     const tokens = raw
       .split(',')
       .map((s) => s.trim())
