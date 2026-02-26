@@ -3,6 +3,7 @@ import { FrameAssembler } from '../udp/frameAssembler';
 import { VideoWriter } from '../video/writer';
 import { HLSStreamer } from '../streaming/hls';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
+import { RawIngestLogger } from '../logging/rawIngestLogger';
 
 export class TCPRTPHandler {
   private frameAssembler = new FrameAssembler();
@@ -82,6 +83,18 @@ export class TCPRTPHandler {
       .trim();
 
     const mapped = this.mapTransparentAlert(payload, text);
+    RawIngestLogger.write('jtt1078_transparent_payload_tcp', {
+      vehicleId,
+      channel,
+      dataType: 0x04,
+      payloadText: text.slice(0, 320),
+      rawPayloadHex: payload.toString('hex'),
+      mapped: !!mapped,
+      mappedType: mapped?.type || null,
+      mappedSignalCode: mapped?.signalCode || null,
+      mappedAlarmCode: mapped?.alarmCode ?? null
+    });
+
     if (!mapped) return;
 
     void this.alertManager.processExternalAlert({

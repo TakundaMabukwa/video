@@ -12,6 +12,7 @@ import { AlertStorageDB } from '../storage/alertStorageDB';
 import { DeviceStorage } from '../storage/deviceStorage';
 import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
+import { RawIngestLogger } from '../logging/rawIngestLogger';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 
 type ScreenshotFallbackResult = {
@@ -235,8 +236,27 @@ export class JTT808Server {
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
       console.warn('Failed to parse JT/T 808 message');
+      RawIngestLogger.write('jt808_parse_failed', {
+        remoteAddress: socket.remoteAddress || null,
+        remotePort: socket.remotePort || null,
+        rawFrameHex: buffer.toString('hex')
+      });
       return;
     }
+
+    RawIngestLogger.write('jt808_message', {
+      vehicleId: message.terminalPhone || null,
+      messageId: Number(message.messageId || 0),
+      messageIdHex: `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`,
+      serialNumber: Number(message.serialNumber || 0),
+      bodyLength: Number(message.body?.length || 0),
+      isSubpackage: !!message.isSubpackage,
+      packetCount: message.packetCount || null,
+      packetIndex: message.packetIndex || null,
+      rawFrameHex: buffer.toString('hex'),
+      bodyHex: (message.body || Buffer.alloc(0)).toString('hex'),
+      bodyTextPreview: this.buildPayloadPreview(message.body || Buffer.alloc(0), 320)
+    });
 
     
 
@@ -1284,9 +1304,19 @@ export class JTT808Server {
     const hasBlocking = alert.blockingChannels && alert.blockingChannels.length > 0;
     const hasMemoryFailures = alert.memoryFailures && (alert.memoryFailures.main.length > 0 || alert.memoryFailures.backup.length > 0);
     
-    // Only log if there are actual alerts
-    if (!hasBaseAlarmFlags && !hasVideoAlarms && !hasDrivingBehavior && !hasSignalLoss && !hasBlocking && !hasMemoryFailures) {
-      return; // No alerts, skip logging
+    const hasAnyAlert =
+      hasBaseAlarmFlags ||
+      hasVideoAlarms ||
+      !!hasDrivingBehavior ||
+      !!hasSignalLoss ||
+      !!hasBlocking ||
+      !!hasMemoryFailures;
+
+    // Always forward to AlertManager so it can clear edge-trigger state when alarms drop.
+    // Only skip verbose logging for "no-alert" packets.
+    if (!hasAnyAlert) {
+      this.alertManager.processAlert(alert);
+      return;
     }
     
     console.log('\n' + '='.repeat(80));
@@ -2105,6 +2135,8 @@ export class JTT808Server {
       const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
       this.recentMessageTraces.splice(0, overflow);
     }
+
+    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
   }
 
   private extractLocationAdditionalInfoFields(body: Buffer): Array<{

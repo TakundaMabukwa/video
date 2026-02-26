@@ -5,6 +5,7 @@ import { VideoWriter } from '../video/writer';
 import { StreamInfo } from '../types/jtt';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
 import { HLSStreamer } from '../streaming/hls';
+import { RawIngestLogger } from '../logging/rawIngestLogger';
 
 export class UDPRTPServer {
   private server: dgram.Socket;
@@ -143,6 +144,18 @@ export class UDPRTPServer {
       .trim();
 
     const mapped = this.mapTransparentAlert(payload, text);
+    RawIngestLogger.write('jtt1078_transparent_payload_udp', {
+      vehicleId,
+      channel,
+      dataType: 0x04,
+      payloadText: text.slice(0, 320),
+      rawPayloadHex: payload.toString('hex'),
+      mapped: !!mapped,
+      mappedType: mapped?.type || null,
+      mappedSignalCode: mapped?.signalCode || null,
+      mappedAlarmCode: mapped?.alarmCode ?? null
+    });
+
     if (!mapped) return;
 
     void this.alertManager.processExternalAlert({

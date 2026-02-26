@@ -497,6 +497,76 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     });
   });
 
+  // Diagnostics: raw ingest feed written by protocol handlers.
+  // Source file: logs/raw-ingest.ndjson
+  router.get('/diag/raw-ingest', (req, res) => {
+    try {
+      const logPath = path.join(process.cwd(), 'logs', 'raw-ingest.ndjson');
+      const exists = fs.existsSync(logPath);
+      if (!exists) {
+        return res.json({
+          success: true,
+          count: 0,
+          filters: {
+            eventType: null,
+            messageIdHex: null,
+            vehicleId: null,
+            limit: 0
+          },
+          entries: []
+        });
+      }
+
+      const eventType = String(req.query.eventType || '').trim().toLowerCase();
+      const messageIdHex = String(req.query.messageIdHex || '').trim().toLowerCase();
+      const vehicleId = String(req.query.vehicleId || '').trim();
+      const limit = Math.max(1, Math.min(Number(req.query.limit || 200), 2000));
+
+      const raw = fs.readFileSync(logPath, 'utf8');
+      const lines = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+
+      // newest-first by iterating from end
+      const entries: any[] = [];
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i];
+        let row: any = null;
+        try {
+          row = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (!row || typeof row !== 'object') continue;
+
+        if (eventType && String(row.eventType || '').toLowerCase() !== eventType) continue;
+        if (messageIdHex && String(row.messageIdHex || '').toLowerCase() !== messageIdHex) continue;
+        if (vehicleId && String(row.vehicleId || '') !== vehicleId) continue;
+
+        entries.push(row);
+        if (entries.length >= limit) break;
+      }
+
+      return res.json({
+        success: true,
+        count: entries.length,
+        totalLines: lines.length,
+        source: '/logs/raw-ingest.ndjson',
+        filters: {
+          eventType: eventType || null,
+          messageIdHex: messageIdHex || null,
+          vehicleId: vehicleId || null,
+          limit
+        },
+        entries
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to read raw ingest log',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Start all video channels for a vehicle
   router.post('/vehicles/:id/start-all-streams', (req, res) => {
     const { id } = req.params;
