@@ -334,6 +334,48 @@ export class JTT808Server {
       default:
         this.handleUnknownMessage(message, socket, buffer);
     }
+
+    // Global vendor alarm sweep across all JT/T 808 message bodies.
+    // This allows proprietary alarm codes to be detected even when vendors place
+    // them in non-standard message IDs.
+    // Skip 0x0200/0x0704/0x0900 because they already have dedicated parsing paths.
+    if (
+      message.messageId !== 0x0200 &&
+      message.messageId !== 0x0704 &&
+      message.messageId !== 0x0900
+    ) {
+      this.detectVendorAlarmsFromAnyProtocol(message);
+    }
+  }
+
+  private detectVendorAlarmsFromAnyProtocol(message: any): void {
+    const body: Buffer = message?.body || Buffer.alloc(0);
+    if (!body.length) return;
+
+    const vendorMappedList = this.detectVendorAlarmsFromPayload(body);
+    if (!vendorMappedList.length) return;
+
+    const last = this.lastKnownLocation.get(message.terminalPhone);
+    const sourceMessageId = `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`;
+
+    for (const vendorMapped of vendorMappedList) {
+      void this.alertManager.processExternalAlert({
+        vehicleId: message.terminalPhone,
+        channel: vendorMapped.channel || 1,
+        type: vendorMapped.type,
+        signalCode: vendorMapped.signalCode,
+        priority: vendorMapped.priority,
+        timestamp: new Date(),
+        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+        metadata: {
+          sourceMessageId,
+          vendorCodeMapped: true,
+          alarmCode: vendorMapped.alarmCode ?? null,
+          parser: 'global_vendor_alarm_sweep',
+          rawBodyHex: body.toString('hex').slice(0, 1024)
+        }
+      });
+    }
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {

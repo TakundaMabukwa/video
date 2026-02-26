@@ -9,6 +9,22 @@ export class VideoStorage {
     this.bucketReady = ensureBucket();
   }
 
+  private async ensureDeviceExists(deviceId: string): Promise<void> {
+    if (!deviceId) return;
+
+    const looksLikeIp = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(deviceId);
+    const ipAddress = looksLikeIp ? deviceId : null;
+
+    await query(
+      `INSERT INTO devices (device_id, ip_address, last_seen)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (device_id) DO UPDATE SET
+         ip_address = COALESCE(EXCLUDED.ip_address, devices.ip_address),
+         last_seen = NOW()`,
+      [deviceId, ipAddress]
+    );
+  }
+
   async saveVideo(
     deviceId: string,
     channel: number,
@@ -17,6 +33,9 @@ export class VideoStorage {
     videoType: 'live' | 'alert_pre' | 'alert_post' | 'camera_sd' | 'manual',
     alertId?: string
   ) {
+    // Prevent FK violations on videos.device_id -> devices.device_id.
+    await this.ensureDeviceExists(deviceId);
+
     const result = await query(
       `INSERT INTO videos (device_id, channel, file_path, start_time, video_type, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6)
