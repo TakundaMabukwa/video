@@ -388,8 +388,11 @@
     let videoJobPollTimer = null;
     let alertRefreshInFlight = false;
     let autoVideoRequestsInFlight = 0;
+    let alertRefreshDebounceTimer = null;
+    let alertsWsConnected = false;
     const alertVideoState = new Map();
     const alertMediaCache = new Map();
+    const liveAlertStore = new Map();
     const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
     const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 4;
     const ALERT_FETCH_LIMIT = 500;
@@ -397,6 +400,61 @@
     const ALERT_MEDIA_TTL_MS = 15000;
     const ALERT_VIDEO_RETRY_MS = 60000;
     const MIN_READY_SECONDS = 3;
+
+    function normalizeAlertRecord(alert) {
+      if (!alert || typeof alert !== 'object') return null;
+      const id = String(alert.id || '').trim();
+      if (!id) return null;
+      const ts = alert.timestamp ? new Date(alert.timestamp) : null;
+      return {
+        ...alert,
+        id,
+        vehicleId: alert.vehicleId || alert.device_id || 'n/a',
+        timestamp: ts && !Number.isNaN(ts.getTime()) ? ts.toISOString() : new Date(0).toISOString()
+      };
+    }
+
+    function upsertLiveAlert(alert) {
+      const normalized = normalizeAlertRecord(alert);
+      if (!normalized) return false;
+      const existing = liveAlertStore.get(normalized.id);
+      liveAlertStore.set(normalized.id, existing ? { ...existing, ...normalized } : normalized);
+      return true;
+    }
+
+    function replaceLiveAlertStore(alerts) {
+      liveAlertStore.clear();
+      if (!Array.isArray(alerts)) return;
+      for (const a of alerts) upsertLiveAlert(a);
+    }
+
+    function mergeLiveAlertStore(alerts) {
+      if (!Array.isArray(alerts)) return;
+      for (const a of alerts) upsertLiveAlert(a);
+    }
+
+    function getLiveAlerts(limit, minutes) {
+      const maxAgeMs = Math.max(1, Number(minutes || 180)) * 60 * 1000;
+      const cutoff = Date.now() - maxAgeMs;
+      const list = Array.from(liveAlertStore.values())
+        .filter((a) => {
+          const t = new Date(a?.timestamp || 0).getTime();
+          return Number.isFinite(t) && t >= cutoff;
+        })
+        .sort((a, b) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime())
+        .slice(0, limit);
+      return list;
+    }
+
+    function scheduleAlertsRefresh(delayMs = 200) {
+      if (alertRefreshDebounceTimer) clearTimeout(alertRefreshDebounceTimer);
+      alertRefreshDebounceTimer = setTimeout(() => {
+        alertRefreshDebounceTimer = null;
+        if (activeTab === 'alerts') {
+          refreshAlerts();
+        }
+      }, delayMs);
+    }
 
     function setStatus(text, kind = 'status') {
       statusEl.className = 'status ' + kind;
@@ -1119,7 +1177,7 @@
 
         let alerts = [];
         try {
-          const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           alerts = Array.isArray(data.alerts) ? data.alerts : [];
@@ -1127,33 +1185,18 @@
           alerts = [];
         }
 
-        try {
-          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json().catch(() => ({}));
-          const activeAlerts = Array.isArray(data.alerts) ? data.alerts : [];
-          if (activeAlerts.length) {
-            alerts = [...alerts, ...activeAlerts];
-          }
-        } catch (_) {
-          // keep existing list
-        }
-
         if (alerts.length === 0) {
-          const histRes = await fetch(`/api/alerts/history?limit=${encodeURIComponent(limit)}&days=30`, { cache: 'no-store' });
-          if (!histRes.ok) throw new Error(`HTTP ${histRes.status}`);
-          const histData = await histRes.json().catch(() => ({}));
-          alerts = Array.isArray(histData.data) ? histData.data : [];
+          try {
+            const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+            if (res.ok) {
+              const data = await res.json().catch(() => ({}));
+              alerts = Array.isArray(data.alerts) ? data.alerts : [];
+            }
+          } catch (_) {}
         }
 
-        alerts.sort((a, b) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime());
-        const seen = new Set();
-        alerts = alerts.filter((a) => {
-          const id = String(a?.id || '').trim();
-          if (!id || seen.has(id)) return false;
-          seen.add(id);
-          return true;
-        }).slice(0, limit);
+        mergeLiveAlertStore(alerts);
+        alerts = getLiveAlerts(limit, minutes);
 
         const byAlertId = getFallbackScreenshotsByAlertId();
         const initialModels = getAlertRenderModels(alerts, byAlertId);
@@ -1176,7 +1219,8 @@
           return info.preReady || info.postReady || info.cameraReady;
         }).length;
         const nowText = new Date().toLocaleTimeString();
-        summaryEl.textContent = `${alerts.length} alert(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
+        const sourceLabel = alertsWsConnected ? 'source: live websocket' : 'source: api fallback';
+        summaryEl.textContent = `${alerts.length} alert(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
         alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
@@ -1308,10 +1352,12 @@
     }
 
     async function checkForNewAlerts() {
+      if (alertsWsConnected) return;
       try {
         const res = await fetch('/api/alerts/active');
         if (!res.ok) return;
         const data = await res.json();
+        mergeLiveAlertStore(Array.isArray(data?.alerts) ? data.alerts : []);
         const currentCount = Number(data.count || 0);
 
         if (lastAlertCount === null) {
@@ -1321,11 +1367,9 @@
 
         if (currentCount > lastAlertCount) {
           setStatus(`New alerts detected: +${currentCount - lastAlertCount} (active: ${currentCount}).`, 'warn');
-          if (activeTab === 'alerts') {
-            await refreshAlerts();
-          }
+          scheduleAlertsRefresh(100);
         } else if (activeTab === 'alerts' && currentCount !== lastAlertCount) {
-          await refreshAlerts();
+          scheduleAlertsRefresh(100);
         }
 
         lastAlertCount = currentCount;
@@ -1347,23 +1391,46 @@
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${location.host}/ws/alerts`);
 
-      ws.onopen = () => { wsStatusEl.textContent = 'WebSocket: connected'; };
+      ws.onopen = () => {
+        alertsWsConnected = true;
+        wsStatusEl.textContent = 'WebSocket: connected';
+      };
       ws.onclose = () => {
+        alertsWsConnected = false;
         wsStatusEl.textContent = 'WebSocket: disconnected (retrying)';
         setTimeout(connectWebSocket, 2000);
       };
-      ws.onerror = () => { wsStatusEl.textContent = 'WebSocket: error'; };
+      ws.onerror = () => {
+        alertsWsConnected = false;
+        wsStatusEl.textContent = 'WebSocket: error';
+      };
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
           const type = String(msg?.type || '').toLowerCase();
+          if (type === 'active_alerts_snapshot') {
+            const snapshot = Array.isArray(msg?.data) ? msg.data : [];
+            replaceLiveAlertStore(snapshot);
+            scheduleAlertsRefresh(50);
+            return;
+          }
           if (type === 'new_alert' || type === 'alert-video-complete' || type === 'alert-updated') {
-            refreshAlerts();
+            if (msg?.data && typeof msg.data === 'object') {
+              upsertLiveAlert(msg.data);
+            }
+            scheduleAlertsRefresh(50);
+            return;
+          }
+          if (type === 'alert_acknowledged' || type === 'alert_escalated' || type === 'alert_resolved') {
+            if (msg?.data && typeof msg.data === 'object') {
+              upsertLiveAlert(msg.data);
+            }
+            scheduleAlertsRefresh(80);
             return;
           }
           if (type === 'screenshot-received') {
             if (activeTab === 'alerts') {
-              refreshAlerts();
+              scheduleAlertsRefresh(120);
             } else {
               refreshScreenshots();
             }
