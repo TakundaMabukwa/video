@@ -131,9 +131,15 @@ export class AlertManager extends EventEmitter {
   async processAlert(alert: LocationAlert): Promise<void> {
     const allAlertSignals = this.extractAlertSignals(alert);
     const alertSignals = this.filterActionableSignals(allAlertSignals);
-    if (alertSignals.length === 0) return;
     const channel = this.extractChannelFromAlert(alert);
     const stateKey = `${alert.vehicleId}|${channel}`;
+    if (alertSignals.length === 0) {
+      // Clear edge-trigger state once terminal reports no active alerts for this key.
+      // Without this, subsequent re-occurrence of the same alert is never emitted.
+      this.signalStateByVehicleChannel.delete(stateKey);
+      return;
+    }
+
     const previousSignals = this.signalStateByVehicleChannel.get(stateKey) || new Set<string>();
     const currentSignals = new Set(alertSignals);
     const newlyRaisedSignals = alertSignals.filter((s) => !previousSignals.has(s));
@@ -625,7 +631,7 @@ export class AlertManager extends EventEmitter {
     // Profiles:
     // - operational (default): hide persistent infrastructure faults to surface safety/behavior alerts
     // - full/all/raw: keep every documented signal
-    const profile = String(process.env.ALERT_SIGNAL_PROFILE ?? 'operational').toLowerCase().trim();
+    const profile = String(process.env.ALERT_SIGNAL_PROFILE ?? 'full').toLowerCase().trim();
     if (profile === 'full' || profile === 'all' || profile === 'raw') {
       return signals;
     }

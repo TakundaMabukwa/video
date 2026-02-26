@@ -860,7 +860,7 @@ export class JTT808Server {
     // This is deterministic and does not rely on payload-type assumptions.
     const codeFromText = this.extractAlarmCodeFromText(text);
     if (codeFromText !== null) {
-      const mapped = this.mapVendorAlarmCode(codeFromText);
+      const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
       if (mapped) {
         return { ...mapped, channel, alarmCode: codeFromText };
       }
@@ -871,11 +871,11 @@ export class JTT808Server {
     // We only accept it if it maps to a known documented code.
     if (payload.length >= 2) {
       const firstBe = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(firstBe);
+      const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
       if (mappedBe) return { ...mappedBe, channel, alarmCode: firstBe };
 
       const firstLe = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(firstLe);
+      const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: firstLe };
     }
 
@@ -889,13 +889,13 @@ export class JTT808Server {
     if (allowBinaryScan && payload.length >= 2) {
       for (let i = 0; i <= payload.length - 2; i++) {
         const be = payload.readUInt16BE(i);
-        const mappedBe = this.mapVendorAlarmCode(be);
+        const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes: true });
         if (mappedBe) {
           return { ...mappedBe, channel, alarmCode: be };
         }
 
         const le = payload.readUInt16LE(i);
-        const mappedLe = this.mapVendorAlarmCode(le);
+        const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes: true });
         if (mappedLe) {
           return { ...mappedLe, channel, alarmCode: le };
         }
@@ -905,11 +905,11 @@ export class JTT808Server {
     // Conservative fallback: for serial pass-through types, try first WORD only if explicitly mappable.
     if (!allowBinaryScan && payload.length >= 2 && (passThroughType === 0x41 || passThroughType === 0x42)) {
       const be = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(be);
+      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes: true });
       if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
 
       const le = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(le);
+      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes: true });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
@@ -938,7 +938,11 @@ export class JTT808Server {
       if (offset + 2 + infoLength > body.length) break;
 
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
-      const mapped = this.detectVendorAlarmFromPayload(infoData);
+      // Keep vendor alarm-code matching constrained to extension-style additional IDs.
+      // Standard JT/T 808 additional items (e.g. 0x11~0x18) can contain values that
+      // accidentally resemble short codes like 0x0104.
+      const isVendorExtensionInfo = infoId >= 0x64;
+      const mapped = isVendorExtensionInfo ? this.detectVendorAlarmFromPayload(infoData) : null;
       if (mapped) {
         return { ...mapped, infoId };
       }
@@ -956,21 +960,22 @@ export class JTT808Server {
     // Decode framed content first and inspect user-data for known alarm codes/text.
     const peripheralFrames = this.decodePeripheralProtocolFrames(payload);
     for (const frame of peripheralFrames) {
-      const mapped = this.mapVendorAlarmFromBytes(frame.userData);
+      const mapped = this.mapVendorAlarmFromBytes(frame.userData, false);
       if (mapped) {
         return mapped;
       }
     }
 
     // Fallback: inspect the raw payload directly.
-    const mappedRaw = this.mapVendorAlarmFromBytes(payload);
+    const mappedRaw = this.mapVendorAlarmFromBytes(payload, false);
     if (mappedRaw) return mappedRaw;
 
     return null;
   }
 
   private mapVendorAlarmFromBytes(
-    payload: Buffer
+    payload: Buffer,
+    allowPlatformVideoCodes: boolean
   ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
     if (!payload || payload.length === 0) return null;
 
@@ -987,29 +992,29 @@ export class JTT808Server {
 
     const codeFromText = this.extractAlarmCodeFromText(combined);
     if (codeFromText !== null) {
-      const mapped = this.mapVendorAlarmCode(codeFromText);
+      const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes });
       if (mapped) return { ...mapped, channel, alarmCode: codeFromText };
     }
 
     // Check first WORD BE/LE.
     if (payload.length >= 2) {
       const be = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(be);
+      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
       if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
 
       const le = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(le);
+      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
     // Broader deterministic scan: known alarm codes at any 2-byte offset.
     for (let i = 0; i <= payload.length - 2; i++) {
       const be = payload.readUInt16BE(i);
-      const mappedBe = this.mapVendorAlarmCode(be);
+      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
       if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
 
       const le = payload.readUInt16LE(i);
-      const mappedLe = this.mapVendorAlarmCode(le);
+      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
     }
 
@@ -1054,26 +1059,61 @@ export class JTT808Server {
       const unescaped = this.unescapePeripheralFrame(frame);
       if (unescaped.length < 6) continue;
 
-      const checkCode = unescaped.readUInt8(0);
-      const version = unescaped.readUInt8(1);
-      const vendor = unescaped.readUInt16BE(2);
-      const peripheralType = unescaped.readUInt8(4);
-      const commandType = unescaped.readUInt8(5);
-      const userData = unescaped.slice(6);
-      let sum = 0;
-      for (let i = 2; i < unescaped.length; i++) {
-        sum = (sum + unescaped[i]) & 0xff;
-      }
-      const validChecksum = sum === checkCode;
+      const parsedCandidates: Array<{
+        validChecksum: boolean;
+        version: number;
+        vendor: number;
+        peripheralType: number;
+        commandType: number;
+        userData: Buffer;
+      }> = [];
 
-      decoded.push({
-        validChecksum,
-        version,
-        vendor,
-        peripheralType,
-        commandType,
-        userData
-      });
+      // Layout A: check(1) + version(1) + vendor(2) + peripheral(1) + command(1) + user
+      if (unescaped.length >= 6) {
+        const checkCode = unescaped.readUInt8(0);
+        const version = unescaped.readUInt8(1);
+        const vendor = unescaped.readUInt16BE(2);
+        const peripheralType = unescaped.readUInt8(4);
+        const commandType = unescaped.readUInt8(5);
+        const userData = unescaped.slice(6);
+        let sum = 0;
+        for (let i = 2; i < unescaped.length; i++) {
+          sum = (sum + unescaped[i]) & 0xff;
+        }
+        parsedCandidates.push({
+          validChecksum: sum === checkCode,
+          version,
+          vendor,
+          peripheralType,
+          commandType,
+          userData
+        });
+      }
+
+      // Layout B fallback: check(1) + version(2) + vendor(2) + peripheral(1) + command(1) + user
+      if (unescaped.length >= 7) {
+        const checkCode = unescaped.readUInt8(0);
+        const version = unescaped.readUInt16BE(1);
+        const vendor = unescaped.readUInt16BE(3);
+        const peripheralType = unescaped.readUInt8(5);
+        const commandType = unescaped.readUInt8(6);
+        const userData = unescaped.slice(7);
+        let sum = 0;
+        for (let i = 3; i < unescaped.length; i++) {
+          sum = (sum + unescaped[i]) & 0xff;
+        }
+        parsedCandidates.push({
+          validChecksum: sum === checkCode,
+          version,
+          vendor,
+          peripheralType,
+          commandType,
+          userData
+        });
+      }
+
+      const chosen = parsedCandidates.find((c) => c.validChecksum) || parsedCandidates[0];
+      if (chosen) decoded.push(chosen);
     }
 
     return decoded;
@@ -1111,7 +1151,11 @@ export class JTT808Server {
     return match ? Number(match[1]) : null;
   }
 
-  private mapVendorAlarmCode(code: number): { type: string; priority: AlertPriority; signalCode: string } | null {
+  private mapVendorAlarmCode(
+    code: number,
+    options: { allowPlatformVideoCodes?: boolean } = {}
+  ): { type: string; priority: AlertPriority; signalCode: string } | null {
+    const allowPlatformVideoCodes = options.allowPlatformVideoCodes ?? true;
     const map: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
       0x0101: { type: 'Video Signal Loss', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0101' },
       0x0102: { type: 'Video Signal Blocking', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0102' },
@@ -1147,6 +1191,9 @@ export class JTT808Server {
       11203: { type: 'Sharp turn', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11203_sharp_turn' }
     };
 
+    if (!allowPlatformVideoCodes && code >= 0x0101 && code <= 0x0107) {
+      return null;
+    }
     return map[code] || null;
   }
 
