@@ -84,6 +84,18 @@ export class AlertWebSocketServer {
       });
     });
 
+    alertManager.on('alerts-cleared', (meta) => {
+      this.broadcast({
+        type: 'alerts_cleared',
+        data: meta
+      });
+      this.broadcast({
+        type: 'active_alerts_snapshot',
+        data: [],
+        timestamp: new Date()
+      });
+    });
+
     this.heartbeatTimer = setInterval(() => {
       this.clients.forEach((client) => {
         if ((client as any).isAlive === false) {

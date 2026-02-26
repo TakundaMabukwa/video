@@ -550,8 +550,12 @@ export class JTT808Server {
         timestamp: alert.timestamp
       });
 
-      const vendorMapped = this.detectVendorAlarmFromLocationBody(message.body);
-      if (vendorMapped) {
+      // Always process protocol-native alarms first.
+      this.processAlert(alert);
+
+      // Also process any vendor-coded alarms found in additional info extensions.
+      const vendorMappedList = this.detectVendorAlarmsFromLocationBody(message.body);
+      for (const vendorMapped of vendorMappedList) {
         void this.alertManager.processExternalAlert({
           vehicleId: alert.vehicleId,
           channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
@@ -567,8 +571,6 @@ export class JTT808Server {
             locationAdditionalInfoId: vendorMapped.infoId ?? null
           }
         });
-      } else {
-        this.processAlert(alert);
       }
     }
 
@@ -691,8 +693,12 @@ export class JTT808Server {
       });
 
       const hadBefore = this.alertManager.getAlertStats().total;
-      const vendorMapped = this.detectVendorAlarmFromLocationBody(itemBody);
-      if (vendorMapped) {
+      // Always process protocol-native alarms.
+      this.processAlert(alert);
+
+      // Also process vendor-coded alarms from extension payloads.
+      const vendorMappedList = this.detectVendorAlarmsFromLocationBody(itemBody);
+      for (const vendorMapped of vendorMappedList) {
         void this.alertManager.processExternalAlert({
           vehicleId: alert.vehicleId,
           channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
@@ -708,8 +714,6 @@ export class JTT808Server {
             locationAdditionalInfoId: vendorMapped.infoId ?? null
           }
         });
-      } else {
-        this.processAlert(alert);
       }
       const hadAfter = this.alertManager.getAlertStats().total;
       if (hadAfter > hadBefore) {
@@ -746,7 +750,7 @@ export class JTT808Server {
     const preview = this.buildPayloadPreview(payload, 320);
     const combinedText = `${decoded} ${preview}`.trim();
     const alarmParsingEnabled = this.isAlarmPassThroughType(passThroughType);
-    const parsed = this.extractPassThroughAlarm(
+    const parsedList = this.extractPassThroughAlarms(
       passThroughType,
       payload,
       combinedText,
@@ -754,7 +758,7 @@ export class JTT808Server {
     );
     const last = this.lastKnownLocation.get(message.terminalPhone);
 
-    if (parsed) {
+    for (const parsed of parsedList) {
       void this.alertManager.processExternalAlert({
         vehicleId: message.terminalPhone,
         channel: parsed.channel || 1,
@@ -782,15 +786,13 @@ export class JTT808Server {
       alarmParsingEnabled,
       payloadPreview: preview,
       decodedText: decoded || null,
-      parsedAlert: parsed
-        ? {
-            type: parsed.type,
-            signalCode: parsed.signalCode,
-            priority: parsed.priority,
-            alarmCode: parsed.alarmCode ?? null,
-            channel: parsed.channel || 1
-          }
-        : null
+      parsedAlerts: parsedList.map((parsed) => ({
+        type: parsed.type,
+        signalCode: parsed.signalCode,
+        priority: parsed.priority,
+        alarmCode: parsed.alarmCode ?? null,
+        channel: parsed.channel || 1
+      }))
     });
 
     const response = JTT1078Commands.buildGeneralResponse(
@@ -823,8 +825,8 @@ export class JTT808Server {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
     }
-    // Strict JT/T 808 default: only documented pass-through families should be parsed for vendor alarms.
-    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'false').toLowerCase() === 'true';
+    // Default: parse all pass-through types for vendor alarm codes (deterministic code matching only).
+    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'true').toLowerCase() === 'true';
     if (parseAllTypes) return true;
 
     // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
@@ -843,60 +845,67 @@ export class JTT808Server {
     return extraTypes.includes(passThroughType);
   }
 
-  private extractPassThroughAlarm(
+  private extractPassThroughAlarms(
     passThroughType: number,
     payload: Buffer,
     text: string,
     allowHeuristicBinaryDecode: boolean
-  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const seen = new Set<string>();
+    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+      if (!item) return;
+      const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push(item);
+    };
 
     // Vendor-observed compact video alarm payload on pass-through type 0xA1:
     // byte0 = subtype (0x01..0x07) mapping to JT/T 1078 Table 38 0x0101..0x0107.
     // This is deterministic (numeric code based), not keyword inference.
     const compactA1 = this.decodeCompactA1VideoAlarm(passThroughType, payload);
     if (compactA1) {
-      return {
+      add({
         ...compactA1,
         channel: compactA1.channel || channel
-      };
+      });
     }
 
     // Always attempt explicit documented code extraction from text preview.
     // This is deterministic and does not rely on payload-type assumptions.
-    const codeFromText = this.extractAlarmCodeFromText(text);
-    if (codeFromText !== null) {
+    const codeFromTextList = this.extractAllAlarmCodesFromText(text);
+    for (const codeFromText of codeFromTextList) {
       const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
-      if (mapped) {
-        return { ...mapped, channel, alarmCode: codeFromText };
-      }
+      if (mapped) add({ ...mapped, channel, alarmCode: codeFromText });
     }
 
     // Binary decode is only attempted for pass-through types aligned to alarm payloads.
     if (!allowHeuristicBinaryDecode) {
-      return null;
+      return results;
     }
 
     // Decode Appendix-A framed peripheral payloads first.
     const framed = this.decodePeripheralProtocolFrames(payload);
     for (const frame of framed) {
-      const mapped = this.mapVendorAlarmFromBytes(frame.userData, true);
-      if (mapped) return mapped;
+      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, true);
+      for (const mapped of mappedList) add(mapped);
     }
 
     // Deterministic fallback: some terminals place the alarm code in the first WORD.
     if (payload.length >= 2) {
       const firstBe = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
-      if (mappedBe) return { ...mappedBe, channel, alarmCode: firstBe };
+      if (mappedBe) add({ ...mappedBe, channel, alarmCode: firstBe });
 
       const firstLe = payload.readUInt16LE(0);
       const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
-      if (mappedLe) return { ...mappedLe, channel, alarmCode: firstLe };
+      if (mappedLe) add({ ...mappedLe, channel, alarmCode: firstLe });
     }
 
-    return null;
+    return results;
   }
 
   private decodeCompactA1VideoAlarm(
@@ -930,10 +939,19 @@ export class JTT808Server {
     return 1;
   }
 
-  private detectVendorAlarmFromLocationBody(
+  private detectVendorAlarmsFromLocationBody(
     body: Buffer
-  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number } | null {
-    if (!body || body.length <= 28) return null;
+  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number }> {
+    if (!body || body.length <= 28) return [];
+    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number }> = [];
+    const seen = new Set<string>();
+    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number } | null) => {
+      if (!item) return;
+      const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}|${item.infoId ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push(item);
+    };
 
     let offset = 28;
     while (offset + 2 <= body.length) {
@@ -942,45 +960,63 @@ export class JTT808Server {
       if (offset + 2 + infoLength > body.length) break;
 
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
-      // Keep vendor alarm-code matching constrained to configured extension IDs.
-      // Default IDs align with common extension blocks used by ADAS/DMS vendors.
+      // Prefer custom extension IDs (0xE1~0xFF), with optional override support.
+      // Also allow known vendor blocks if configured by environment.
       const isVendorExtensionInfo = this.isVendorAlarmLocationInfoId(infoId);
-      const mapped = isVendorExtensionInfo ? this.detectVendorAlarmFromPayload(infoData) : null;
-      if (mapped) {
-        return { ...mapped, infoId };
+      if (isVendorExtensionInfo) {
+        const mappedList = this.detectVendorAlarmsFromPayload(infoData);
+        for (const mapped of mappedList) {
+          add({ ...mapped, infoId });
+        }
       }
       offset += 2 + infoLength;
     }
-    return null;
+    return results;
   }
 
-  private detectVendorAlarmFromPayload(
+  private detectVendorAlarmsFromPayload(
     payload: Buffer
-  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
-    if (!payload || payload.length === 0) return null;
+  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
+    if (!payload || payload.length === 0) return [];
+    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const seen = new Set<string>();
+    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+      if (!item) return;
+      const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push(item);
+    };
 
     // JT/T 808 Appendix A peripheral frames are commonly embedded in pass-through payloads.
     // Decode framed content first and inspect user-data for known alarm codes/text.
     const peripheralFrames = this.decodePeripheralProtocolFrames(payload);
     for (const frame of peripheralFrames) {
-      const mapped = this.mapVendorAlarmFromBytes(frame.userData, false);
-      if (mapped) {
-        return mapped;
-      }
+      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, false);
+      for (const mapped of mappedList) add(mapped);
     }
 
     // Fallback: inspect the raw payload directly.
-    const mappedRaw = this.mapVendorAlarmFromBytes(payload, false);
-    if (mappedRaw) return mappedRaw;
+    const mappedRaw = this.mapVendorAlarmsFromBytes(payload, false);
+    for (const mapped of mappedRaw) add(mapped);
 
-    return null;
+    return results;
   }
 
-  private mapVendorAlarmFromBytes(
+  private mapVendorAlarmsFromBytes(
     payload: Buffer,
     allowPlatformVideoCodes: boolean
-  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
-    if (!payload || payload.length === 0) return null;
+  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
+    if (!payload || payload.length === 0) return [];
+    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const seen = new Set<string>();
+    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+      if (!item) return;
+      const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push(item);
+    };
 
     const decoded = this.decodeCustomPayloadText(payload) || '';
     const preview = this.buildPayloadPreview(payload, 320);
@@ -988,24 +1024,24 @@ export class JTT808Server {
     const channelMatch = combined.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
-    const codeFromText = this.extractAlarmCodeFromText(combined);
-    if (codeFromText !== null) {
+    const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
+    for (const codeFromText of codeFromTextList) {
       const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes });
-      if (mapped) return { ...mapped, channel, alarmCode: codeFromText };
+      if (mapped) add({ ...mapped, channel, alarmCode: codeFromText });
     }
 
     // Check first WORD BE/LE.
     if (payload.length >= 2) {
       const be = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
-      if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
+      if (mappedBe) add({ ...mappedBe, channel, alarmCode: be });
 
       const le = payload.readUInt16LE(0);
       const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
-      if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
+      if (mappedLe) add({ ...mappedLe, channel, alarmCode: le });
     }
 
-    return null;
+    return results;
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
@@ -1156,14 +1192,20 @@ export class JTT808Server {
     return Buffer.from(out);
   }
 
-  private extractAlarmCodeFromText(text: string): number | null {
-    if (!text) return null;
-    const hexMatch = text.match(/\b0x([0-9a-f]{4})\b/i);
-    if (hexMatch) {
-      return parseInt(hexMatch[1], 16);
+  private extractAllAlarmCodesFromText(text: string): number[] {
+    if (!text) return [];
+    const result = new Set<number>();
+    const hexMatches = text.match(/\b0x([0-9a-f]{4})\b/gi) || [];
+    for (const m of hexMatches) {
+      const n = parseInt(m.replace(/^0x/i, ''), 16);
+      if (Number.isFinite(n)) result.add(n);
     }
-    const match = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/);
-    return match ? Number(match[1]) : null;
+    const decMatches = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/g) || [];
+    for (const m of decMatches) {
+      const n = Number(m);
+      if (Number.isFinite(n)) result.add(n);
+    }
+    return Array.from(result.values());
   }
 
   private mapVendorAlarmCode(

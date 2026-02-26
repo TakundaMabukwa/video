@@ -509,6 +509,15 @@ export class AlertManager extends EventEmitter {
     };
   }
 
+  async clearAllAlerts(): Promise<{ clearedInMemory: number }> {
+    const clearedInMemory = this.activeAlerts.size;
+    this.activeAlerts.clear();
+    this.signalStateByVehicleChannel.clear();
+    this.recentAlertSignatures.clear();
+    this.emit('alerts-cleared', { clearedInMemory, timestamp: new Date().toISOString() });
+    return { clearedInMemory };
+  }
+
   getBufferStats() {
     const stats: any = {};
     for (const [key, buffer] of this.videoBuffers.entries()) {

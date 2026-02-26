@@ -998,6 +998,32 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Clear all existing alerts from DB + in-memory active state
+  router.delete('/alerts/clear', async (_req, res) => {
+    try {
+      const alertManager = tcpServer.getAlertManager();
+      const beforeMem = alertManager.getActiveAlerts().length;
+      const dbResult = await dbQuery('DELETE FROM alerts');
+      const { clearedInMemory } = await alertManager.clearAllAlerts();
+
+      return res.json({
+        success: true,
+        message: 'All alerts cleared',
+        cleared: {
+          database: Number(dbResult.rowCount || 0),
+          inMemoryBefore: beforeMem,
+          inMemoryCleared: clearedInMemory
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to clear alerts',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Get vehicle images
   router.get('/vehicles/:id/images', async (req, res) => {
     const { id } = req.params;

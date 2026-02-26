@@ -108,6 +108,16 @@ import * as dotenv from 'dotenv';
 
 dotenv.config();
 
+// Raw-only logging mode:
+// - keeps raw ingest persisted via RawIngestLogger
+// - suppresses noisy runtime console logs
+const RAW_LOG_ONLY = String(process.env.RAW_LOG_ONLY ?? 'true').toLowerCase() !== 'false';
+if (RAW_LOG_ONLY) {
+  console.log = () => {};
+  console.info = () => {};
+  console.debug = () => {};
+}
+
 const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
 const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
 const API_PORT = parseInt(process.env.API_PORT || '3000');
