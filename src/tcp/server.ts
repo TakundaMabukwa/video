@@ -369,16 +369,8 @@ export class JTT808Server {
     }
 
     // Global vendor alarm sweep across all JT/T 808 message bodies.
-    // This allows proprietary alarm codes to be detected even when vendors place
-    // them in non-standard message IDs.
-    // Skip 0x0200/0x0704/0x0900 because they already have dedicated parsing paths.
-    if (
-      message.messageId !== 0x0200 &&
-      message.messageId !== 0x0704 &&
-      message.messageId !== 0x0900
-    ) {
-      this.detectVendorAlarmsFromAnyProtocol(message);
-    }
+    // Apply to every message type so the vendor code mapper is consistently enforced.
+    this.detectVendorAlarmsFromAnyProtocol(message);
   }
 
   private detectVendorAlarmsFromAnyProtocol(message: any): void {
@@ -1103,7 +1095,7 @@ export class JTT808Server {
     }
 
     // Fallback: inspect the raw payload directly.
-    const mappedRaw = this.mapVendorAlarmsFromBytes(payload, false);
+    const mappedRaw = this.mapVendorAlarmsFromBytes(payload, true);
     for (const mapped of mappedRaw) add(mapped);
 
     return results;
@@ -1130,24 +1122,55 @@ export class JTT808Server {
     const channelMatch = combined.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
+    const mergedCodes = new Set<number>();
     const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
-    for (const codeFromText of codeFromTextList) {
-      const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes });
-      if (mapped) add({ ...mapped, channel, alarmCode: codeFromText });
-    }
+    for (const c of codeFromTextList) mergedCodes.add(c);
+    const codeFromBinaryList = this.extractAllAlarmCodesFromBinary(payload);
+    for (const c of codeFromBinaryList) mergedCodes.add(c);
 
-    // Check first WORD BE/LE.
-    if (payload.length >= 2) {
-      const be = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
-      if (mappedBe) add({ ...mappedBe, channel, alarmCode: be });
-
-      const le = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
-      if (mappedLe) add({ ...mappedLe, channel, alarmCode: le });
+    for (const code of mergedCodes) {
+      const mapped = this.mapVendorAlarmCode(code, { allowPlatformVideoCodes });
+      if (mapped) add({ ...mapped, channel, alarmCode: code });
     }
 
     return results;
+  }
+
+  private extractAllAlarmCodesFromBinary(payload: Buffer): number[] {
+    if (!payload || payload.length === 0) return [];
+    const result = new Set<number>();
+    const known = new Set<number>([
+      0x0101, 0x0102, 0x0103, 0x0104, 0x0105, 0x0106, 0x0107,
+      10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10016, 10017,
+      10101, 10102, 10103, 10104, 10105, 10106, 10107, 10116, 10117,
+      11201, 11202, 11203
+    ]);
+
+    // Scan every 2-byte window (BE/LE) for mapped codes.
+    for (let i = 0; i <= payload.length - 2; i++) {
+      const be = payload.readUInt16BE(i);
+      const le = payload.readUInt16LE(i);
+      if (known.has(be)) result.add(be);
+      if (known.has(le)) result.add(le);
+    }
+
+    // Scan every 4-byte window (BE/LE). Some vendors encode alarm codes as DWORD.
+    for (let i = 0; i <= payload.length - 4; i++) {
+      const be = payload.readUInt32BE(i);
+      const le = payload.readUInt32LE(i);
+      if (known.has(be)) result.add(be);
+      if (known.has(le)) result.add(le);
+    }
+
+    // Also scan ASCII digit runs directly from bytes (without relying on preview decoding).
+    const ascii = payload.toString('latin1');
+    const digitMatches = ascii.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/g) || [];
+    for (const m of digitMatches) {
+      const n = Number(m);
+      if (Number.isFinite(n)) result.add(n);
+    }
+
+    return Array.from(result.values());
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {

@@ -1422,14 +1422,37 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       });
     }
 
-    // Get associated screenshots
+    // Get associated screenshots (strict by alert_id, then fallback by same vehicle/time window)
     try {
-      const screenshots = await require('../storage/database').query(
-        `SELECT id, storage_url, timestamp 
-         FROM images 
-         WHERE alert_id = $1 
-         ORDER BY timestamp ASC`,
-        [id]
+      const db = require('../storage/database');
+      const alertTs = new Date(alert.timestamp);
+      const fallbackFrom = new Date(alertTs.getTime() - 90 * 1000);
+      const fallbackTo = new Date(alertTs.getTime() + 90 * 1000);
+      const alertVehicleId = String(alert.vehicleId || alert.device_id || '');
+      const alertChannel = Number(alert.channel || 1);
+
+      const screenshots = await db.query(
+        `WITH direct AS (
+           SELECT id, device_id, channel, storage_url, timestamp, alert_id
+           FROM images
+           WHERE alert_id = $1
+         ),
+         fallback AS (
+           SELECT id, device_id, channel, storage_url, timestamp, alert_id
+           FROM images
+           WHERE alert_id IS NULL
+             AND device_id = $2
+             AND timestamp BETWEEN $3 AND $4
+             AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
+         )
+         SELECT DISTINCT ON (id) id, device_id, channel, storage_url, timestamp, alert_id
+         FROM (
+           SELECT * FROM direct
+           UNION ALL
+           SELECT * FROM fallback
+         ) q
+         ORDER BY id, timestamp ASC`,
+        [id, alertVehicleId, fallbackFrom, fallbackTo, alertChannel]
       );
 
       res.json({
@@ -1740,14 +1763,37 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       const alert = alertResult.rows[0];
 
-      // Get linked videos from videos table
+      // Get linked videos from videos table; include fallback near alert time for same vehicle/channels.
+      const alertTs = new Date(alert.timestamp);
+      const fallbackFrom = new Date(alertTs.getTime() - 120 * 1000);
+      const fallbackTo = new Date(alertTs.getTime() + 120 * 1000);
+      const alertChannel = Number(alert.channel || 1);
       const videosResult = await db.query(
-        `SELECT id, file_path, storage_url, file_size, start_time, end_time, 
-                duration_seconds, video_type, created_at
-         FROM videos 
-         WHERE alert_id = $1 
-         ORDER BY video_type, start_time`,
-        [id]
+        `WITH direct AS (
+           SELECT id, file_path, storage_url, file_size, start_time, end_time,
+                  duration_seconds, video_type, created_at, alert_id, device_id, channel
+           FROM videos
+           WHERE alert_id = $1
+         ),
+         fallback AS (
+           SELECT id, file_path, storage_url, file_size, start_time, end_time,
+                  duration_seconds, video_type, created_at, alert_id, device_id, channel
+           FROM videos
+           WHERE alert_id IS NULL
+             AND device_id = $2
+             AND start_time BETWEEN $3 AND $4
+             AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
+         )
+         SELECT DISTINCT ON (id)
+           id, file_path, storage_url, file_size, start_time, end_time,
+           duration_seconds, video_type, created_at, alert_id, device_id, channel
+         FROM (
+           SELECT * FROM direct
+           UNION ALL
+           SELECT * FROM fallback
+         ) q
+         ORDER BY id, start_time ASC`,
+        [id, alert.device_id, fallbackFrom, fallbackTo, alertChannel]
       );
 
       // Extract video paths from metadata
