@@ -804,30 +804,9 @@ export class JTT808Server {
   }
 
   private handleUnknownMessage(message: any, socket: net.Socket, rawFrame?: Buffer): void {
-    const mapped = this.detectVendorAlarmFromPayload(message.body || Buffer.alloc(0));
-    const sourceMessageId = `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`;
-    const last = this.lastKnownLocation.get(message.terminalPhone);
-
-    if (mapped) {
-      void this.alertManager.processExternalAlert({
-        vehicleId: message.terminalPhone,
-        channel: mapped.channel || 1,
-        type: mapped.type,
-        signalCode: mapped.signalCode,
-        priority: mapped.priority,
-        timestamp: new Date(),
-        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-        metadata: {
-          sourceMessageId,
-          alarmCode: mapped.alarmCode ?? null,
-          parser: 'unknown-message-vendor-map'
-        }
-      });
-    }
-
     this.pushMessageTrace(message, rawFrame, {
       parser: 'unknown-message',
-      mappedAlert: mapped || null
+      mappedAlert: null
     });
 
     const response = JTT1078Commands.buildGeneralResponse(
@@ -872,13 +851,6 @@ export class JTT808Server {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
-    // 1) Pattern-first matching (basis list from ADAS/DMS/behavior alert catalog).
-    // Matches explicit text labels before any code heuristics.
-    const mappedByText = this.mapVendorAlarmText(text);
-    if (mappedByText) {
-      return { ...mappedByText, channel };
-    }
-
     // Always attempt explicit documented code extraction from text preview.
     // This is deterministic and does not rely on payload-type assumptions.
     const codeFromText = this.extractAlarmCodeFromText(text);
@@ -910,24 +882,6 @@ export class JTT808Server {
       const firstLe = payload.readUInt16LE(0);
       const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: firstLe };
-    }
-
-    // Offset-scan is intentionally opt-in; without confirmed vendor payload framing it creates false positives.
-    const allowBinaryScan = String(process.env.PASS_THROUGH_BINARY_SCAN_ENABLED ?? 'false').toLowerCase() === 'true';
-    if (allowBinaryScan && payload.length >= 2) {
-      for (let i = 0; i <= payload.length - 2; i++) {
-        const be = payload.readUInt16BE(i);
-        const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes: true });
-        if (mappedBe) {
-          return { ...mappedBe, channel, alarmCode: be };
-        }
-
-        const le = payload.readUInt16LE(i);
-        const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes: true });
-        if (mappedLe) {
-          return { ...mappedLe, channel, alarmCode: le };
-        }
-      }
     }
 
     return null;
@@ -1001,11 +955,6 @@ export class JTT808Server {
     const channelMatch = combined.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
-    const mappedByText = this.mapVendorAlarmText(combined);
-    if (mappedByText) {
-      return { ...mappedByText, channel };
-    }
-
     const codeFromText = this.extractAlarmCodeFromText(combined);
     if (codeFromText !== null) {
       const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes });
@@ -1021,19 +970,6 @@ export class JTT808Server {
       const le = payload.readUInt16LE(0);
       const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
       if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
-    }
-
-    const allowOffsetScan = String(process.env.VENDOR_ALARM_BINARY_OFFSET_SCAN ?? 'false').toLowerCase() === 'true';
-    if (allowOffsetScan) {
-      for (let i = 0; i <= payload.length - 2; i++) {
-        const be = payload.readUInt16BE(i);
-        const mappedBe = this.mapVendorAlarmCode(be, { allowPlatformVideoCodes });
-        if (mappedBe) return { ...mappedBe, channel, alarmCode: be };
-
-        const le = payload.readUInt16LE(i);
-        const mappedLe = this.mapVendorAlarmCode(le, { allowPlatformVideoCodes });
-        if (mappedLe) return { ...mappedLe, channel, alarmCode: le };
-      }
     }
 
     return null;
@@ -2220,36 +2156,13 @@ export class JTT808Server {
   }
 
   private handleCustomMessage(message: any, socket: net.Socket): void {
-    const decoded = this.decodeCustomPayloadText(message.body);
-    const rawText = this.buildPayloadPreview(message.body, 220);
-    const keywordAlert = this.extractKeywordAlert(rawText);
-    const enableBinaryFallback = String(process.env.ENABLE_BINARY_CUSTOM_ALARM_FALLBACK ?? 'false').toLowerCase() === 'true';
-    const binaryAlert = enableBinaryFallback ? this.extractKeywordAlertFromBinary(message.body) : null;
-    const selectedAlert = keywordAlert || binaryAlert || null;
-
-    const channelMatch = rawText.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
-    const inferredChannel = channelMatch ? Number(channelMatch[1]) : 1;
-    const last = this.lastKnownLocation.get(message.terminalPhone);
-
-    // For 0x0704 we store what terminal actually sent as the alert text.
-    // This avoids over-classifying binary/gibberish payloads into wrong semantic alarms.
-    void this.alertManager.processExternalAlert({
-      vehicleId: message.terminalPhone,
-      channel: selectedAlert?.channel || inferredChannel || 1,
-      type: `0x0704 Raw: ${rawText.slice(0, 120)}`,
-      signalCode: 'custom_raw_0704',
-      priority: selectedAlert?.priority || AlertPriority.MEDIUM,
-      timestamp: new Date(),
-      location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-      metadata: {
-        sourceMessageId: '0x0704',
-        customText: decoded || null,
-        rawPayloadText: rawText,
-        rawPayloadHex: message.body.toString('hex').slice(0, 512),
-        keywordMatch: keywordAlert || null,
-        binaryFallbackMatch: binaryAlert || null,
-        binaryAlertFallbackUsed: !!binaryAlert && !keywordAlert
-      }
+    // Strict mode: do not generate alerts from custom payload keywords.
+    // Keep these packets for diagnostics only to avoid false positive alerts.
+    this.pushMessageTrace(message, undefined, {
+      parser: 'custom-message',
+      parseSuccess: false,
+      reason: 'strict_protocol_mode_no_custom_keyword_mapping',
+      bodyTextPreview: this.buildPayloadPreview(message.body || Buffer.alloc(0), 220)
     });
 
     const response = JTT1078Commands.buildGeneralResponse(
