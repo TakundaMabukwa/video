@@ -70,6 +70,12 @@ type PendingCameraRequest = {
   createdAt: number;
 };
 
+type PendingScreenshotRequest = {
+  alertId: string;
+  channel: number;
+  createdAt: number;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -88,6 +94,7 @@ export class JTT808Server {
   private messageTraceSeq = 0;
   private recentMessageTraces: MessageTraceEntry[] = [];
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
+  private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private readonly maxMessageTraceBuffer = Math.max(
     50,
     Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
@@ -1016,10 +1023,19 @@ export class JTT808Server {
 
   private resolveAlertCaptureChannels(vehicleId: string, requestedChannel?: number): number[] {
     const vehicle = this.vehicles.get(vehicleId);
-    const channels = vehicle?.channels
+    const channelsFromCapabilities = vehicle?.channels
       ?.filter((ch) => ch.type === 'video' || ch.type === 'audio_video')
       .map((ch) => Number(ch.logicalChannel))
       .filter((ch) => Number.isFinite(ch) && ch > 0);
+    const channelsFromActiveStreams = Array.from(vehicle?.activeStreams || [])
+      .map((ch) => Number(ch))
+      .filter((ch) => Number.isFinite(ch) && ch > 0);
+    const requested = Number(requestedChannel);
+    const channels = [
+      ...(channelsFromCapabilities || []),
+      ...channelsFromActiveStreams,
+      ...(Number.isFinite(requested) && requested > 0 ? [requested] : [])
+    ];
 
     if (channels && channels.length > 0) {
       return Array.from(new Set(channels)).sort((a, b) => a - b);
@@ -1783,10 +1799,52 @@ export class JTT808Server {
 
     console.log(`Screenshot requested for vehicle ${vehicleId}, channel ${channel} (spec + legacy fallback)`);
     socket.write(command);
+    this.startVideo(vehicleId, channel);
     setTimeout(() => {
       if (socket.writable) socket.write(legacyCommand);
     }, 120);
     return true;
+  }
+
+  private rememberPendingScreenshotRequest(vehicleId: string, channel: number, alertId?: string): void {
+    if (!alertId) return;
+    const key = vehicleId;
+    const list = this.pendingScreenshotRequests.get(key) || [];
+    const now = Date.now();
+    const ttlMs = 2 * 60 * 1000;
+
+    const pruned = list.filter((item) => now - item.createdAt <= ttlMs);
+    const exists = pruned.some((item) => item.alertId === alertId && item.channel === channel);
+    if (!exists) {
+      pruned.push({
+        alertId,
+        channel,
+        createdAt: now
+      });
+    }
+    this.pendingScreenshotRequests.set(key, pruned);
+  }
+
+  private consumePendingScreenshotAlertId(vehicleId: string, channel: number): string | undefined {
+    const key = vehicleId;
+    const list = this.pendingScreenshotRequests.get(key);
+    if (!list || list.length === 0) return undefined;
+
+    const now = Date.now();
+    const ttlMs = 2 * 60 * 1000;
+    const filtered = list.filter((item) => now - item.createdAt <= ttlMs);
+    if (filtered.length === 0) {
+      this.pendingScreenshotRequests.delete(key);
+      return undefined;
+    }
+
+    let idx = filtered.findIndex((item) => item.channel === channel);
+    if (idx < 0) idx = 0;
+
+    const [matched] = filtered.splice(idx, 1);
+    if (filtered.length > 0) this.pendingScreenshotRequests.set(key, filtered);
+    else this.pendingScreenshotRequests.delete(key);
+    return matched?.alertId;
   }
 
   async requestScreenshotWithFallback(
@@ -1804,14 +1862,11 @@ export class JTT808Server {
     const fallbackDelayMs = Math.max(0, Math.min(3000, Number(options?.fallbackDelayMs) || 600));
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
+    this.rememberPendingScreenshotRequest(vehicleId, channel, options?.alertId);
     const success = this.requestScreenshot(vehicleId, channel);
 
-    if (!success) {
-      return { success: false, fallback: { ok: false, reason: 'vehicle not connected' } };
-    }
-
     if (!fallbackEnabled) {
-      return { success: true, fallback: { ok: false, reason: 'disabled' } };
+      return { success, fallback: { ok: false, reason: 'disabled' } };
     }
 
     await new Promise((r) => setTimeout(r, fallbackDelayMs));
@@ -1824,7 +1879,10 @@ export class JTT808Server {
         fallback.videoEvidenceReason = videoBackup.reason;
       }
     }
-    return { success: true, fallback };
+    if (!success && !fallback.ok) {
+      return { success: false, fallback: { ...fallback, reason: fallback.reason || 'vehicle not connected' } };
+    }
+    return { success, fallback };
   }
 
   private async captureVideoEvidenceFromHLS(
@@ -2565,7 +2623,8 @@ export class JTT808Server {
       
       if (multimedia && multimedia.type === 'jpeg') {
         // Save image to Supabase and database (with error handling)
-        await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data).catch(err => {
+        const pendingAlertId = this.consumePendingScreenshotAlertId(message.terminalPhone, multimedia.channel);
+        await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data, pendingAlertId).catch(err => {
           console.error(`Failed to save image: ${err.message}`);
         });
         

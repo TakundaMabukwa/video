@@ -512,6 +512,27 @@
       `;
     }
 
+    function extractVideoChannels(vehicle, preferredChannel) {
+      const fromCapabilities = Array.isArray(vehicle?.channels)
+        ? vehicle.channels
+            .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
+            .map(ch => Number(ch.logicalChannel))
+            .filter(ch => Number.isFinite(ch) && ch > 0)
+        : [];
+      const fromActiveStreams = Array.isArray(vehicle?.activeStreams)
+        ? vehicle.activeStreams
+            .map(ch => Number(ch))
+            .filter(ch => Number.isFinite(ch) && ch > 0)
+        : [];
+      const preferred = Number(preferredChannel);
+      const all = [
+        ...fromCapabilities,
+        ...fromActiveStreams,
+        ...(Number.isFinite(preferred) && preferred > 0 ? [preferred] : [])
+      ];
+      return [...new Set(all)].sort((a, b) => a - b);
+    }
+
     function getAlertVideoInfo(alert, videosInfo) {
       const alertId = String(alert?.id || '').trim();
       const metadataClips = alert?.metadata?.videoClips || {};
@@ -568,9 +589,24 @@
     function alertCard(alert, screenshots, videosInfo) {
       const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
       const pr = (alert.priority || 'low').toLowerCase();
-      const imgs = (screenshots || []).slice(0, 8).map((s) => {
+      const imgs = (screenshots || [])
+        .slice()
+        .sort((a, b) => {
+          const ac = Number(a?.channel || 0);
+          const bc = Number(b?.channel || 0);
+          if (ac !== bc) return ac - bc;
+          return new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime();
+        })
+        .slice(0, 12)
+        .map((s) => {
         const url = s.storage_url && s.storage_url !== 'upload-failed' && s.storage_url !== 'local-only' ? s.storage_url : '';
-        return url ? `<img src="${url}" alt="${s.id}" loading="lazy" />` : '';
+        const ch = Number(s?.channel || 0);
+        return url
+          ? `<div style="position:relative;">
+               <img src="${url}" alt="${s.id}" loading="lazy" />
+               <span style="position:absolute; left:4px; top:4px; font-size:10px; padding:1px 6px; border-radius:999px; background:#0b1220cc; border:1px solid var(--border); color:#9bc1ff;">Ch ${ch || '?'}</span>
+             </div>`
+          : '';
       }).join('');
       const videoInfo = getAlertVideoInfo(alert, videosInfo);
       const videoTiles = [];
@@ -1281,15 +1317,9 @@
 
         const jobs = [];
         for (const v of vehicles) {
-          const videoChannels = Array.isArray(v.channels)
-            ? v.channels
-                .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
-                .map(ch => Number(ch.logicalChannel))
-                .filter(ch => Number.isFinite(ch) && ch > 0)
-            : [];
-
-          const channels = videoChannels.length ? [...new Set(videoChannels)] : [1];
-          for (const ch of channels) {
+          const channels = extractVideoChannels(v, 1);
+          const effectiveChannels = channels.length ? channels : [1];
+          for (const ch of effectiveChannels) {
             jobs.push({
               vehicleId: String(v.id),
               channel: ch
@@ -1417,6 +1447,8 @@
           if (type === 'new_alert' || type === 'alert-video-complete' || type === 'alert-updated') {
             if (msg?.data && typeof msg.data === 'object') {
               upsertLiveAlert(msg.data);
+              const alertId = String(msg.data.id || '').trim();
+              if (alertId) alertMediaCache.delete(alertId);
             }
             scheduleAlertsRefresh(50);
             return;
@@ -1424,6 +1456,8 @@
           if (type === 'alert_acknowledged' || type === 'alert_escalated' || type === 'alert_resolved') {
             if (msg?.data && typeof msg.data === 'object') {
               upsertLiveAlert(msg.data);
+              const alertId = String(msg.data.id || '').trim();
+              if (alertId) alertMediaCache.delete(alertId);
             }
             scheduleAlertsRefresh(80);
             return;
