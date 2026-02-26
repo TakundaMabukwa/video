@@ -2,7 +2,11 @@ import { JTT1078RTPHeader, JTT1078SubpackageFlag } from '../types/jtt';
 
 export class JTT1078RTPParser {
   static parseRTPPacket(buffer: Buffer): { header: JTT1078RTPHeader; payload: Buffer; dataType: number } | null {
-    if (buffer.length < 30) {
+    // Minimum packet size depends on data type:
+    // - transparent (0x04): 16-byte header + 2-byte payload length = 18 bytes
+    // - audio (0x03): 16 + 8 timestamp + 2 = 26 bytes
+    // - video (0x00/0x01/0x02): 16 + 8 + 4 + 2 = 30 bytes
+    if (buffer.length < 18) {
       return null;
     }
 

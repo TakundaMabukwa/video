@@ -824,6 +824,9 @@ export class JTT808Server {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
     }
+    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'true').toLowerCase() === 'true';
+    if (parseAllTypes) return true;
+
     // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
     // are the only types likely to carry proprietary ADAS/DMS alarm payloads.
     if (passThroughType === 0x41 || passThroughType === 0x42) return true;
@@ -1017,14 +1020,29 @@ export class JTT808Server {
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
-    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0x64,0x65,0x66,0x67');
-    const ids = raw
+    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0x64-0x67,0xE0-0xFF');
+    const tokens = raw
       .split(',')
       .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => (s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10)))
-      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xff);
-    return ids.includes(infoId);
+      .filter(Boolean);
+
+    for (const token of tokens) {
+      const parts = token.split('-').map((p) => p.trim()).filter(Boolean);
+      if (parts.length === 1) {
+        const n = parts[0].toLowerCase().startsWith('0x') ? parseInt(parts[0], 16) : parseInt(parts[0], 10);
+        if (Number.isFinite(n) && n >= 0 && n <= 0xff && n === infoId) return true;
+        continue;
+      }
+      if (parts.length === 2) {
+        const a = parts[0].toLowerCase().startsWith('0x') ? parseInt(parts[0], 16) : parseInt(parts[0], 10);
+        const b = parts[1].toLowerCase().startsWith('0x') ? parseInt(parts[1], 16) : parseInt(parts[1], 10);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+        const start = Math.min(a, b);
+        const end = Math.max(a, b);
+        if (infoId >= start && infoId <= end) return true;
+      }
+    }
+    return false;
   }
 
   private decodePeripheralProtocolFrames(payload: Buffer): Array<{
@@ -1206,6 +1224,10 @@ export class JTT808Server {
   private mapVendorAlarmText(text: string): { type: string; priority: AlertPriority; signalCode: string } | null {
     if (!text) return null;
     const candidates: Array<{ re: RegExp; map: { type: string; priority: AlertPriority; signalCode: string } }> = [
+      { re: /\bseat\s*belt\s*detected\b/i, map: { type: 'Seatbelt Detection', priority: AlertPriority.MEDIUM, signalCode: 'vendor_seatbelt_detected' } },
+      { re: /\bno\s+driver\s+detected\b/i, map: { type: 'No Driver Detected', priority: AlertPriority.HIGH, signalCode: 'vendor_no_driver_detected' } },
+      { re: /\bcamera\s+(obstructed|blocked|covered)\b/i, map: { type: 'Camera Obstructed', priority: AlertPriority.HIGH, signalCode: 'vendor_camera_obstructed' } },
+      { re: /\bidle\s+alert\b/i, map: { type: 'Idle Alert', priority: AlertPriority.MEDIUM, signalCode: 'vendor_idle_alert' } },
       { re: /\bforward\s+collision\s+warning\b/i, map: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' } },
       { re: /\blane\s+departure\s+alarm\b/i, map: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' } },
       { re: /\b(distance\s+is\s+too\s+close|too\s+close\s+to\s+the\s+alarm|following\s+distance)\b/i, map: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' } },
