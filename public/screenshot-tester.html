@@ -391,14 +391,18 @@
     let alertRefreshDebounceTimer = null;
     let alertsWsConnected = false;
     const alertVideoState = new Map();
+    const alertScreenshotState = new Map();
     const alertMediaCache = new Map();
     const liveAlertStore = new Map();
     const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
     const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 4;
     const ALERT_FETCH_LIMIT = 500;
+    const ALERT_MEDIA_HYDRATE_LIMIT = 120;
     const ALERT_MEDIA_FETCH_CONCURRENCY = 8;
-    const ALERT_MEDIA_TTL_MS = 15000;
+    const ALERT_MEDIA_TTL_MS = 5000;
+    const ALERT_MEDIA_PENDING_TTL_MS = 1500;
     const ALERT_VIDEO_RETRY_MS = 60000;
+    const ALERT_SCREENSHOT_RETRY_MS = 30000;
     const MIN_READY_SECONDS = 3;
 
     function normalizeAlertRecord(alert) {
@@ -571,6 +575,13 @@
       };
     }
 
+    function isAlertMediaReady(alert, media) {
+      const screenshots = Array.isArray(media?.screenshots) ? media.screenshots : [];
+      const info = getAlertVideoInfo(alert, media?.videosInfo || null);
+      const hasVideo = info.preReady || info.postReady || info.cameraReady;
+      return screenshots.length > 0 && hasVideo;
+    }
+
     function buildAlertVideoTile(label, url, durationSec) {
       const durationText = Number.isFinite(Number(durationSec)) && Number(durationSec) > 0
         ? ` | ${Number(durationSec).toFixed(1)}s`
@@ -578,7 +589,7 @@
       return `
         <div class="alert-video-item">
           <div class="alert-video-title">${label}${durationText}</div>
-          <video controls preload="metadata" playsinline src="${url}"></video>
+          <video controls preload="auto" playsinline muted autoplay src="${url}"></video>
           <div class="meta" style="margin-top:6px;">
             <a href="${url}" target="_blank" rel="noopener" class="meta">Open</a>
           </div>
@@ -815,6 +826,44 @@
         return false;
       } finally {
         autoVideoRequestsInFlight = Math.max(0, autoVideoRequestsInFlight - 1);
+      }
+    }
+
+    async function ensureAlertScreenshotRequested(alert, screenshots) {
+      const alertId = String(alert?.id || '').trim();
+      if (!alertId) return false;
+      if (Array.isArray(screenshots) && screenshots.length > 0) return false;
+
+      const existing = alertScreenshotState.get(alertId) || {};
+      const startedMs = existing.requestStartedAt ? new Date(existing.requestStartedAt).getTime() : 0;
+      if (startedMs && (Date.now() - startedMs) < ALERT_SCREENSHOT_RETRY_MS) return false;
+
+      const vehicleId = String(alert?.device_id || alert?.vehicleId || '').trim();
+      const channel = Number(alert?.channel || 1);
+      if (!vehicleId) return false;
+
+      alertScreenshotState.set(alertId, {
+        requestStartedAt: new Date().toISOString(),
+        error: ''
+      });
+
+      try {
+        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/screenshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel, fallback: true })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        return true;
+      } catch (err) {
+        alertScreenshotState.set(alertId, {
+          requestStartedAt: new Date().toISOString(),
+          error: err?.message || String(err)
+        });
+        return false;
       }
     }
 
@@ -1114,8 +1163,10 @@
 
       const cached = alertMediaCache.get(id);
       const now = Date.now();
-      if (!force && cached && cached.fetchedAt && (now - cached.fetchedAt) < ALERT_MEDIA_TTL_MS && !cached.pendingPromise) {
-        return cached;
+      if (!force && cached && cached.fetchedAt && !cached.pendingPromise) {
+        const age = now - cached.fetchedAt;
+        const ttl = cached.ready ? ALERT_MEDIA_TTL_MS : ALERT_MEDIA_PENDING_TTL_MS;
+        if (age < ttl) return cached;
       }
       if (cached?.pendingPromise) {
         return cached.pendingPromise;
@@ -1162,7 +1213,13 @@
           error = videosRes.reason?.message || 'videos fetch failed';
         }
 
-        const next = { screenshots, videosInfo, fetchedAt: Date.now(), error };
+        const next = {
+          screenshots,
+          videosInfo,
+          fetchedAt: Date.now(),
+          error,
+          ready: isAlertMediaReady({ id }, { screenshots, videosInfo })
+        };
         alertMediaCache.set(id, next);
         return next;
       })().catch((err) => {
@@ -1170,7 +1227,8 @@
           screenshots: Array.isArray(cached?.screenshots) ? cached.screenshots : [],
           videosInfo: cached?.videosInfo || null,
           fetchedAt: Date.now(),
-          error: err?.message || String(err)
+          error: err?.message || String(err),
+          ready: false
         };
         alertMediaCache.set(id, next);
         return next;
@@ -1238,12 +1296,14 @@
         const initialModels = getAlertRenderModels(alerts, byAlertId);
         renderAlertsFromModels(initialModels);
 
-        await hydrateAlertsMedia(alerts);
+        const priorityAlerts = alerts.slice(0, ALERT_MEDIA_HYDRATE_LIMIT);
+        await hydrateAlertsMedia(priorityAlerts);
         const hydratedModels = getAlertRenderModels(alerts, byAlertId);
 
         let autoRequestedCount = 0;
         for (const model of hydratedModels) {
           if (autoRequestedCount >= AUTO_VIDEO_REQUEST_MAX_PER_REFRESH) break;
+          await ensureAlertScreenshotRequested(model.alert, model.screenshots);
           const requested = await ensureAlertVideoRequested(model.alert, model.videosInfo);
           if (requested) autoRequestedCount += 1;
         }
