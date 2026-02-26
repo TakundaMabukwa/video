@@ -1895,18 +1895,18 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const startTime = new Date(alertTimestamp!.getTime() - lookbackSeconds * 1000);
       const endTime = new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
 
-      const queried = queryResources
-        ? tcpServer.queryResourceList(vehicleId, channel, startTime, endTime)
-        : false;
-      const requested = tcpServer.requestCameraVideo(vehicleId, channel, startTime, endTime);
-      const downloadRequested = requestDownload
-        ? tcpServer.requestCameraVideoDownload(vehicleId, channel, startTime, endTime)
-        : false;
+      const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, channel, startTime, endTime, {
+        queryResources,
+        requestDownload
+      });
+      const queried = scheduled.querySent;
+      const requested = scheduled.requested;
+      const downloadRequested = scheduled.downloadSent;
       const manualCaptureJob = requested
         ? buildManualVideoJob(vehicleId, channel, startTime, endTime, { alertId: id })
         : null;
 
-      if (!requested) {
+      if (!requested && !scheduled.queued) {
         return res.status(409).json({
           success: false,
           message: `Vehicle ${vehicleId} is not connected; cannot request camera playback`,
@@ -1926,6 +1926,31 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             downloadRequestSent: false,
             playbackJobId: manualCaptureJob?.id || null,
             playbackJobUrl: manualCaptureJob ? `/api/videos/jobs/${encodeURIComponent(manualCaptureJob.id)}` : null
+          }
+        });
+      }
+
+      if (!requested && scheduled.queued) {
+        return res.status(202).json({
+          success: true,
+          message: `Vehicle ${vehicleId} is not connected; request queued until reconnect`,
+          data: {
+            alertId: id,
+            vehicleId,
+            channel,
+            alertTimestamp: alertTimestamp!.toISOString(),
+            startTime: startTime.toISOString(),
+            endTime: endTime.toISOString(),
+            lookbackSeconds,
+            forwardSeconds,
+            queryResources,
+            querySent: false,
+            requestSent: false,
+            requestQueued: true,
+            requestDownload,
+            downloadRequestSent: false,
+            playbackJobId: null,
+            playbackJobUrl: null
           }
         });
       }
@@ -2034,9 +2059,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       });
     }
 
-    const querySent = queryResources ? tcpServer.queryResourceList(id, ch, start, end) : false;
-    const streamRequestSent = wantStream ? tcpServer.requestCameraVideo(id, ch, start, end) : false;
-    const downloadRequestSent = wantDownload ? tcpServer.requestCameraVideoDownload(id, ch, start, end) : false;
+    const scheduled = (wantStream || wantDownload)
+      ? tcpServer.scheduleCameraReportRequests(id, ch, start, end, {
+          queryResources,
+          requestDownload: wantDownload
+        })
+      : { requested: false, queued: false, querySent: false, downloadSent: false };
+    const querySent = scheduled.querySent;
+    const streamRequestSent = scheduled.requested;
+    const downloadRequestSent = scheduled.downloadSent;
     const warnings: string[] = [];
     if (wantDownload && !downloadRequestSent) {
       warnings.push('Download request not sent. Configure FTP env vars: ALERT_VIDEO_FTP_HOST/PORT/USER/PASS/PATH');
@@ -2058,9 +2089,10 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           vehicleId: id,
           channel: ch,
           mode: normalizedMode,
-          querySent,
-          streamRequestSent,
-          downloadRequestSent,
+      querySent,
+      streamRequestSent,
+      downloadRequestSent,
+      requestQueued: scheduled.queued,
           warnings,
           playbackJobId,
           playbackJobUrl

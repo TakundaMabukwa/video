@@ -60,6 +60,16 @@ type MessageTraceEntry = {
   parse?: Record<string, unknown>;
 };
 
+type PendingCameraRequest = {
+  vehicleId: string;
+  channel: number;
+  startTime: string;
+  endTime: string;
+  queryResources: boolean;
+  requestDownload: boolean;
+  createdAt: number;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -77,6 +87,7 @@ export class JTT808Server {
   private lastKnownLocation = new Map<string, { latitude: number; longitude: number; timestamp: Date }>();
   private messageTraceSeq = 0;
   private recentMessageTraces: MessageTraceEntry[] = [];
+  private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private readonly maxMessageTraceBuffer = Math.max(
     50,
     Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
@@ -93,25 +104,40 @@ export class JTT808Server {
     
     // Listen for screenshot requests from alert manager
     this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
-      console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${channel}`);
-      void this.requestScreenshotWithFallback(vehicleId, channel, {
-        fallback: true,
-        fallbackDelayMs: 700,
-        alertId,
-        captureVideoEvidence: true,
-        videoDurationSec: 8
-      });
+      const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
+      for (const ch of channels) {
+        console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${ch}`);
+        void this.requestScreenshotWithFallback(vehicleId, ch, {
+          fallback: true,
+          fallbackDelayMs: 700,
+          alertId,
+          captureVideoEvidence: true,
+          videoDurationSec: 8
+        });
+      }
     });
     
     // Listen for camera video requests from alert manager
     this.alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
-      console.log(`🎥 Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${channel}`);
-      this.requestCameraVideo(vehicleId, channel, startTime, endTime);
+      const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
+      for (const ch of channels) {
+        console.log(`Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${ch}`);
+        this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
+          queryResources: true,
+          requestDownload: false
+        });
+      }
     });
 
     this.alertManager.on('request-camera-video-download', ({ vehicleId, channel, startTime, endTime, alertId }) => {
-      console.log(`Alert ${alertId}: Requesting camera SD card FTP upload from ${vehicleId} channel ${channel}`);
-      this.requestCameraVideoDownload(vehicleId, channel, startTime, endTime);
+      const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
+      for (const ch of channels) {
+        console.log(`Alert ${alertId}: Requesting camera SD card FTP upload from ${vehicleId} channel ${ch}`);
+        this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
+          queryResources: false,
+          requestDownload: true
+        });
+      }
     });
   }
 
@@ -421,6 +447,7 @@ export class JTT808Server {
       socket.write(response);
       socket.setKeepAlive(true, 30000);
     }
+    this.flushPendingCameraRequests(message.terminalPhone);
   }
 
   private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {
@@ -525,8 +552,9 @@ export class JTT808Server {
     const vehicle = this.vehicles.get(message.terminalPhone);
     if (vehicle) {
       vehicle.lastHeartbeat = new Date();
+      vehicle.connected = true;
     }
-    
+
     // Send heartbeat response
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
@@ -535,8 +563,9 @@ export class JTT808Server {
       message.messageId,
       0
     );
-    
+
     socket.write(response);
+    this.flushPendingCameraRequests(message.terminalPhone);
   }
 
   private handleLocationReport(message: any, socket: net.Socket, rawFrame?: Buffer): void {
@@ -586,6 +615,7 @@ export class JTT808Server {
     const additionalInfo = this.extractLocationAdditionalInfoFields(message.body);
     
     if (alert) {
+      (alert as any).rawAdditionalInfo = additionalInfo;
       this.lastKnownLocation.set(alert.vehicleId, {
         latitude: alert.latitude,
         longitude: alert.longitude,
@@ -655,6 +685,7 @@ export class JTT808Server {
     );
     
     socket.write(response);
+    this.flushPendingCameraRequests(message.terminalPhone);
   }
 
   private handleLocationBatchUpload(message: any, socket: net.Socket, rawFrame?: Buffer): void {
@@ -695,13 +726,14 @@ export class JTT808Server {
       parsed++;
 
       const alert = AlertParser.parseLocationReport(itemBody, message.terminalPhone);
+      const itemAdditionalInfo = this.extractLocationAdditionalInfoFields(itemBody);
       if (itemDiagnostics.length < 20) {
         itemDiagnostics.push({
           index: parsed,
           length: itemLen,
           parseSuccess: !!alert,
           bodyHex: itemBody.toString('hex').slice(0, 1024),
-          additionalInfo: this.extractLocationAdditionalInfoFields(itemBody),
+          additionalInfo: itemAdditionalInfo,
           parsedAlert: alert
             ? {
                 timestamp: alert.timestamp?.toISOString?.() || null,
@@ -727,6 +759,7 @@ export class JTT808Server {
       if (!alert) {
         continue;
       }
+      (alert as any).rawAdditionalInfo = itemAdditionalInfo;
 
       this.lastKnownLocation.set(alert.vehicleId, {
         latitude: alert.latitude,
@@ -979,6 +1012,21 @@ export class JTT808Server {
       return alert.blockingChannels[0];
     }
     return 1;
+  }
+
+  private resolveAlertCaptureChannels(vehicleId: string, requestedChannel?: number): number[] {
+    const vehicle = this.vehicles.get(vehicleId);
+    const channels = vehicle?.channels
+      ?.filter((ch) => ch.type === 'video' || ch.type === 'audio_video')
+      .map((ch) => Number(ch.logicalChannel))
+      .filter((ch) => Number.isFinite(ch) && ch > 0);
+
+    if (channels && channels.length > 0) {
+      return Array.from(new Set(channels)).sort((a, b) => a - b);
+    }
+
+    const fallback = Number(requestedChannel || 1);
+    return [Number.isFinite(fallback) && fallback > 0 ? fallback : 1];
   }
 
   private detectVendorAlarmsFromLocationBody(
@@ -1909,6 +1957,72 @@ export class JTT808Server {
     }
   }
 
+  private isVehicleConnected(vehicleId: string): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+    return !!(vehicle && socket && vehicle.connected);
+  }
+
+  private enqueuePendingCameraRequest(req: PendingCameraRequest): void {
+    const key = req.vehicleId;
+    const list = this.pendingCameraRequests.get(key) || [];
+    const dedupeKey = `${req.channel}|${req.startTime}|${req.endTime}|${req.queryResources ? 1 : 0}|${req.requestDownload ? 1 : 0}`;
+    const exists = list.some((r) =>
+      `${r.channel}|${r.startTime}|${r.endTime}|${r.queryResources ? 1 : 0}|${r.requestDownload ? 1 : 0}` === dedupeKey
+    );
+    if (exists) return;
+    list.push(req);
+    this.pendingCameraRequests.set(key, list);
+  }
+
+  private flushPendingCameraRequests(vehicleId: string): void {
+    if (!this.isVehicleConnected(vehicleId)) return;
+    const list = this.pendingCameraRequests.get(vehicleId);
+    if (!list || list.length === 0) return;
+
+    this.pendingCameraRequests.delete(vehicleId);
+    const now = Date.now();
+    for (const req of list) {
+      // Drop very old requests (10 minutes)
+      if (now - req.createdAt > 10 * 60 * 1000) continue;
+      const start = new Date(req.startTime);
+      const end = new Date(req.endTime);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+      if (req.queryResources) this.queryResourceList(req.vehicleId, req.channel, start, end);
+      this.requestCameraVideo(req.vehicleId, req.channel, start, end);
+      if (req.requestDownload) this.requestCameraVideoDownload(req.vehicleId, req.channel, start, end);
+    }
+  }
+
+  scheduleCameraReportRequests(
+    vehicleId: string,
+    channel: number,
+    startTime: Date,
+    endTime: Date,
+    options?: { queryResources?: boolean; requestDownload?: boolean }
+  ): { requested: boolean; queued: boolean; querySent: boolean; downloadSent: boolean } {
+    const queryResources = options?.queryResources !== false;
+    const requestDownload = options?.requestDownload === true;
+
+    if (this.isVehicleConnected(vehicleId)) {
+      const querySent = queryResources ? this.queryResourceList(vehicleId, channel, startTime, endTime) : false;
+      const requested = this.requestCameraVideo(vehicleId, channel, startTime, endTime);
+      const downloadSent = requestDownload ? this.requestCameraVideoDownload(vehicleId, channel, startTime, endTime) : false;
+      return { requested, queued: false, querySent, downloadSent };
+    }
+
+    this.enqueuePendingCameraRequest({
+      vehicleId,
+      channel,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString(),
+      queryResources,
+      requestDownload,
+      createdAt: Date.now()
+    });
+    return { requested: false, queued: true, querySent: false, downloadSent: false };
+  }
+
   requestCameraVideo(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
     const vehicle = this.vehicles.get(vehicleId);
     const socket = this.connections.get(vehicleId);
@@ -2471,6 +2585,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 
