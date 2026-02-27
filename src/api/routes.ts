@@ -33,7 +33,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   }>();
   const queuedAlertWindows = new Set<string>();
   const alertEnsureState = new Map<string, number>();
-  const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 30000));
+  const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 10000));
   const getVehicleChannels = (vehicleId: string, preferredChannel: number): number[] => {
     const vehicle = tcpServer.getVehicle(vehicleId);
     const fromCaps = Array.isArray(vehicle?.channels)
@@ -46,7 +46,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       .map((ch) => Number(ch))
       .filter((ch) => Number.isFinite(ch) && ch > 0);
     const p = Number(preferredChannel);
-    const all = [...fromCaps, ...fromActive, ...(Number.isFinite(p) && p > 0 ? [p] : [1])];
+    const all = [
+      ...fromCaps,
+      ...fromActive,
+      ...(Number.isFinite(p) && p > 0 ? [p] : []),
+      1,
+      2
+    ];
     return Array.from(new Set(all)).sort((a, b) => a - b);
   };
   const ensureAlertMediaRequested = async (
@@ -75,7 +81,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           tcpServer.requestScreenshotWithFallback(vehicleId, ch, {
             fallback: true,
             fallbackDelayMs: 600,
-            alertId
+            alertId,
+            captureVideoEvidence: true,
+            videoDurationSec: 8
           })
         );
       }

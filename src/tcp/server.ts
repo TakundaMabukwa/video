@@ -1033,8 +1033,13 @@ export class JTT808Server {
       return Array.from(new Set(channels)).sort((a, b) => a - b);
     }
 
-    const fallback = Number(requestedChannel || 1);
-    return [Number.isFinite(fallback) && fallback > 0 ? fallback : 1];
+    const fallback = Number(requestedChannel);
+    const defaults = [
+      ...(Number.isFinite(fallback) && fallback > 0 ? [fallback] : []),
+      1,
+      2
+    ];
+    return Array.from(new Set(defaults)).sort((a, b) => a - b);
   }
 
   private detectVendorAlarmsFromLocationBody(
@@ -1898,6 +1903,21 @@ export class JTT808Server {
       const videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
       if (videoBackup.ok && videoBackup.path) {
         fallback.videoEvidencePath = videoBackup.path;
+        if (!fallback.ok) {
+          const fromVideo = await this.captureScreenshotFromVideoFile(
+            vehicleId,
+            channel,
+            videoBackup.path,
+            options?.alertId
+          );
+          if (fromVideo.ok) {
+            fallback.ok = true;
+            fallback.imageId = fromVideo.imageId;
+            fallback.reason = undefined;
+          } else {
+            fallback.reason = fallback.reason || fromVideo.reason || 'video frame extraction failed';
+          }
+        }
       } else {
         fallback.videoEvidenceReason = videoBackup.reason;
       }
@@ -1971,6 +1991,71 @@ export class JTT808Server {
       return { ok: true, path: outPath };
     } catch (error: any) {
       return { ok: false, reason: error?.message || 'video evidence fallback error' };
+    }
+  }
+
+  private async captureScreenshotFromVideoFile(
+    vehicleId: string,
+    channel: number,
+    videoPath: string,
+    alertId?: string
+  ): Promise<ScreenshotFallbackResult> {
+    try {
+      if (!videoPath || !fs.existsSync(videoPath)) {
+        return { ok: false, reason: 'video file not found for frame capture' };
+      }
+
+      const imageData = await new Promise<Buffer | null>((resolve) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-ss', '00:00:01',
+          '-i', videoPath,
+          '-frames:v', '1',
+          '-f', 'image2pipe',
+          '-vcodec', 'mjpeg',
+          'pipe:1'
+        ], {
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+
+        const chunks: Buffer[] = [];
+        let done = false;
+        const finish = (data: Buffer | null) => {
+          if (done) return;
+          done = true;
+          resolve(data);
+        };
+
+        const timeout = setTimeout(() => {
+          ffmpeg.kill('SIGKILL');
+          finish(null);
+        }, 6000);
+
+        ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+        ffmpeg.on('error', () => {
+          clearTimeout(timeout);
+          finish(null);
+        });
+        ffmpeg.on('close', (code) => {
+          clearTimeout(timeout);
+          if (code === 0 && chunks.length > 0) {
+            finish(Buffer.concat(chunks));
+          } else {
+            finish(null);
+          }
+        });
+      });
+
+      if (!imageData || imageData.length < 4) {
+        return { ok: false, reason: 'empty frame from video' };
+      }
+
+      const imageId = await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      console.log(`Alert ${alertId || 'manual'}: Video-frame fallback screenshot saved for ${vehicleId} ch${channel}`);
+      return { ok: true, imageId };
+    } catch (error: any) {
+      return { ok: false, reason: error?.message || 'video frame screenshot fallback error' };
     }
   }
 

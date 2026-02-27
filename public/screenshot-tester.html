@@ -394,10 +394,11 @@
     const alertScreenshotState = new Map();
     const alertMediaCache = new Map();
     const liveAlertStore = new Map();
-    const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
-    const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 4;
-    const ALERT_FETCH_LIMIT = 500;
-    const ALERT_MEDIA_HYDRATE_LIMIT = 120;
+    const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 3;
+    const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 12;
+    const ALERT_FETCH_LIMIT_DEFAULT = 80;
+    const ALERT_FETCH_LIMIT_MAX = 200;
+    const ALERT_MEDIA_HYDRATE_LIMIT_MAX = 120;
     const ALERT_MEDIA_FETCH_CONCURRENCY = 8;
     const ALERT_MEDIA_TTL_MS = 5000;
     const ALERT_MEDIA_PENDING_TTL_MS = 1500;
@@ -437,13 +438,17 @@
       for (const a of alerts) upsertLiveAlert(a);
     }
 
-    function getLiveAlerts(limit, minutes) {
+    function getLiveAlerts(limit, minutes, vehicleIdFilter = '') {
+      const vehicleFilter = String(vehicleIdFilter || '').trim();
       const maxAgeMs = Math.max(1, Number(minutes || 180)) * 60 * 1000;
       const cutoff = Date.now() - maxAgeMs;
       const list = Array.from(liveAlertStore.values())
         .filter((a) => {
           const t = new Date(a?.timestamp || 0).getTime();
-          return Number.isFinite(t) && t >= cutoff;
+          if (!Number.isFinite(t) || t < cutoff) return false;
+          if (!vehicleFilter) return true;
+          const id = String(a?.vehicleId || a?.device_id || '').trim();
+          return id === vehicleFilter;
         })
         .sort((a, b) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime())
         .slice(0, limit);
@@ -532,7 +537,9 @@
       const all = [
         ...fromCapabilities,
         ...fromActiveStreams,
-        ...(Number.isFinite(preferred) && preferred > 0 ? [preferred] : [])
+        ...(Number.isFinite(preferred) && preferred > 0 ? [preferred] : []),
+        1,
+        2
       ];
       return [...new Set(all)].sort((a, b) => a - b);
     }
@@ -1295,8 +1302,10 @@
       if (alertRefreshInFlight) return;
       alertRefreshInFlight = true;
       try {
-        const limit = ALERT_FETCH_LIMIT;
-        const minutes = Math.max(1, Math.min(10080, Number(minutesEl.value || 180)));
+        const limit = Math.max(10, Math.min(ALERT_FETCH_LIMIT_MAX, Number(limitEl.value || ALERT_FETCH_LIMIT_DEFAULT)));
+        const minutes = Math.max(1, Math.min(10080, Number(minutesEl.value || 30)));
+        const vehicleFilter = String(vehicleIdEl.value || '').trim();
+        const mediaHydrateLimit = Math.min(limit, ALERT_MEDIA_HYDRATE_LIMIT_MAX);
         const screenshotLimit = Math.max(500, Math.min(6000, limit * 8));
 
         recentScreenshotsCache = await fetchRecentScreenshots(screenshotLimit, minutes);
@@ -1322,13 +1331,13 @@
         }
 
         mergeLiveAlertStore(alerts);
-        alerts = getLiveAlerts(limit, minutes);
+        alerts = getLiveAlerts(limit, minutes, vehicleFilter);
 
         const byAlertId = getFallbackScreenshotsByAlertId();
         const initialModels = getAlertRenderModels(alerts, byAlertId);
         renderAlertsFromModels(initialModels);
 
-        const priorityAlerts = alerts.slice(0, ALERT_MEDIA_HYDRATE_LIMIT);
+        const priorityAlerts = alerts.slice(0, mediaHydrateLimit);
         await hydrateAlertsMedia(priorityAlerts);
         const hydratedModels = getAlertRenderModels(alerts, byAlertId);
 
