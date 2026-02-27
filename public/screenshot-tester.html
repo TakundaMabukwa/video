@@ -575,6 +575,15 @@
       };
     }
 
+    function formatEnsureInfo(ensure) {
+      if (!ensure || typeof ensure !== 'object') return 'n/a';
+      const channels = Array.isArray(ensure.channels) ? ensure.channels.join(', ') : 'n/a';
+      const started = ensure.started ? 'yes' : 'no';
+      const scheduled = ensure.videoScheduled ? 'yes' : 'no';
+      const reason = ensure.reason ? ` | reason: ${ensure.reason}` : '';
+      return `started: ${started} | videoScheduled: ${scheduled} | channels: ${channels}${reason}`;
+    }
+
     function isAlertMediaReady(alert, media) {
       const screenshots = Array.isArray(media?.screenshots) ? media.screenshots : [];
       const info = getAlertVideoInfo(alert, media?.videosInfo || null);
@@ -597,7 +606,7 @@
       `;
     }
 
-    function alertCard(alert, screenshots, videosInfo) {
+    function alertCard(alert, screenshots, videosInfo, extra = {}) {
       const ts = alert.timestamp ? new Date(alert.timestamp).toLocaleString() : 'n/a';
       const pr = (alert.priority || 'low').toLowerCase();
       const imgs = (screenshots || [])
@@ -645,6 +654,16 @@
            </div>`
         : '<div class="meta" style="margin-top:6px;">Video auto-request: pending check</div>';
       const hasAnyVideo = videoTiles.length > 0;
+      const signalDetails = Array.isArray(alert?.metadata?.alertSignalDetails) ? alert.metadata.alertSignalDetails : [];
+      const signalCodes = signalDetails.map((s) => s?.code).filter(Boolean).join(', ');
+      const screenshotChannels = Array.from(new Set((screenshots || []).map((s) => Number(s?.channel || 0)).filter((n) => n > 0))).sort((a, b) => a - b);
+      const ensureInfoText = formatEnsureInfo(extra.ensure);
+      const decodeText = [
+        `sourceMessageId: ${alert?.metadata?.sourceMessageId || 'n/a'}`,
+        `vendorCodeMapped: ${alert?.metadata?.vendorCodeMapped ? 'yes' : 'no'}`,
+        `alarmCode: ${alert?.metadata?.alarmCode ?? 'n/a'}`,
+        `signals: ${signalCodes || 'n/a'}`
+      ].join(' | ');
 
       return `
         <div class="alert-item">
@@ -659,15 +678,18 @@
           <div class="meta">Time: ${ts}</div>
           <div class="meta">Status: ${alert.status || 'n/a'}</div>
           <div class="meta">Screenshots: ${(screenshots || []).length}</div>
+          <div class="meta">Screenshot channels: ${screenshotChannels.length ? screenshotChannels.join(', ') : 'none'}</div>
           <div class="thumbs">${imgs || '<div class="meta">No screenshots linked yet.</div>'}</div>
           <div class="meta" style="margin-top:8px;">Videos: ${videoCount}</div>
           <div class="alert-videos">
             ${videoTiles.join('')}
           </div>
           ${hasAnyVideo ? '' : '<div class="alert-video-empty">No ready video yet. System is auto-requesting camera playback for missing clips.</div>'}
+          <div class="meta" style="margin-top:8px;">Ensure: ${ensureInfoText}</div>
+          <div class="meta" style="margin-top:4px;">Decoded: ${decodeText}</div>
           ${stateHtml}
           <div class="meta" style="margin-top:8px;">
-            <a href="/api/alerts/${encodeURIComponent(String(alert.id))}/videos" target="_blank" rel="noopener">Open alert video JSON</a>
+            <a href="/api/alerts/${encodeURIComponent(String(alert.id))}/media?ensureMedia=true" target="_blank" rel="noopener">Open alert media JSON</a>
           </div>
         </div>
       `;
@@ -782,14 +804,12 @@
       });
 
       try {
-        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/request-report-video`, {
+        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            lookbackSeconds: 30,
-            forwardSeconds: 30,
-            queryResources: true,
-            requestDownload: true
+            ensureScreenshots: true,
+            ensureVideo: true
           })
         });
         const body = await res.json().catch(() => ({}));
@@ -797,23 +817,19 @@
           throw new Error(body.message || `HTTP ${res.status}`);
         }
 
-        const d = body.data || {};
+        const d = body?.data?.ensure || {};
         alertVideoState.set(alertId, {
           ...existing,
           autoRequested: true,
           autoRequesting: false,
           requestStartedAt: new Date().toISOString(),
-          querySent: !!d.querySent,
-          requestSent: !!d.requestSent,
-          downloadRequestSent: !!d.downloadRequestSent,
-          jobId: d.playbackJobId || null,
-          jobStatus: d.playbackJobId ? 'queued' : 'none',
+          querySent: !!d.started,
+          requestSent: !!d.videoScheduled,
+          downloadRequestSent: false,
+          jobId: null,
+          jobStatus: d.started ? 'requested' : 'none',
           error: ''
         });
-
-        if (d.playbackJobId) {
-          pollAlertVideoJob(alertId, d.playbackJobId);
-        }
         return true;
       } catch (err) {
         alertVideoState.set(alertId, {
@@ -832,15 +848,12 @@
     async function ensureAlertScreenshotRequested(alert, screenshots) {
       const alertId = String(alert?.id || '').trim();
       if (!alertId) return false;
-      if (Array.isArray(screenshots) && screenshots.length > 0) return false;
+      const screenshotChannels = Array.from(new Set((screenshots || []).map((s) => Number(s?.channel || 0)).filter((n) => n > 0)));
+      if (screenshotChannels.length >= 2) return false;
 
       const existing = alertScreenshotState.get(alertId) || {};
       const startedMs = existing.requestStartedAt ? new Date(existing.requestStartedAt).getTime() : 0;
       if (startedMs && (Date.now() - startedMs) < ALERT_SCREENSHOT_RETRY_MS) return false;
-
-      const vehicleId = String(alert?.device_id || alert?.vehicleId || '').trim();
-      const channel = Number(alert?.channel || 1);
-      if (!vehicleId) return false;
 
       alertScreenshotState.set(alertId, {
         requestStartedAt: new Date().toISOString(),
@@ -848,10 +861,13 @@
       });
 
       try {
-        const res = await fetch(`/api/vehicles/${encodeURIComponent(vehicleId)}/screenshot`, {
+        const res = await fetch(`/api/alerts/${encodeURIComponent(alertId)}/collect-evidence`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel, fallback: true })
+          body: JSON.stringify({
+            ensureScreenshots: true,
+            ensureVideo: false
+          })
         });
         const body = await res.json().catch(() => ({}));
         if (!res.ok || !body.success) {
@@ -1147,13 +1163,14 @@
         return {
           alert,
           screenshots,
-          videosInfo: cached.videosInfo || null
+          videosInfo: cached.videosInfo || null,
+          ensure: cached.ensure || null
         };
       });
     }
 
     function renderAlertsFromModels(models) {
-      alertsEl.innerHTML = models.map((m) => alertCard(m.alert, m.screenshots, m.videosInfo)).join('')
+      alertsEl.innerHTML = models.map((m) => alertCard(m.alert, m.screenshots, m.videosInfo, { ensure: m.ensure })).join('')
         || '<div class="meta">No alerts found.</div>';
     }
 
@@ -1177,45 +1194,60 @@
         let videosInfo = cached?.videosInfo || null;
         let error = '';
 
-        const [alertRes, videosRes] = await Promise.allSettled([
-          fetch(`/api/alerts/${encodeURIComponent(id)}`, { cache: 'no-store' }),
-          fetch(`/api/alerts/${encodeURIComponent(id)}/videos`, { cache: 'no-store' })
-        ]);
-
-        if (alertRes.status === 'fulfilled') {
-          try {
-            if (alertRes.value.ok) {
-              const body = await alertRes.value.json().catch(() => ({}));
-              const fromAlert = body?.alert?.screenshots;
-              if (Array.isArray(fromAlert)) screenshots = fromAlert;
-            } else {
-              error = `alert:${alertRes.value.status}`;
+        let ensure = cached?.ensure || null;
+        try {
+          const res = await fetch(`/api/alerts/${encodeURIComponent(id)}/media?ensureMedia=true`, { cache: 'no-store' });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || !body?.success) {
+            error = body?.message || `media:${res.status}`;
+          } else {
+            const payload = body?.data || {};
+            const fromMedia = payload?.screenshots;
+            if (Array.isArray(fromMedia)) {
+              screenshots = fromMedia.map((s) => ({
+                id: s.id,
+                device_id: s.vehicleId || s.device_id,
+                channel: s.channel,
+                storage_url: s.url || s.storage_url,
+                file_size: s.fileSize || s.file_size,
+                timestamp: s.timestamp,
+                alert_id: s.alertId || s.alert_id
+              }));
             }
-          } catch (_) {}
-        } else {
-          error = alertRes.reason?.message || 'alert fetch failed';
-        }
-
-        if (videosRes.status === 'fulfilled') {
-          try {
-            if (videosRes.value.ok) {
-              const body = await videosRes.value.json().catch(() => ({}));
-              if (body?.success) {
-                videosInfo = body;
-              } else if (!error) {
-                error = body?.message || 'videos response not successful';
-              }
-            } else if (!error) {
-              error = `videos:${videosRes.value.status}`;
-            }
-          } catch (_) {}
-        } else if (!error) {
-          error = videosRes.reason?.message || 'videos fetch failed';
+            videosInfo = {
+              success: true,
+              videos: {
+                pre_event: {
+                  path: payload?.clipUrls?.preRaw || '',
+                  duration: Number(payload?.alert?.metadata?.videoClips?.preDuration || 0)
+                },
+                post_event: {
+                  path: payload?.clipUrls?.postRaw || '',
+                  duration: Number(payload?.alert?.metadata?.videoClips?.postDuration || 0)
+                },
+                camera_sd: {
+                  path: payload?.clipUrls?.camera || ''
+                },
+                database_records: Array.isArray(payload?.videos) ? payload.videos : []
+              },
+              has_pre_event: !!(payload?.alert?.metadata?.videoClips?.pre || payload?.alert?.metadata?.videoClips?.preStorageUrl),
+              has_post_event: !!(payload?.alert?.metadata?.videoClips?.post || payload?.alert?.metadata?.videoClips?.postStorageUrl),
+              has_camera_video: !!(
+                payload?.alert?.metadata?.videoClips?.cameraVideo ||
+                payload?.alert?.metadata?.videoClips?.cameraPreVideo ||
+                payload?.alert?.metadata?.videoClips?.cameraPostVideo
+              )
+            };
+            ensure = payload?.ensure || null;
+          }
+        } catch (e) {
+          error = e?.message || 'media fetch failed';
         }
 
         const next = {
           screenshots,
           videosInfo,
+          ensure,
           fetchedAt: Date.now(),
           error,
           ready: isAlertMediaReady({ id }, { screenshots, videosInfo })
