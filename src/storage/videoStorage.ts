@@ -95,6 +95,17 @@ export class VideoStorage {
       `UPDATE videos SET storage_url = $1 WHERE id = $2`,
       [storageUrl, id]
     );
+    
+    const deleteLocalAfterUpload = String(process.env.DELETE_LOCAL_VIDEO_AFTER_UPLOAD ?? 'true').toLowerCase() !== 'false';
+    if (deleteLocalAfterUpload) {
+      try {
+        if (fs.existsSync(localPath)) {
+          fs.unlinkSync(localPath);
+        }
+      } catch (err: any) {
+        console.error(`Failed to delete local uploaded video ${localPath}:`, err?.message || err);
+      }
+    }
 
     console.log(`📹 Video uploaded to Supabase: ${storageUrl}`);
     return storageUrl;

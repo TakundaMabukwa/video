@@ -103,6 +103,7 @@ import { AlertWebSocketServer } from './api/websocket';
 import { DataWebSocketServer } from './api/dataWebsocket';
 import { LiveVideoStreamServer } from './streaming/liveStream';
 import { SSEVideoStream } from './streaming/sseStream';
+import { RetentionService } from './storage/retentionService';
 import pool from './storage/database';
 import * as dotenv from 'dotenv';
 
@@ -139,6 +140,7 @@ async function startServer() {
   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
   const udpServer = new UDPRTPServer(UDP_PORT);
   const tcpRTPHandler = new TCPRTPHandler();
+  const retentionService = new RetentionService();
   
   const alertManager = tcpServer.getAlertManager();
   udpServer.setAlertManager(alertManager);
@@ -188,6 +190,7 @@ async function startServer() {
   
   await tcpServer.start();
   await udpServer.start();
+  retentionService.start();
   
   app.use('/api', createRoutes(tcpServer, udpServer));
   app.use('/api/alerts', createAlertRoutes());

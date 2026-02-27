@@ -8,6 +8,7 @@ import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { query as dbQuery } from '../storage/database';
+import { archiveToRawH264 } from '../video/frameArchive';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
@@ -31,20 +32,101 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     error?: string;
   }>();
   const queuedAlertWindows = new Set<string>();
+  const alertEnsureState = new Map<string, number>();
+  const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 30000));
+  const getVehicleChannels = (vehicleId: string, preferredChannel: number): number[] => {
+    const vehicle = tcpServer.getVehicle(vehicleId);
+    const fromCaps = Array.isArray(vehicle?.channels)
+      ? vehicle!.channels
+          .filter((ch: any) => ch.type === 'video' || ch.type === 'audio_video')
+          .map((ch: any) => Number(ch.logicalChannel))
+          .filter((ch: number) => Number.isFinite(ch) && ch > 0)
+      : [];
+    const fromActive = Array.from(vehicle?.activeStreams || [])
+      .map((ch) => Number(ch))
+      .filter((ch) => Number.isFinite(ch) && ch > 0);
+    const p = Number(preferredChannel);
+    const all = [...fromCaps, ...fromActive, ...(Number.isFinite(p) && p > 0 ? [p] : [1])];
+    return Array.from(new Set(all)).sort((a, b) => a - b);
+  };
+  const ensureAlertMediaRequested = async (
+    alertId: string,
+    vehicleId: string,
+    channel: number,
+    alertTimestamp: Date,
+    options?: { ensureScreenshots?: boolean; ensureVideo?: boolean }
+  ) => {
+    const now = Date.now();
+    const key = `${alertId}`;
+    const last = alertEnsureState.get(key) || 0;
+    if (now - last < ALERT_ENSURE_COOLDOWN_MS) {
+      return { started: false, reason: 'cooldown' };
+    }
+    alertEnsureState.set(key, now);
+
+    const ensureScreenshots = options?.ensureScreenshots !== false;
+    const ensureVideo = options?.ensureVideo !== false;
+    const channels = getVehicleChannels(vehicleId, channel);
+    const screenshotRequests: Array<Promise<any>> = [];
+
+    if (ensureScreenshots) {
+      for (const ch of channels) {
+        screenshotRequests.push(
+          tcpServer.requestScreenshotWithFallback(vehicleId, ch, {
+            fallback: true,
+            fallbackDelayMs: 600,
+            alertId
+          })
+        );
+      }
+    }
+
+    let videoScheduled = false;
+    if (ensureVideo) {
+      const start = new Date(alertTimestamp.getTime() - 30 * 1000);
+      const end = new Date(alertTimestamp.getTime() + 30 * 1000);
+      for (const ch of channels) {
+        const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, start, end, {
+          queryResources: true,
+          requestDownload: true
+        });
+        videoScheduled = videoScheduled || scheduled.requested || scheduled.queued;
+      }
+    }
+
+    if (screenshotRequests.length) {
+      await Promise.allSettled(screenshotRequests);
+    }
+
+    return { started: true, videoScheduled, channels };
+  };
   const buildAlertMediaLinks = (alertId: string) => {
     const id = encodeURIComponent(String(alertId));
     return {
       alert: `/api/alerts/${id}`,
+      media: `/api/alerts/${id}/media`,
+      screenshots: `/api/alerts/${id}/screenshots`,
       videos: `/api/alerts/${id}/videos`,
       preVideo: `/api/alerts/${id}/video/pre`,
       postVideo: `/api/alerts/${id}/video/post`,
-      requestReportVideo: `/api/alerts/${id}/request-report-video`
+      requestReportVideo: `/api/alerts/${id}/request-report-video`,
+      collectEvidence: `/api/alerts/${id}/collect-evidence`
     };
   };
   const withAlertMediaLinks = (alert: any) => ({
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
+  const loadAlertRow = async (alertId: string): Promise<any | null> => {
+    const db = require('../storage/database');
+    const result = await db.query(
+      `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+       FROM alerts
+       WHERE id = $1`,
+      [alertId]
+    );
+    return result.rows.length > 0 ? result.rows[0] : null;
+  };
   const parseResourceTime = (value: string): Date | null => {
     if (!value || typeof value !== 'string') return null;
     const isoLike = value.replace(' ', 'T');
@@ -100,6 +182,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (!sourcePath) throw new Error('Missing source file');
     if (!fs.existsSync(sourcePath)) throw new Error(`Source file not found: ${sourcePath}`);
     if (/\.mp4$/i.test(sourcePath)) return sourcePath;
+    if (/\.farc$/i.test(sourcePath)) {
+      const parsedArchive = path.parse(sourcePath);
+      const decodedDir = path.join(process.cwd(), 'recordings', 'transcoded', 'archive-decoded');
+      try { fs.mkdirSync(decodedDir, { recursive: true }); } catch {}
+      const decodedH264 = path.join(decodedDir, `${parsedArchive.name}.decoded.h264`);
+      archiveToRawH264(sourcePath, decodedH264);
+      sourcePath = decodedH264;
+    }
 
     const safeInputFps = Number.isFinite(Number(inputFpsHint)) && Number(inputFpsHint) > 0
       ? Math.max(0.2, Math.min(30, Number(inputFpsHint)))
@@ -1385,6 +1475,257 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Collect alert evidence on demand (screenshots from all video channels + report-video request)
+  router.post('/alerts/:id/collect-evidence', async (req, res) => {
+    const { id } = req.params;
+    const ensureScreenshots = String(req.body?.ensureScreenshots ?? 'true').toLowerCase() !== 'false';
+    const ensureVideo = String(req.body?.ensureVideo ?? 'true').toLowerCase() !== 'false';
+
+    try {
+      const row = await loadAlertRow(id);
+      if (!row) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      const vehicleId = String(row.device_id || '');
+      const channel = Number(row.channel || 1);
+      const ts = new Date(row.timestamp);
+      if (!vehicleId || Number.isNaN(ts.getTime())) {
+        return res.status(400).json({
+          success: false,
+          message: 'Alert has invalid vehicle or timestamp'
+        });
+      }
+
+      const ensure = await ensureAlertMediaRequested(id, vehicleId, channel, ts, {
+        ensureScreenshots,
+        ensureVideo
+      });
+
+      return res.json({
+        success: true,
+        message: `Evidence collection triggered for alert ${id}`,
+        data: {
+          alertId: id,
+          vehicleId,
+          channel,
+          alertTimestamp: ts.toISOString(),
+          ensure
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to collect alert evidence',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Get alert-linked screenshots (strict by alert_id, with timestamp window fallback)
+  router.get('/alerts/:id/screenshots', async (req, res) => {
+    const { id } = req.params;
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
+    const includeFallback = String(req.query.includeFallback ?? 'true').toLowerCase() !== 'false';
+    const minutesWindow = Math.max(1, Math.min(30, Number(req.query.windowMinutes || 2)));
+
+    try {
+      const row = await loadAlertRow(id);
+      if (!row) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      const db = require('../storage/database');
+      const alertTs = new Date(row.timestamp);
+      const fallbackFrom = new Date(alertTs.getTime() - minutesWindow * 60 * 1000);
+      const fallbackTo = new Date(alertTs.getTime() + minutesWindow * 60 * 1000);
+      const alertVehicleId = String(row.device_id || '');
+      const alertChannel = Number(row.channel || 1);
+
+      const queryText = includeFallback
+        ? `WITH direct AS (
+             SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+             FROM images
+             WHERE alert_id = $1
+           ),
+           fallback AS (
+             SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+             FROM images
+             WHERE alert_id IS NULL
+               AND device_id = $2
+               AND timestamp BETWEEN $3 AND $4
+               AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
+           )
+           SELECT DISTINCT ON (id)
+             id, device_id, channel, storage_url, file_size, timestamp, alert_id
+           FROM (
+             SELECT * FROM direct
+             UNION ALL
+             SELECT * FROM fallback
+           ) q
+           ORDER BY id, timestamp DESC
+           LIMIT $6`
+        : `SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+           FROM images
+           WHERE alert_id = $1
+           ORDER BY timestamp DESC
+           LIMIT $2`;
+
+      const params = includeFallback
+        ? [id, alertVehicleId, fallbackFrom, fallbackTo, alertChannel, limit]
+        : [id, limit];
+      const result = await db.query(queryText, params);
+
+      const screenshots = result.rows.map((img: any) => ({
+        id: img.id,
+        alertId: img.alert_id || id,
+        vehicleId: img.device_id,
+        channel: Number(img.channel || 1),
+        timestamp: img.timestamp,
+        fileSize: Number(img.file_size || 0),
+        url: img.storage_url
+      }));
+
+      const byChannel: Record<string, any[]> = {};
+      for (const s of screenshots) {
+        const key = `ch${s.channel}`;
+        byChannel[key] = byChannel[key] || [];
+        byChannel[key].push(s);
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          alertId: id,
+          vehicleId: alertVehicleId,
+          channel: alertChannel,
+          alertTimestamp: row.timestamp,
+          count: screenshots.length,
+          screenshots,
+          byChannel
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert screenshots',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  // Single endpoint for frontend: alert + screenshots + videos
+  router.get('/alerts/:id/media', async (req, res) => {
+    const { id } = req.params;
+    const ensureMedia = String(req.query.ensureMedia ?? 'true').toLowerCase() !== 'false';
+
+    try {
+      const row = await loadAlertRow(id);
+      if (!row) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      let ensureInfo: any = null;
+      if (ensureMedia) {
+        try {
+          ensureInfo = await ensureAlertMediaRequested(
+            id,
+            String(row.device_id || ''),
+            Number(row.channel || 1),
+            new Date(row.timestamp)
+          );
+        } catch {}
+      }
+
+      const db = require('../storage/database');
+      const [screensResult, videosResult] = await Promise.all([
+        db.query(
+          `SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+           FROM images
+           WHERE alert_id = $1
+           ORDER BY timestamp DESC
+           LIMIT 100`,
+          [id]
+        ),
+        db.query(
+          `SELECT id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
+           FROM videos
+           WHERE alert_id = $1
+           ORDER BY start_time DESC`,
+          [id]
+        )
+      ]);
+
+      const metadata = typeof row.metadata === 'string'
+        ? JSON.parse(row.metadata || '{}')
+        : (row.metadata || {});
+      const videoClips = metadata?.videoClips || {};
+
+      const screenshots = screensResult.rows.map((img: any) => ({
+        id: img.id,
+        alertId: img.alert_id || id,
+        vehicleId: img.device_id,
+        channel: Number(img.channel || 1),
+        timestamp: img.timestamp,
+        fileSize: Number(img.file_size || 0),
+        url: img.storage_url
+      }));
+      const videos = videosResult.rows.map((v: any) => ({
+        id: v.id,
+        alertId: v.alert_id || id,
+        vehicleId: v.device_id,
+        channel: Number(v.channel || 1),
+        type: v.video_type,
+        timestamp: v.start_time,
+        duration: Number(v.duration_seconds || 0),
+        fileSize: Number(v.file_size || 0),
+        filePath: v.file_path,
+        url: v.storage_url
+      }));
+
+      return res.json({
+        success: true,
+        data: {
+          alert: withAlertMediaLinks({
+            id: row.id,
+            vehicleId: row.device_id,
+            channel: row.channel,
+            type: row.alert_type,
+            priority: row.priority,
+            status: row.status,
+            timestamp: row.timestamp,
+            metadata
+          }),
+          screenshots,
+          videos,
+          clipUrls: {
+            pre: `/api/alerts/${encodeURIComponent(id)}/video/pre`,
+            post: `/api/alerts/${encodeURIComponent(id)}/video/post`,
+            camera: `/api/alerts/${encodeURIComponent(id)}/video/camera`,
+            preRaw: normalizePublicVideoUrl(videoClips.preStorageUrl || videoClips.pre, `/api/alerts/${encodeURIComponent(id)}/video/pre`),
+            postRaw: normalizePublicVideoUrl(videoClips.postStorageUrl || videoClips.post, `/api/alerts/${encodeURIComponent(id)}/video/post`)
+          },
+          ensure: ensureInfo
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch alert media',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Get alert by ID
   router.get('/alerts/:id', async (req, res) => {
     const { id } = req.params;
@@ -1420,6 +1761,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         success: false,
         message: `Alert ${id} not found`
       });
+    }
+
+    const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
+    let ensureInfo: any = null;
+    if (ensureMedia) {
+      try {
+        const vehicleId = String(alert.vehicleId || alert.device_id || '');
+        const channel = Number(alert.channel || 1);
+        const ts = new Date(alert.timestamp);
+        if (vehicleId && Number.isFinite(ts.getTime())) {
+          ensureInfo = await ensureAlertMediaRequested(id, vehicleId, channel, ts);
+        }
+      } catch {}
     }
 
     // Get associated screenshots (strict by alert_id, then fallback by same vehicle/time window)
@@ -1476,10 +1830,11 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           ),
 	          preIncidentReady: !!(alert?.metadata?.videoClips?.pre || alert?.metadata?.videoClips?.preStorageUrl) &&
 	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
-	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
-	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
+          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
+            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
           screenshots: screenshots.rows
-        }
+        },
+        ensure: ensureInfo
       });
     } catch (error) {
       res.json({
@@ -1505,7 +1860,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
 	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
 	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20))
-        }
+        },
+        ensure: ensureInfo
       });
     }
   });
@@ -1762,6 +2118,16 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
 
       const alert = alertResult.rows[0];
+      const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
+      let ensureInfo: any = null;
+      if (ensureMedia) {
+        try {
+          const ts = new Date(alert.timestamp);
+          if (Number.isFinite(ts.getTime())) {
+            ensureInfo = await ensureAlertMediaRequested(id, String(alert.device_id), Number(alert.channel || 1), ts);
+          }
+        } catch {}
+      }
 
       // Get linked videos from videos table; include fallback near alert time for same vehicle/channels.
       const alertTs = new Date(alert.timestamp);
@@ -1883,7 +2249,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         total_videos: videosResult.rows.length,
         has_pre_event: hasPreEvent,
         has_post_event: hasPostEvent,
-        has_camera_video: hasCameraVideo
+        has_camera_video: hasCameraVideo,
+        ensure: ensureInfo
       });
     } catch (error) {
       res.status(500).json({

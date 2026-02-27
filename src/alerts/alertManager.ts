@@ -390,7 +390,8 @@ export class AlertManager extends EventEmitter {
       await this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, Math.max(1, Math.round(durationSec)));
 
       let publicUrl: string | null = null;
-      if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const isArchiveOnlyClip = /\.farc$/i.test(clipPath);
+      if (!isArchiveOnlyClip && process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
         publicUrl = await this.videoStorage.uploadVideoToSupabase(
           videoId,
           clipPath,

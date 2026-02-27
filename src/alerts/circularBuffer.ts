@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { EventEmitter } from 'events';
+import { writeFrameArchive } from '../video/frameArchive';
 
 interface FrameData {
   data: Buffer;
@@ -126,9 +127,25 @@ export class CircularVideoBuffer extends EventEmitter {
       fs.mkdirSync(alertDir, { recursive: true });
     }
 
-    const filename = `${alertId}_ch${this.channel}_${type}_${Date.now()}.h264`;
+    const archiveOnly = String(process.env.ALERT_ARCHIVE_ONLY ?? 'true').toLowerCase() !== 'false';
+    const ext = archiveOnly ? 'farc' : 'h264';
+    const filename = `${alertId}_ch${this.channel}_${type}_${Date.now()}.${ext}`;
     const filepath = path.join(alertDir, filename);
-    
+
+    if (archiveOnly) {
+      writeFrameArchive(
+        filepath,
+        frames.map((f) => ({
+          timestampMs: f.timestamp.getTime(),
+          isIFrame: !!f.isIFrame,
+          data: f.data
+        }))
+      );
+      const stats = fs.statSync(filepath);
+      console.log(`✅ ${type}-event archive written: ${filepath} (${stats.size} bytes, ${frames.length} frames)`);
+      return filepath;
+    }
+
     return new Promise((resolve, reject) => {
       const stream = fs.createWriteStream(filepath);
       
