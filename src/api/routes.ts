@@ -135,6 +135,54 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     );
     return result.rows.length > 0 ? result.rows[0] : null;
   };
+  const parseAlertMetadata = (raw: any) => {
+    if (!raw) return {};
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw || '{}'); } catch { return {}; }
+    }
+    return raw;
+  };
+  const backfillAlertMediaLinks = async (alertId: string, row: any) => {
+    const deviceId = String(row?.device_id || '').trim();
+    const channel = Number(row?.channel || 1);
+    const alertTs = new Date(row?.timestamp);
+    if (!deviceId || Number.isNaN(alertTs.getTime())) {
+      return { screenshotsLinked: 0, videosLinked: 0 };
+    }
+
+    const linkWindowSeconds = Math.max(15, Math.min(300, Number(process.env.ALERT_MEDIA_LINK_WINDOW_SECONDS || 90)));
+    const channelSpan = Math.max(0, Math.min(2, Number(process.env.ALERT_MEDIA_LINK_CHANNEL_SPAN || 1)));
+    const from = new Date(alertTs.getTime() - linkWindowSeconds * 1000);
+    const to = new Date(alertTs.getTime() + linkWindowSeconds * 1000);
+    const vFrom = new Date(alertTs.getTime() - (linkWindowSeconds + 30) * 1000);
+    const vTo = new Date(alertTs.getTime() + (linkWindowSeconds + 60) * 1000);
+
+    const screenshotsRes = await dbQuery(
+      `UPDATE images
+       SET alert_id = $1
+       WHERE alert_id IS NULL
+         AND device_id = $2
+         AND channel BETWEEN GREATEST($3 - $4, 1) AND ($3 + $4)
+         AND timestamp BETWEEN $5 AND $6`,
+      [alertId, deviceId, channel, channelSpan, from, to]
+    );
+
+    const videosRes = await dbQuery(
+      `UPDATE videos
+       SET alert_id = $1
+       WHERE alert_id IS NULL
+         AND device_id = $2
+         AND channel BETWEEN GREATEST($3 - $4, 1) AND ($3 + $4)
+         AND start_time BETWEEN $5 AND $6
+         AND video_type IN ('alert_pre', 'alert_post', 'camera_sd', 'manual')`,
+      [alertId, deviceId, channel, channelSpan, vFrom, vTo]
+    );
+
+    return {
+      screenshotsLinked: Number(screenshotsRes.rowCount || 0),
+      videosLinked: Number(videosRes.rowCount || 0)
+    };
+  };
   const parseResourceTime = (value: string): Date | null => {
     if (!value || typeof value !== 'string') return null;
     const isoLike = value.replace(' ', 'T');
@@ -1550,6 +1598,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
 
       const db = require('../storage/database');
+      const linked = await backfillAlertMediaLinks(id, row);
       const alertTs = new Date(row.timestamp);
       const fallbackFrom = new Date(alertTs.getTime() - minutesWindow * 60 * 1000);
       const fallbackTo = new Date(alertTs.getTime() + minutesWindow * 60 * 1000);
@@ -1616,7 +1665,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           alertTimestamp: row.timestamp,
           count: screenshots.length,
           screenshots,
-          byChannel
+          byChannel,
+          linked
         }
       });
     } catch (error: any) {
@@ -1642,6 +1692,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         });
       }
 
+      const linked = await backfillAlertMediaLinks(id, row);
       let ensureInfo: any = null;
       if (ensureMedia) {
         try {
@@ -1655,14 +1706,33 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
 
       const db = require('../storage/database');
+      const alertTs = new Date(row.timestamp);
+      const fallbackFrom = new Date(alertTs.getTime() - 120 * 1000);
+      const fallbackTo = new Date(alertTs.getTime() + 120 * 1000);
       const [screensResult, videosResult] = await Promise.all([
         db.query(
-          `SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
-           FROM images
-           WHERE alert_id = $1
-           ORDER BY timestamp DESC
+          `WITH direct AS (
+             SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+             FROM images
+             WHERE alert_id = $1
+           ),
+           fallback AS (
+             SELECT id, device_id, channel, storage_url, file_size, timestamp, alert_id
+             FROM images
+             WHERE alert_id IS NULL
+               AND device_id = $2
+               AND timestamp BETWEEN $3 AND $4
+               AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
+           )
+           SELECT DISTINCT ON (id) id, device_id, channel, storage_url, file_size, timestamp, alert_id
+           FROM (
+             SELECT * FROM direct
+             UNION ALL
+             SELECT * FROM fallback
+           ) q
+           ORDER BY id, timestamp DESC
            LIMIT 100`,
-          [id]
+          [id, row.device_id, fallbackFrom, fallbackTo, Number(row.channel || 1)]
         ),
         db.query(
           `SELECT id, device_id, channel, video_type, file_path, storage_url, file_size, start_time, end_time, duration_seconds, created_at, alert_id
@@ -1673,9 +1743,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         )
       ]);
 
-      const metadata = typeof row.metadata === 'string'
-        ? JSON.parse(row.metadata || '{}')
-        : (row.metadata || {});
+      const metadata = parseAlertMetadata(row.metadata);
       const videoClips = metadata?.videoClips || {};
 
       const screenshots = screensResult.rows.map((img: any) => ({
@@ -1722,7 +1790,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             preRaw: normalizePublicVideoUrl(videoClips.preStorageUrl || videoClips.pre, `/api/alerts/${encodeURIComponent(id)}/video/pre`),
             postRaw: normalizePublicVideoUrl(videoClips.postStorageUrl || videoClips.post, `/api/alerts/${encodeURIComponent(id)}/video/post`)
           },
-          ensure: ensureInfo
+          ensure: ensureInfo,
+          linked
         }
       });
     } catch (error: any) {
@@ -1770,6 +1839,9 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         message: `Alert ${id} not found`
       });
     }
+
+    const rowForLink = await loadAlertRow(id);
+    const linked = rowForLink ? await backfillAlertMediaLinks(id, rowForLink) : { screenshotsLinked: 0, videosLinked: 0 };
 
     const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
     let ensureInfo: any = null;
@@ -1842,7 +1914,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
           screenshots: screenshots.rows
         },
-        ensure: ensureInfo
+        ensure: ensureInfo,
+        linked
       });
     } catch (error) {
       res.json({
@@ -1869,7 +1942,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 	          postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
 	            Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20))
         },
-        ensure: ensureInfo
+        ensure: ensureInfo,
+        linked
       });
     }
   });
@@ -2126,6 +2200,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
 
       const alert = alertResult.rows[0];
+      const linked = await backfillAlertMediaLinks(id, alert);
       const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
       let ensureInfo: any = null;
       if (ensureMedia) {
@@ -2171,7 +2246,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       );
 
       // Extract video paths from metadata
-      const videoClips = alert.metadata?.videoClips || {};
+      const alertMetadata = parseAlertMetadata(alert.metadata);
+      const videoClips = alertMetadata?.videoClips || {};
 
       const minClipSeconds = Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20));
       const preDuration = Number(videoClips.preDuration || 0);
@@ -2258,7 +2334,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         has_pre_event: hasPreEvent,
         has_post_event: hasPostEvent,
         has_camera_video: hasCameraVideo,
-        ensure: ensureInfo
+        ensure: ensureInfo,
+        linked
       });
     } catch (error) {
       res.status(500).json({
