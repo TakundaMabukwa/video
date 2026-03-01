@@ -5,6 +5,7 @@ import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
+import { getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
 
 export enum AlertPriority {
   LOW = 'low',
@@ -1007,64 +1008,30 @@ export class AlertManager extends EventEmitter {
     }
 
     if (signal.startsWith('adas_')) {
-      const codeMatch = signal.match(/^adas_(\d{5})_/);
-      const code = codeMatch ? Number(codeMatch[1]) : null;
-      const adasMap: Record<number, { label: string; meaning: string }> = {
-        10001: { label: 'ADAS: Forward Collision Warning', meaning: 'Forward collision warning event reported by ADAS.' },
-        10002: { label: 'ADAS: Lane Departure Alarm', meaning: 'Lane departure event reported by ADAS.' },
-        10003: { label: 'ADAS: Following Distance Too Close', meaning: 'Following distance too close event reported by ADAS.' },
-        10004: { label: 'ADAS: Pedestrian Collision Alarm', meaning: 'Pedestrian collision warning event reported by ADAS.' },
-        10005: { label: 'ADAS: Frequent Lane Change Alarm', meaning: 'Frequent lane change event reported by ADAS.' },
-        10006: { label: 'ADAS: Road Sign Over-Limit Alarm', meaning: 'Road sign over-limit event reported by ADAS.' },
-        10007: { label: 'ADAS: Obstruction Alarm', meaning: 'Obstruction event reported by ADAS.' },
-        10008: { label: 'ADAS: Assistance Function Failure', meaning: 'Driver assistance function failure reported by ADAS.' },
-        10016: { label: 'ADAS: Road Sign Identification Event', meaning: 'Road sign identification event reported by ADAS.' },
-        10017: { label: 'ADAS: Active Capture Event', meaning: 'Active capture event reported by ADAS.' }
-      };
-      const mapped = code ? adasMap[code] : null;
+      const mapped = getVendorAlarmBySignalCode(signal);
       return {
         code: signal,
-        label: mapped?.label || signal,
+        label: mapped?.type || signal,
         meaning: mapped?.meaning || 'ADAS vendor pass-through signal.',
         source: 'Vendor pass-through (0x0900)'
       };
     }
 
     if (signal.startsWith('dms_')) {
-      const codeMatch = signal.match(/^dms_(\d{5})_/);
-      const code = codeMatch ? Number(codeMatch[1]) : null;
-      const dmsMap: Record<number, { label: string; meaning: string }> = {
-        10101: { label: 'DMS: Fatigue Driving Alarm', meaning: 'Fatigue driving event reported by DMS.' },
-        10102: { label: 'DMS: Handheld Phone Alarm', meaning: 'Handheld phone usage event reported by DMS.' },
-        10103: { label: 'DMS: Smoking Alarm', meaning: 'Smoking event reported by DMS.' },
-        10104: { label: 'DMS: Forward Camera Invisible Too Long', meaning: 'Forward camera invisible event reported by DMS.' },
-        10105: { label: 'DMS: Driver Alarm Not Detected', meaning: 'Driver alarm not detected event reported by DMS.' },
-        10106: { label: 'DMS: Both Hands Off Steering Wheel', meaning: 'Hands-off-steering event reported by DMS.' },
-        10107: { label: 'DMS: Behavior Monitoring Failure', meaning: 'Driver behavior monitoring function failure reported by DMS.' },
-        10116: { label: 'DMS: Automatic Capture Event', meaning: 'Automatic capture event reported by DMS.' },
-        10117: { label: 'DMS: Driver Change', meaning: 'Driver change event reported by DMS.' }
-      };
-      const mapped = code ? dmsMap[code] : null;
+      const mapped = getVendorAlarmBySignalCode(signal);
       return {
         code: signal,
-        label: mapped?.label || signal,
+        label: mapped?.type || signal,
         meaning: mapped?.meaning || 'DMS vendor pass-through signal.',
         source: 'Vendor pass-through (0x0900)'
       };
     }
 
     if (signal.startsWith('behavior_')) {
-      const codeMatch = signal.match(/^behavior_(\d{5})_/);
-      const code = codeMatch ? Number(codeMatch[1]) : null;
-      const behaviorMap: Record<number, { label: string; meaning: string }> = {
-        11201: { label: 'Rapid Acceleration', meaning: 'Rapid acceleration event reported by terminal behavior analysis.' },
-        11202: { label: 'Rapid Deceleration', meaning: 'Rapid deceleration event reported by terminal behavior analysis.' },
-        11203: { label: 'Sharp Turn', meaning: 'Sharp turn event reported by terminal behavior analysis.' }
-      };
-      const mapped = code ? behaviorMap[code] : null;
+      const mapped = getVendorAlarmBySignalCode(signal);
       return {
         code: signal,
-        label: mapped?.label || signal,
+        label: mapped?.type || signal,
         meaning: mapped?.meaning || 'Behavior vendor pass-through signal.',
         source: 'Vendor pass-through (0x0900)'
       };

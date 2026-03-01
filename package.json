@@ -7,7 +7,8 @@
     "build": "tsc",
     "dev": "ts-node src/index.ts",
     "start": "node dist/index.js",
-    "start:cluster": "pm2 start dist/index.js -i 4 --name video-server"
+    "start:cluster": "pm2 start dist/index.js -i 4 --name video-server",
+    "test:vendor-alerts": "ts-node src/tests/vendor-alert-conformance.ts"
   },
   "dependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",

@@ -1987,6 +1987,76 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  router.get('/protocol/vendor-alert-codes', (_req, res) => {
+    const catalog = tcpServer.getVendorAlertCatalog();
+    res.json({
+      success: true,
+      count: catalog.length,
+      strictMode: String(process.env.ALERT_MODE || 'strict').trim().toLowerCase() === 'strict',
+      data: catalog
+    });
+  });
+
+  router.get('/protocol/vendor-alert-telemetry', (_req, res) => {
+    res.json({
+      success: true,
+      data: tcpServer.getVendorAlertTelemetry()
+    });
+  });
+
+  router.get('/protocol/vendor-alert-review', async (req, res) => {
+    try {
+      const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+      const rows = await dbQuery(
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata,
+                is_false_alert, false_alert_reason, false_alert_reason_code
+         FROM alerts
+         WHERE (metadata->>'vendorCodeMapped')::boolean = true
+            OR metadata ? 'alarmCode'
+         ORDER BY timestamp DESC
+         LIMIT $1`,
+        [limit]
+      );
+
+      const review = rows.rows.map((row: any) => {
+        const metadata = parseAlertMetadata(row.metadata);
+        return {
+          id: row.id,
+          vehicleId: row.device_id,
+          channel: row.channel,
+          type: row.alert_type,
+          priority: row.priority,
+          status: row.status,
+          timestamp: row.timestamp,
+          alarmCode: metadata.alarmCode ?? null,
+          sourceMessageId: metadata.sourceMessageId ?? null,
+          sourceType: metadata.sourceType ?? null,
+          extractionMethod: metadata.extractionMethod ?? null,
+          confidence: metadata.confidence ?? null,
+          domain: metadata.domain ?? null,
+          isFalseAlert: !!row.is_false_alert,
+          falseAlertReason: row.false_alert_reason || null,
+          falseAlertReasonCode: row.false_alert_reason_code || null
+        };
+      });
+
+      const falsePositives = review.filter((r: any) => r.isFalseAlert).length;
+      res.json({
+        success: true,
+        count: review.length,
+        falsePositiveCount: falsePositives,
+        falsePositiveRate: review.length ? Number((falsePositives / review.length).toFixed(4)) : 0,
+        data: review
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to load vendor alert review',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Serve screenshot by image row id (local fallback when storage URL is missing/failed)
   router.get('/images/:id/file', async (req, res) => {
     const { id } = req.params;

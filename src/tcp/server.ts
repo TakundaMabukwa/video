@@ -1,6 +1,7 @@
 import * as net from 'net';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { JTT808Parser } from './parser';
 import { JTT1078Commands } from './commands';
@@ -14,6 +15,7 @@ import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
 import { RawIngestLogger } from '../logging/rawIngestLogger';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
+import { getKnownVendorCodes, getVendorAlarmByCode, getVendorAlarmCatalog } from '../protocol/vendorAlarmCatalog';
 
 type ScreenshotFallbackResult = {
   ok: boolean;
@@ -76,6 +78,21 @@ type PendingScreenshotRequest = {
   createdAt: number;
 };
 
+type VendorExtractionMethod = 'numeric_be' | 'numeric_le' | 'ascii_code' | 'framed_peripheral';
+type VendorConfidence = 'high' | 'medium' | 'low';
+
+type VendorMappedAlert = {
+  type: string;
+  priority: AlertPriority;
+  signalCode: string;
+  channel?: number;
+  alarmCode?: number;
+  extractionMethod?: VendorExtractionMethod;
+  confidence?: VendorConfidence;
+  sourceType?: 'pass_through' | 'location_extension' | 'global_payload';
+  domain?: string;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -95,6 +112,12 @@ export class JTT808Server {
   private recentMessageTraces: MessageTraceEntry[] = [];
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
+  private readonly vendorDecoderVersion = 'vendor-catalog-v1';
+  private vendorAlertTelemetry = {
+    emittedBySourceCode: new Map<string, number>(),
+    suppressedByReason: new Map<string, number>(),
+    parseFailuresByReason: new Map<string, number>()
+  };
   private readonly maxMessageTraceBuffer = Math.max(
     50,
     Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
@@ -150,6 +173,56 @@ export class JTT808Server {
 
   getAlertManager(): AlertManager {
     return this.alertManager;
+  }
+
+  getVendorAlertCatalog() {
+    return getVendorAlarmCatalog().map((entry) => ({
+      ...entry,
+      codeHex: `0x${entry.code.toString(16)}`
+    }));
+  }
+
+  getVendorAlertTelemetry() {
+    const mapToObject = (map: Map<string, number>) =>
+      Array.from(map.entries()).reduce<Record<string, number>>((acc, [k, v]) => {
+        acc[k] = v;
+        return acc;
+      }, {});
+
+    return {
+      decoderVersion: this.vendorDecoderVersion,
+      emittedBySourceCode: mapToObject(this.vendorAlertTelemetry.emittedBySourceCode),
+      suppressedByReason: mapToObject(this.vendorAlertTelemetry.suppressedByReason),
+      parseFailuresByReason: mapToObject(this.vendorAlertTelemetry.parseFailuresByReason)
+    };
+  }
+
+  private bumpVendorTelemetry(
+    bucket: keyof JTT808Server['vendorAlertTelemetry'],
+    key: string
+  ): void {
+    const store = this.vendorAlertTelemetry[bucket];
+    store.set(key, (store.get(key) || 0) + 1);
+  }
+
+  private isStrictAlertMode(): boolean {
+    const mode = String(process.env.ALERT_MODE || 'strict').trim().toLowerCase();
+    return mode === 'strict';
+  }
+
+  private buildPayloadHash(payload: Buffer): string {
+    if (!payload || payload.length === 0) return '';
+    return crypto.createHash('sha256').update(payload).digest('hex');
+  }
+
+  private isVendorAlertEmittable(mapped: VendorMappedAlert): boolean {
+    if (!this.isStrictAlertMode()) return true;
+    const confidence = mapped.confidence || 'low';
+    if (confidence === 'low') {
+      this.bumpVendorTelemetry('suppressedByReason', 'low_confidence');
+      return false;
+    }
+    return true;
   }
 
   setRTPHandler(handler: (buffer: Buffer, vehicleId: string) => void): void {
@@ -374,16 +447,23 @@ export class JTT808Server {
   }
 
   private detectVendorAlarmsFromAnyProtocol(message: any): void {
+    const enabled = String(process.env.PARSE_VENDOR_ALARMS_FROM_UNKNOWN_MESSAGES ?? (this.isStrictAlertMode() ? 'false' : 'true')).toLowerCase() === 'true';
+    if (!enabled) return;
     const body: Buffer = message?.body || Buffer.alloc(0);
     if (!body.length) return;
 
-    const vendorMappedList = this.detectVendorAlarmsFromPayload(body);
+    const vendorMappedList = this.detectVendorAlarmsFromPayload(body, 'global_payload');
     if (!vendorMappedList.length) return;
 
     const last = this.lastKnownLocation.get(message.terminalPhone);
     const sourceMessageId = `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`;
 
     for (const vendorMapped of vendorMappedList) {
+      if (!this.isVendorAlertEmittable(vendorMapped)) continue;
+      this.bumpVendorTelemetry(
+        'emittedBySourceCode',
+        `global_payload:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
+      );
       void this.alertManager.processExternalAlert({
         vehicleId: message.terminalPhone,
         channel: vendorMapped.channel || 1,
@@ -395,8 +475,14 @@ export class JTT808Server {
         metadata: {
           sourceMessageId,
           vendorCodeMapped: true,
+          sourceType: vendorMapped.sourceType || 'global_payload',
+          extractionMethod: vendorMapped.extractionMethod || null,
+          confidence: vendorMapped.confidence || null,
+          decoderVersion: this.vendorDecoderVersion,
+          domain: vendorMapped.domain || null,
           alarmCode: vendorMapped.alarmCode ?? null,
           parser: 'global_vendor_alarm_sweep',
+          rawPayloadHash: this.buildPayloadHash(body),
           rawBodyHex: body.toString('hex').slice(0, 1024)
         }
       });
@@ -627,6 +713,11 @@ export class JTT808Server {
       // Also process any vendor-coded alarms found in additional info extensions.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(message.body);
       for (const vendorMapped of vendorMappedList) {
+        if (!this.isVendorAlertEmittable(vendorMapped)) continue;
+        this.bumpVendorTelemetry(
+          'emittedBySourceCode',
+          `location_extension:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
+        );
         void this.alertManager.processExternalAlert({
           vehicleId: alert.vehicleId,
           channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
@@ -638,8 +729,14 @@ export class JTT808Server {
           metadata: {
             sourceMessageId: '0x0200',
             vendorCodeMapped: true,
+            sourceType: vendorMapped.sourceType || 'location_extension',
+            extractionMethod: vendorMapped.extractionMethod || null,
+            confidence: vendorMapped.confidence || null,
+            decoderVersion: this.vendorDecoderVersion,
+            domain: vendorMapped.domain || null,
             alarmCode: vendorMapped.alarmCode ?? null,
-            locationAdditionalInfoId: vendorMapped.infoId ?? null
+            locationAdditionalInfoId: vendorMapped.infoId ?? null,
+            rawPayloadHash: this.buildPayloadHash(message.body)
           }
         });
       }
@@ -773,6 +870,11 @@ export class JTT808Server {
       // Also process vendor-coded alarms from extension payloads.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(itemBody);
       for (const vendorMapped of vendorMappedList) {
+        if (!this.isVendorAlertEmittable(vendorMapped)) continue;
+        this.bumpVendorTelemetry(
+          'emittedBySourceCode',
+          `location_extension:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
+        );
         void this.alertManager.processExternalAlert({
           vehicleId: alert.vehicleId,
           channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
@@ -784,8 +886,14 @@ export class JTT808Server {
           metadata: {
             sourceMessageId: '0x0704',
             vendorCodeMapped: true,
+            sourceType: vendorMapped.sourceType || 'location_extension',
+            extractionMethod: vendorMapped.extractionMethod || null,
+            confidence: vendorMapped.confidence || null,
+            decoderVersion: this.vendorDecoderVersion,
+            domain: vendorMapped.domain || null,
             alarmCode: vendorMapped.alarmCode ?? null,
-            locationAdditionalInfoId: vendorMapped.infoId ?? null
+            locationAdditionalInfoId: vendorMapped.infoId ?? null,
+            rawPayloadHash: this.buildPayloadHash(itemBody)
           }
         });
       }
@@ -828,11 +936,17 @@ export class JTT808Server {
       passThroughType,
       payload,
       combinedText,
-      alarmParsingEnabled
+      alarmParsingEnabled,
+      'pass_through'
     );
     const last = this.lastKnownLocation.get(message.terminalPhone);
 
     for (const parsed of parsedList) {
+      if (!this.isVendorAlertEmittable(parsed)) continue;
+      this.bumpVendorTelemetry(
+        'emittedBySourceCode',
+        `pass_through:${parsed.alarmCode ?? parsed.signalCode}`
+      );
       void this.alertManager.processExternalAlert({
         vehicleId: message.terminalPhone,
         channel: parsed.channel || 1,
@@ -843,11 +957,17 @@ export class JTT808Server {
         location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
         metadata: {
           sourceMessageId: '0x0900',
+          sourceType: parsed.sourceType || 'pass_through',
+          extractionMethod: parsed.extractionMethod || null,
+          confidence: parsed.confidence || null,
+          decoderVersion: this.vendorDecoderVersion,
+          domain: parsed.domain || null,
           passThroughType,
           passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
           alarmCode: parsed.alarmCode ?? null,
           decodedText: decoded || null,
           payloadPreview: preview,
+          rawPayloadHash: this.buildPayloadHash(payload),
           rawPayloadHex: payload.toString('hex').slice(0, 1024)
         }
       });
@@ -865,7 +985,10 @@ export class JTT808Server {
         signalCode: parsed.signalCode,
         priority: parsed.priority,
         alarmCode: parsed.alarmCode ?? null,
-        channel: parsed.channel || 1
+        channel: parsed.channel || 1,
+        extractionMethod: parsed.extractionMethod || null,
+        confidence: parsed.confidence || null,
+        sourceType: parsed.sourceType || 'pass_through'
       }))
     });
 
@@ -899,8 +1022,9 @@ export class JTT808Server {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
     }
-    // Default: parse all pass-through types for vendor alarm codes (deterministic code matching only).
-    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? 'true').toLowerCase() === 'true';
+    // Strict default: only explicitly-approved types unless env opts into parse-all.
+    const strictDefault = this.isStrictAlertMode() ? 'false' : 'true';
+    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? strictDefault).toLowerCase() === 'true';
     if (parseAllTypes) return true;
 
     // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
@@ -923,18 +1047,24 @@ export class JTT808Server {
     passThroughType: number,
     payload: Buffer,
     text: string,
-    allowHeuristicBinaryDecode: boolean
-  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
+    allowHeuristicBinaryDecode: boolean,
+    sourceType: VendorMappedAlert['sourceType']
+  ): VendorMappedAlert[] {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
-    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const strictMode = this.isStrictAlertMode();
+    if (!allowHeuristicBinaryDecode && strictMode) {
+      this.bumpVendorTelemetry('suppressedByReason', `pass_through_type_not_whitelisted_${passThroughType}`);
+      return [];
+    }
+    const results: VendorMappedAlert[] = [];
     const seen = new Set<string>();
-    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+    const add = (item: VendorMappedAlert | null) => {
       if (!item) return;
       const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      results.push(item);
+      results.push({ ...item, sourceType });
     };
 
     // Vendor-observed compact video alarm payload on pass-through type 0xA1:
@@ -953,18 +1083,37 @@ export class JTT808Server {
     const codeFromTextList = this.extractAllAlarmCodesFromText(text);
     for (const codeFromText of codeFromTextList) {
       const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
-      if (mapped) add({ ...mapped, channel, alarmCode: codeFromText });
+      if (mapped) {
+        add({
+          ...mapped,
+          channel,
+          alarmCode: codeFromText,
+          extractionMethod: 'ascii_code',
+          confidence: strictMode ? 'medium' : 'high'
+        });
+      }
     }
 
     // Binary decode is only attempted for pass-through types aligned to alarm payloads.
     if (!allowHeuristicBinaryDecode) {
+      if (strictMode && results.length === 0) {
+        this.bumpVendorTelemetry('suppressedByReason', 'strict_no_deterministic_code');
+      }
       return results;
     }
 
     // Decode Appendix-A framed peripheral payloads first.
     const framed = this.decodePeripheralProtocolFrames(payload);
     for (const frame of framed) {
-      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, true);
+      if (strictMode && !frame.validChecksum) {
+        this.bumpVendorTelemetry('suppressedByReason', 'invalid_peripheral_checksum');
+        continue;
+      }
+      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, true, {
+        strictMode,
+        extractionMethod: 'framed_peripheral',
+        requireDeterministic: true
+      });
       for (const mapped of mappedList) add(mapped);
     }
 
@@ -972,11 +1121,27 @@ export class JTT808Server {
     if (payload.length >= 2) {
       const firstBe = payload.readUInt16BE(0);
       const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
-      if (mappedBe) add({ ...mappedBe, channel, alarmCode: firstBe });
+      if (mappedBe) {
+        add({
+          ...mappedBe,
+          channel,
+          alarmCode: firstBe,
+          extractionMethod: 'numeric_be',
+          confidence: 'high'
+        });
+      }
 
       const firstLe = payload.readUInt16LE(0);
       const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
-      if (mappedLe) add({ ...mappedLe, channel, alarmCode: firstLe });
+      if (mappedLe) {
+        add({
+          ...mappedLe,
+          channel,
+          alarmCode: firstLe,
+          extractionMethod: 'numeric_le',
+          confidence: 'high'
+        });
+      }
     }
 
     return results;
@@ -985,7 +1150,7 @@ export class JTT808Server {
   private decodeCompactA1VideoAlarm(
     passThroughType: number,
     payload: Buffer
-  ): { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null {
+  ): VendorMappedAlert | null {
     if (passThroughType !== 0xA1) return null;
     if (!payload || payload.length < 1) return null;
 
@@ -1000,7 +1165,13 @@ export class JTT808Server {
     const maybeChannel = payload.length >= 2 ? payload.readUInt8(1) : 0;
     const channel = maybeChannel >= 1 && maybeChannel <= 32 ? maybeChannel : undefined;
 
-    return { ...mapped, channel, alarmCode };
+    return {
+      ...mapped,
+      channel,
+      alarmCode,
+      extractionMethod: 'numeric_be',
+      confidence: 'high'
+    };
   }
 
   private inferLocationAlertChannel(alert: LocationAlert): number {
@@ -1044,11 +1215,11 @@ export class JTT808Server {
 
   private detectVendorAlarmsFromLocationBody(
     body: Buffer
-  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number }> {
+  ): Array<VendorMappedAlert & { infoId?: number }> {
     if (!body || body.length <= 28) return [];
-    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number }> = [];
+    const results: Array<VendorMappedAlert & { infoId?: number }> = [];
     const seen = new Set<string>();
-    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number; infoId?: number } | null) => {
+    const add = (item: (VendorMappedAlert & { infoId?: number }) | null) => {
       if (!item) return;
       const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}|${item.infoId ?? ''}`;
       if (seen.has(key)) return;
@@ -1067,7 +1238,7 @@ export class JTT808Server {
       // Also allow known vendor blocks if configured by environment.
       const isVendorExtensionInfo = this.isVendorAlarmLocationInfoId(infoId);
       if (isVendorExtensionInfo) {
-        const mappedList = this.detectVendorAlarmsFromPayload(infoData);
+        const mappedList = this.detectVendorAlarmsFromPayload(infoData, 'location_extension');
         for (const mapped of mappedList) {
           add({ ...mapped, infoId });
         }
@@ -1078,42 +1249,68 @@ export class JTT808Server {
   }
 
   private detectVendorAlarmsFromPayload(
-    payload: Buffer
-  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
+    payload: Buffer,
+    sourceType: VendorMappedAlert['sourceType']
+  ): VendorMappedAlert[] {
     if (!payload || payload.length === 0) return [];
-    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const strictMode = this.isStrictAlertMode();
+    const results: VendorMappedAlert[] = [];
     const seen = new Set<string>();
-    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+    const add = (item: VendorMappedAlert | null) => {
       if (!item) return;
       const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
-      results.push(item);
+      results.push({ ...item, sourceType });
     };
 
     // JT/T 808 Appendix A peripheral frames are commonly embedded in pass-through payloads.
     // Decode framed content first and inspect user-data for known alarm codes/text.
     const peripheralFrames = this.decodePeripheralProtocolFrames(payload);
     for (const frame of peripheralFrames) {
-      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, false);
+      if (strictMode && !frame.validChecksum) {
+        this.bumpVendorTelemetry('suppressedByReason', 'invalid_peripheral_checksum');
+        continue;
+      }
+      const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, false, {
+        strictMode,
+        extractionMethod: 'framed_peripheral',
+        requireDeterministic: true
+      });
       for (const mapped of mappedList) add(mapped);
     }
 
-    // Fallback: inspect the raw payload directly.
-    const mappedRaw = this.mapVendorAlarmsFromBytes(payload, true);
-    for (const mapped of mappedRaw) add(mapped);
+    // Fallback raw scan is disabled in strict mode to reduce false positives.
+    if (!strictMode) {
+      const mappedRaw = this.mapVendorAlarmsFromBytes(payload, true, {
+        strictMode: false,
+        extractionMethod: 'ascii_code',
+        requireDeterministic: false
+      });
+      for (const mapped of mappedRaw) add(mapped);
+    } else if (results.length === 0) {
+      this.bumpVendorTelemetry('suppressedByReason', 'strict_raw_scan_disabled');
+    }
 
     return results;
   }
 
   private mapVendorAlarmsFromBytes(
     payload: Buffer,
-    allowPlatformVideoCodes: boolean
-  ): Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> {
+    allowPlatformVideoCodes: boolean,
+    options?: {
+      strictMode?: boolean;
+      extractionMethod?: VendorExtractionMethod;
+      requireDeterministic?: boolean;
+    }
+  ): VendorMappedAlert[] {
     if (!payload || payload.length === 0) return [];
-    const results: Array<{ type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number }> = [];
+    const strictMode = options?.strictMode ?? this.isStrictAlertMode();
+    const extractionMethod = options?.extractionMethod || 'ascii_code';
+    const requireDeterministic = options?.requireDeterministic ?? strictMode;
+    const results: VendorMappedAlert[] = [];
     const seen = new Set<string>();
-    const add = (item: { type: string; priority: AlertPriority; signalCode: string; channel?: number; alarmCode?: number } | null) => {
+    const add = (item: VendorMappedAlert | null) => {
       if (!item) return;
       const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
       if (seen.has(key)) return;
@@ -1130,12 +1327,26 @@ export class JTT808Server {
     const mergedCodes = new Set<number>();
     const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
     for (const c of codeFromTextList) mergedCodes.add(c);
-    const codeFromBinaryList = this.extractAllAlarmCodesFromBinary(payload);
-    for (const c of codeFromBinaryList) mergedCodes.add(c);
+    if (!strictMode) {
+      const codeFromBinaryList = this.extractAllAlarmCodesFromBinary(payload);
+      for (const c of codeFromBinaryList) mergedCodes.add(c);
+    }
 
     for (const code of mergedCodes) {
       const mapped = this.mapVendorAlarmCode(code, { allowPlatformVideoCodes });
-      if (mapped) add({ ...mapped, channel, alarmCode: code });
+      if (mapped) {
+        add({
+          ...mapped,
+          channel,
+          alarmCode: code,
+          extractionMethod,
+          confidence: extractionMethod === 'ascii_code' ? 'medium' : 'high'
+        });
+      }
+    }
+
+    if (requireDeterministic && results.length === 0) {
+      this.bumpVendorTelemetry('parseFailuresByReason', 'no_mapped_vendor_codes');
     }
 
     return results;
@@ -1144,12 +1355,7 @@ export class JTT808Server {
   private extractAllAlarmCodesFromBinary(payload: Buffer): number[] {
     if (!payload || payload.length === 0) return [];
     const result = new Set<number>();
-    const known = new Set<number>([
-      0x0101, 0x0102, 0x0103, 0x0104, 0x0105, 0x0106, 0x0107,
-      10001, 10002, 10003, 10004, 10005, 10006, 10007, 10008, 10016, 10017,
-      10101, 10102, 10103, 10104, 10105, 10106, 10107, 10116, 10117,
-      11201, 11202, 11203
-    ]);
+    const known = getKnownVendorCodes();
 
     // Scan every 2-byte window (BE/LE) for mapped codes.
     for (let i = 0; i <= payload.length - 2; i++) {
@@ -1328,16 +1534,17 @@ export class JTT808Server {
 
   private extractAllAlarmCodesFromText(text: string): number[] {
     if (!text) return [];
+    const known = getKnownVendorCodes();
     const result = new Set<number>();
     const hexMatches = text.match(/\b0x([0-9a-f]{4})\b/gi) || [];
     for (const m of hexMatches) {
       const n = parseInt(m.replace(/^0x/i, ''), 16);
-      if (Number.isFinite(n)) result.add(n);
+      if (Number.isFinite(n) && known.has(n)) result.add(n);
     }
-    const decMatches = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/g) || [];
+    const decMatches = text.match(/\b\d{5}\b/g) || [];
     for (const m of decMatches) {
       const n = Number(m);
-      if (Number.isFinite(n)) result.add(n);
+      if (Number.isFinite(n) && known.has(n)) result.add(n);
     }
     return Array.from(result.values());
   }
@@ -1345,88 +1552,15 @@ export class JTT808Server {
   private mapVendorAlarmCode(
     code: number,
     options: { allowPlatformVideoCodes?: boolean } = {}
-  ): { type: string; priority: AlertPriority; signalCode: string } | null {
-    const allowPlatformVideoCodes = options.allowPlatformVideoCodes ?? true;
-    const map: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
-      0x0101: { type: 'Video Signal Loss', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0101' },
-      0x0102: { type: 'Video Signal Blocking', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0102' },
-      0x0103: { type: 'Storage Unit Failure', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0103' },
-      0x0104: { type: 'Other Video Equipment Failure', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0104' },
-      0x0105: { type: 'Bus Overcrowding', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0105' },
-      0x0106: { type: 'Abnormal Driving Behavior', priority: AlertPriority.HIGH, signalCode: 'platform_video_alarm_0106' },
-      0x0107: { type: 'Special Alarm Threshold', priority: AlertPriority.MEDIUM, signalCode: 'platform_video_alarm_0107' },
-
-      10001: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
-      10002: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
-      10003: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
-      10004: { type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' },
-      10005: { type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' },
-      10006: { type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' },
-      10007: { type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' },
-      10008: { type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' },
-      10016: { type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' },
-      10017: { type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' },
-
-      10101: { type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
-      10102: { type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
-      10103: { type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
-      10104: { type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' },
-      10105: { type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' },
-      10106: { type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' },
-      10107: { type: 'DMS: Driver behavior monitoring failure', priority: AlertPriority.MEDIUM, signalCode: 'dms_10107_behavior_monitoring_failure' },
-      10116: { type: 'DMS: Automatic capture event', priority: AlertPriority.LOW, signalCode: 'dms_10116_automatic_capture_event' },
-      10117: { type: 'DMS: Driver change', priority: AlertPriority.LOW, signalCode: 'dms_10117_driver_change' },
-
-      11201: { type: 'Rapid acceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11201_rapid_acceleration' },
-      11202: { type: 'Rapid deceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11202_rapid_deceleration' },
-      11203: { type: 'Sharp turn', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11203_sharp_turn' }
+  ): { type: string; priority: AlertPriority; signalCode: string; domain?: string } | null {
+    const entry = getVendorAlarmByCode(code, options);
+    if (!entry) return null;
+    return {
+      type: entry.type,
+      priority: entry.defaultPriority as AlertPriority,
+      signalCode: entry.signalCode,
+      domain: entry.domain
     };
-
-    if (!allowPlatformVideoCodes && code >= 0x0101 && code <= 0x0107) {
-      return null;
-    }
-    return map[code] || null;
-  }
-
-  private mapVendorAlarmText(text: string): { type: string; priority: AlertPriority; signalCode: string } | null {
-    if (!text) return null;
-    const candidates: Array<{ re: RegExp; map: { type: string; priority: AlertPriority; signalCode: string } }> = [
-      { re: /\bseat\s*belt\s*detected\b/i, map: { type: 'Seatbelt Detection', priority: AlertPriority.MEDIUM, signalCode: 'vendor_seatbelt_detected' } },
-      { re: /\bno\s+driver\s+detected\b/i, map: { type: 'No Driver Detected', priority: AlertPriority.HIGH, signalCode: 'vendor_no_driver_detected' } },
-      { re: /\bcamera\s+(obstructed|blocked|covered)\b/i, map: { type: 'Camera Obstructed', priority: AlertPriority.HIGH, signalCode: 'vendor_camera_obstructed' } },
-      { re: /\bidle\s+alert\b/i, map: { type: 'Idle Alert', priority: AlertPriority.MEDIUM, signalCode: 'vendor_idle_alert' } },
-      { re: /\bforward\s+collision\s+warning\b/i, map: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' } },
-      { re: /\blane\s+departure\s+alarm\b/i, map: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' } },
-      { re: /\b(distance\s+is\s+too\s+close|too\s+close\s+to\s+the\s+alarm|following\s+distance)\b/i, map: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' } },
-      { re: /\bpedestrian\s+collision\s+alarm\b/i, map: { type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' } },
-      { re: /\bfrequent\s+lane\s+change\s+alarm\b/i, map: { type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' } },
-      { re: /\broad\s+sign\s+over[-\s]?limit\s+alarm\b/i, map: { type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' } },
-      { re: /\bobstruction\s+alarm\b/i, map: { type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' } },
-      { re: /\b(driver\s+assistance\s+function\s+failure\s+alarm|assist(?:ance)?\s+function\s+failure)\b/i, map: { type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' } },
-      { re: /\broad\s+sign\s+identification\s+event\b/i, map: { type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' } },
-      { re: /\b(active(?:ly)?\s+capture(?:\s+the)?\s+event)\b/i, map: { type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' } },
-
-      { re: /\bfatigue\s+driving\s+alarm\b/i, map: { type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' } },
-      { re: /\b(handheld\s+phone\s+alarm|receive\s+handheld\s+phone\s+alarm)\b/i, map: { type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' } },
-      { re: /\bsmoking\s+alarm\b/i, map: { type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' } },
-      { re: /\b(invisible\s+forward\s+alarm\s+for\s+a\s+long\s+time|forward\s+camera\s+invisible)\b/i, map: { type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' } },
-      { re: /\bdriver\s+alarm\s+not\s+detected\b/i, map: { type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' } },
-      { re: /\b(both\s+hands?\s+are\s+off\s+the\s+steering\s+wheel|hands?\s+off\s+steering)\b/i, map: { type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' } },
-      { re: /\b(driver\s+behavior\s+monitoring\s+function\s+failure|behavior\s+monitoring\s+failure)\b/i, map: { type: 'DMS: Driver behavior monitoring failure', priority: AlertPriority.MEDIUM, signalCode: 'dms_10107_behavior_monitoring_failure' } },
-      { re: /\bautomatic\s+capture\s+event\b/i, map: { type: 'DMS: Automatic capture event', priority: AlertPriority.LOW, signalCode: 'dms_10116_automatic_capture_event' } },
-      { re: /\bdriver\s+change\b/i, map: { type: 'DMS: Driver change', priority: AlertPriority.LOW, signalCode: 'dms_10117_driver_change' } },
-
-      { re: /\brapid\s+acceleration\b/i, map: { type: 'Rapid acceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11201_rapid_acceleration' } },
-      { re: /\brapid\s+deceleration\b/i, map: { type: 'Rapid deceleration', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11202_rapid_deceleration' } },
-      { re: /\bsharp\s+turn\b/i, map: { type: 'Sharp turn', priority: AlertPriority.MEDIUM, signalCode: 'behavior_11203_sharp_turn' } }
-    ];
-
-    for (const entry of candidates) {
-      if (entry.re.test(text)) {
-        return entry.map;
-      }
-    }
-    return null;
   }
 
   private processAlert(alert: LocationAlert): void {
