@@ -5,67 +5,85 @@ import { supabase, ensureBucket } from './supabase';
 
 export class ImageStorage {
   private bucketReady: Promise<string>;
+  private readonly localRoot: string;
 
   constructor() {
     this.bucketReady = ensureBucket();
+    this.localRoot = path.join(process.cwd(), 'media', 'images');
+    try {
+      fs.mkdirSync(this.localRoot, { recursive: true });
+    } catch {}
+  }
+
+  private buildLocalPath(relativeFilePath: string): string {
+    return path.join(this.localRoot, relativeFilePath);
   }
 
   async saveImage(deviceId: string, channel: number, imageData: Buffer, alertId?: string): Promise<string> {
     const bucketName = await this.bucketReady;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${deviceId}/ch${channel}/${timestamp}.jpg`;
+    const relativeFilePath = `${deviceId}/ch${channel}/${timestamp}.jpg`;
+    const localPath = this.buildLocalPath(relativeFilePath);
 
-    // Check file size (Supabase limit: 300MB)
+    // Always persist a local copy for reliable fallback serving.
+    try {
+      fs.mkdirSync(path.dirname(localPath), { recursive: true });
+      fs.writeFileSync(localPath, imageData);
+    } catch (err: any) {
+      console.error(`Failed to persist local screenshot ${localPath}:`, err?.message || err);
+    }
+
+    // Supabase size limit guard.
     const maxSize = 300 * 1024 * 1024; // 300MB
     if (imageData.length > maxSize) {
-      console.error(`❌ Image too large: ${(imageData.length / 1024 / 1024).toFixed(2)}MB (max 300MB)`);
-      // Save to database without Supabase upload
       const result = await query(
         `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [deviceId, channel, filename, 'local-only', imageData.length, new Date(), alertId || null]
+        [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
       );
-      return result.rows[0].id;
+      const id = result.rows[0].id;
+      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
+      return id;
     }
 
-    // Upload to Supabase Storage
-    const { data, error } = await supabase.storage
+    // Try upload to Supabase.
+    const { error } = await supabase.storage
       .from(bucketName)
-      .upload(filename, imageData, {
+      .upload(relativeFilePath, imageData, {
         contentType: 'image/jpeg',
         upsert: false
       });
 
     if (error) {
-      console.error('Supabase upload failed:', error);
-      // Save to database anyway
       const result = await query(
         `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [deviceId, channel, filename, 'upload-failed', imageData.length, new Date(), alertId || null]
+        [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
       );
-      return result.rows[0].id;
+      const id = result.rows[0].id;
+      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
+      return id;
     }
 
-    // Get public URL
     const { data: urlData } = supabase.storage
       .from(bucketName)
-      .getPublicUrl(filename);
+      .getPublicUrl(relativeFilePath);
 
-    const storageUrl = urlData.publicUrl;
-
-    // Save to database
+    const publicUrl = urlData?.publicUrl || '';
     const result = await query(
       `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [deviceId, channel, filename, storageUrl, imageData.length, new Date(), alertId || null]
+      [deviceId, channel, relativeFilePath, publicUrl, imageData.length, new Date(), alertId || null]
     );
 
-    console.log(`📸 Image uploaded: ${storageUrl}`);
-    return result.rows[0].id;
+    const id = result.rows[0].id;
+    if (!publicUrl) {
+      await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
+    }
+    return id;
   }
 
   async saveImageFromPath(deviceId: string, channel: number, localPath: string, fileSize: number, alertId?: string): Promise<string> {
@@ -75,10 +93,10 @@ export class ImageStorage {
 
   async getImages(deviceId: string, limit: number = 50) {
     const result = await query(
-      `SELECT id, device_id, channel, storage_url, file_size, timestamp 
-       FROM images 
-       WHERE device_id = $1 
-       ORDER BY timestamp DESC 
+      `SELECT id, device_id, channel, storage_url, file_size, timestamp
+       FROM images
+       WHERE device_id = $1
+       ORDER BY timestamp DESC
        LIMIT $2`,
       [deviceId, limit]
     );
@@ -87,12 +105,13 @@ export class ImageStorage {
 
   async getAlertImages(alertId: string) {
     const result = await query(
-      `SELECT id, device_id, channel, storage_url, file_size, timestamp 
-       FROM images 
-       WHERE alert_id = $1 
+      `SELECT id, device_id, channel, storage_url, file_size, timestamp
+       FROM images
+       WHERE alert_id = $1
        ORDER BY timestamp DESC`,
       [alertId]
     );
     return result.rows;
   }
 }
+

@@ -128,7 +128,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   const loadAlertRow = async (alertId: string): Promise<any | null> => {
     const db = require('../storage/database');
     const result = await db.query(
-      `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+      `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, metadata,
+              resolution_notes, resolved_by, resolved_at,
+              closure_type, closure_subtype,
+              resolution_reason_code, resolution_reason_label,
+              ncr_document_url, ncr_document_name,
+              report_document_url, report_document_name, report_document_type,
+              is_false_alert, false_alert_reason, false_alert_reason_code
        FROM alerts
        WHERE id = $1`,
       [alertId]
@@ -196,6 +202,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (s && /^https?:\/\//i.test(s)) return s;
     if (s && s.startsWith('/api/')) return s;
     return fallback;
+  };
+  const normalizePublicImageUrl = (img: any) => {
+    const raw = String(img?.storage_url || '').trim();
+    if (raw && /^https?:\/\//i.test(raw)) return raw;
+    if (raw && raw.startsWith('/api/')) return raw;
+    if (img?.id) return `/api/images/${encodeURIComponent(String(img.id))}/file`;
+    return '';
   };
   const transcodeCache = new Map<string, Promise<string>>();
   const getFfmpegBinary = () => {
@@ -1191,7 +1204,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           id: img.id,
           deviceId: img.device_id,
           channel: img.channel,
-          url: img.storage_url,
+          url: normalizePublicImageUrl(img),
           fileSize: img.file_size,
           timestamp: img.timestamp
         }))
@@ -1246,7 +1259,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           id: img.id,
           deviceId: img.device_id,
           channel: img.channel,
-          url: img.storage_url,
+          url: normalizePublicImageUrl(img),
           fileSize: img.file_size,
           timestamp: img.timestamp
         }))
@@ -1646,7 +1659,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         channel: Number(img.channel || 1),
         timestamp: img.timestamp,
         fileSize: Number(img.file_size || 0),
-        url: img.storage_url
+        url: normalizePublicImageUrl(img)
       }));
 
       const byChannel: Record<string, any[]> = {};
@@ -1753,7 +1766,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         channel: Number(img.channel || 1),
         timestamp: img.timestamp,
         fileSize: Number(img.file_size || 0),
-        url: img.storage_url
+        url: normalizePublicImageUrl(img)
       }));
       const videos = videosResult.rows.map((v: any) => ({
         id: v.id,
@@ -1765,7 +1778,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         duration: Number(v.duration_seconds || 0),
         fileSize: Number(v.file_size || 0),
         filePath: v.file_path,
-        url: v.storage_url
+        url: normalizePublicVideoUrl(v.storage_url || v.file_path, `/api/alerts/${encodeURIComponent(id)}/video/camera`)
       }));
 
       return res.json({
@@ -1812,7 +1825,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (!alert) {
       try {
         const dbAlert = await dbQuery(
-          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+          `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, metadata,
+                  resolution_notes, resolved_by, resolved_at,
+                  closure_type, closure_subtype,
+                  resolution_reason_code, resolution_reason_label,
+                  ncr_document_url, ncr_document_name,
+                  report_document_url, report_document_name, report_document_type,
+                  is_false_alert, false_alert_reason, false_alert_reason_code
            FROM alerts
            WHERE id = $1`,
           [id]
@@ -1826,8 +1845,24 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             type: row.alert_type,
             priority: row.priority,
             status: row.status,
+            resolved: !!row.resolved,
             timestamp: row.timestamp,
-            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {})
+            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {}),
+            resolution_notes: row.resolution_notes,
+            resolved_by: row.resolved_by,
+            resolved_at: row.resolved_at,
+            closure_type: row.closure_type,
+            closure_subtype: row.closure_subtype,
+            resolution_reason_code: row.resolution_reason_code,
+            resolution_reason_label: row.resolution_reason_label,
+            ncr_document_url: row.ncr_document_url,
+            ncr_document_name: row.ncr_document_name,
+            report_document_url: row.report_document_url,
+            report_document_name: row.report_document_name,
+            report_document_type: row.report_document_type,
+            is_false_alert: !!row.is_false_alert,
+            false_alert_reason: row.false_alert_reason,
+            false_alert_reason_code: row.false_alert_reason_code
           };
         }
       } catch {}
@@ -1912,7 +1947,11 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 	            Number(alert?.metadata?.videoClips?.preDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
           postIncidentReady: !!(alert?.metadata?.videoClips?.post || alert?.metadata?.videoClips?.postStorageUrl) &&
             Number(alert?.metadata?.videoClips?.postDuration || 0) >= Math.max(3, Number(process.env.MIN_ALERT_CLIP_SECONDS || 20)),
-          screenshots: screenshots.rows
+          screenshots: screenshots.rows.map((img: any) => ({
+            ...img,
+            url: normalizePublicImageUrl(img),
+            storage_url: normalizePublicImageUrl(img)
+          }))
         },
         ensure: ensureInfo,
         linked
@@ -1944,6 +1983,45 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         },
         ensure: ensureInfo,
         linked
+      });
+    }
+  });
+
+  // Serve screenshot by image row id (local fallback when storage URL is missing/failed)
+  router.get('/images/:id/file', async (req, res) => {
+    const { id } = req.params;
+    try {
+      const db = require('../storage/database');
+      const result = await db.query(
+        `SELECT id, file_path, storage_url FROM images WHERE id = $1 LIMIT 1`,
+        [id]
+      );
+      if (!result.rows.length) {
+        return res.status(404).json({ success: false, message: 'Image not found' });
+      }
+      const row = result.rows[0];
+
+      // If a valid http URL exists, redirect to it.
+      const external = String(row.storage_url || '').trim();
+      if (external && /^https?:\/\//i.test(external)) {
+        return res.redirect(external);
+      }
+
+      const rel = String(row.file_path || '').replace(/^\/+/, '');
+      const localPath = path.join(process.cwd(), 'media', 'images', rel);
+      if (!fs.existsSync(localPath)) {
+        return res.status(404).json({ success: false, message: 'Local image file not found' });
+      }
+
+      const ext = path.extname(localPath).toLowerCase();
+      if (ext === '.jpg' || ext === '.jpeg') res.setHeader('Content-Type', 'image/jpeg');
+      if (ext === '.png') res.setHeader('Content-Type', 'image/png');
+      return res.sendFile(path.resolve(localPath));
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to serve image file',
+        error: error?.message || String(error)
       });
     }
   });
@@ -2130,7 +2208,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const db = require('../storage/database');
 
       // Get alert and its history from database
-      const [alertResult, historyResult] = await Promise.all([
+      const [alertResult, historyResult, resolutionEventsResult] = await Promise.all([
         db.query('SELECT * FROM alerts WHERE id = $1', [id]),
         db.query(
           `SELECT action_type, action_by, action_at, notes 
@@ -2138,7 +2216,23 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
            WHERE alert_id = $1 
            ORDER BY action_at DESC`,
           [id]
-        ).catch(() => ({ rows: [] })) // Table may not exist
+        ).catch(() => ({ rows: [] })), // Table may not exist
+        db.query(
+          `SELECT action_type,
+                  actor as action_by,
+                  created_at as action_at,
+                  notes,
+                  reason_code,
+                  reason_label,
+                  closure_type,
+                  document_url,
+                  document_name,
+                  document_type
+           FROM alert_resolution_events
+           WHERE alert_id = $1
+           ORDER BY created_at DESC`,
+          [id]
+        ).catch(() => ({ rows: [] }))
       ]);
 
       if (alertResult.rows.length === 0) {
@@ -2150,8 +2244,15 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       const alert = alertResult.rows[0];
 
-      // Build history from alert data if history table is empty
-      const history = historyResult.rows.length > 0 ? historyResult.rows : [
+      const combinedHistory = [
+        ...historyResult.rows,
+        ...resolutionEventsResult.rows
+      ].sort((a: any, b: any) =>
+        new Date(b?.action_at || 0).getTime() - new Date(a?.action_at || 0).getTime()
+      );
+
+      // Build history from alert data if no dedicated history tables are present
+      const history = combinedHistory.length > 0 ? combinedHistory : [
         { action_type: 'created', action_at: alert.timestamp, notes: null },
         ...(alert.acknowledged_at ? [{ action_type: 'acknowledged', action_at: alert.acknowledged_at, notes: null }] : []),
         ...(alert.escalated_at ? [{ action_type: 'escalated', action_at: alert.escalated_at, notes: null }] : []),
@@ -2887,6 +2988,87 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
+  // Unified close endpoint: supports notes + dropdown reason + NCR/report document metadata
+  router.post('/alerts/:id/close', async (req, res) => {
+    const { id } = req.params;
+    const {
+      closureType,
+      notes,
+      actor,
+      reasonCode,
+      reasonLabel,
+      documentUrl,
+      documentName,
+      documentType,
+      payload
+    } = req.body || {};
+
+    const normalizedClosureType = String(closureType || 'resolved').toLowerCase();
+    const allowed = new Set(['resolved', 'false_alert', 'ncr', 'report']);
+    if (!allowed.has(normalizedClosureType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid closureType. Use one of: resolved, false_alert, ncr, report'
+      });
+    }
+    if (!notes || String(notes).trim().length < 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Resolution notes required (minimum 5 characters)'
+      });
+    }
+
+    try {
+      const alertStorage = require('../storage/alertStorageDB');
+      const storage = new alertStorage.AlertStorageDB();
+      const success = await storage.closeAlertWithDetails({
+        alertId: id,
+        closureType: normalizedClosureType,
+        notes: String(notes).trim(),
+        actor: actor || null,
+        reasonCode: reasonCode || null,
+        reasonLabel: reasonLabel || null,
+        documentUrl: documentUrl || null,
+        documentName: documentName || null,
+        documentType: documentType || null,
+        payload: payload || {}
+      });
+
+      // Best effort: resolve in-memory alert state too.
+      try {
+        const alertManager = tcpServer.getAlertManager();
+        await alertManager.resolveAlert(id, String(notes).trim(), actor || undefined);
+      } catch {}
+
+      if (!success) {
+        return res.status(404).json({
+          success: false,
+          message: `Alert ${id} not found`
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: `Alert ${id} closed`,
+        data: {
+          alertId: id,
+          closureType: normalizedClosureType,
+          reasonCode: reasonCode || null,
+          reasonLabel: reasonLabel || null,
+          documentUrl: documentUrl || null,
+          documentName: documentName || null,
+          documentType: documentType || null
+        }
+      });
+    } catch (error: any) {
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to close alert',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
   // Mark alert as false alert
   router.post('/alerts/:id/mark-false', async (req, res) => {
     const { id } = req.params;
@@ -2947,7 +3129,11 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       res.json({
         success: true,
-        screenshots: result.rows,
+        screenshots: result.rows.map((img: any) => ({
+          ...img,
+          url: normalizePublicImageUrl(img),
+          storage_url: normalizePublicImageUrl(img)
+        })),
         total: result.rows.length,
         count: result.rows.length,
         lastUpdate: new Date()

@@ -2,6 +2,112 @@ import { query } from './database';
 import { AlertEvent } from '../alerts/alertManager';
 
 export class AlertStorageDB {
+  private async recordResolutionEvent(
+    alertId: string,
+    data: {
+      actionType: string;
+      actor?: string;
+      notes?: string;
+      reasonCode?: string;
+      reasonLabel?: string;
+      closureType?: string;
+      documentUrl?: string;
+      documentName?: string;
+      documentType?: string;
+      payload?: Record<string, any>;
+    }
+  ): Promise<void> {
+    await query(
+      `INSERT INTO alert_resolution_events
+       (alert_id, action_type, actor, notes, reason_code, reason_label, closure_type, document_url, document_name, document_type, payload)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        alertId,
+        data.actionType,
+        data.actor || null,
+        data.notes || null,
+        data.reasonCode || null,
+        data.reasonLabel || null,
+        data.closureType || null,
+        data.documentUrl || null,
+        data.documentName || null,
+        data.documentType || null,
+        JSON.stringify(data.payload || {})
+      ]
+    );
+  }
+
+  async closeAlertWithDetails(input: {
+    alertId: string;
+    closureType: 'resolved' | 'false_alert' | 'ncr' | 'report';
+    notes: string;
+    actor?: string;
+    reasonCode?: string;
+    reasonLabel?: string;
+    documentUrl?: string;
+    documentName?: string;
+    documentType?: string;
+    payload?: Record<string, any>;
+  }): Promise<boolean> {
+    const closureSubtype =
+      input.closureType === 'resolved' ? 'manual' : input.closureType;
+    const isFalse = input.closureType === 'false_alert';
+
+    const result = await query(
+      `UPDATE alerts
+       SET status = 'resolved',
+           resolved = TRUE,
+           resolved_at = NOW(),
+           resolution_notes = $1,
+           resolved_by = $2,
+           closure_type = $3,
+           closure_subtype = $4,
+           resolution_reason_code = $5,
+           resolution_reason_label = $6,
+           is_false_alert = $7,
+           false_alert_reason = CASE WHEN $7 THEN $1 ELSE false_alert_reason END,
+           false_alert_reason_code = CASE WHEN $7 THEN $5 ELSE false_alert_reason_code END,
+           ncr_document_url = CASE WHEN $3 = 'ncr' THEN $8 ELSE ncr_document_url END,
+           ncr_document_name = CASE WHEN $3 = 'ncr' THEN $9 ELSE ncr_document_name END,
+           report_document_url = CASE WHEN $3 = 'report' THEN $8 ELSE report_document_url END,
+           report_document_name = CASE WHEN $3 = 'report' THEN $9 ELSE report_document_name END,
+           report_document_type = CASE WHEN $3 = 'report' THEN $10 ELSE report_document_type END,
+           closure_payload = COALESCE($11::jsonb, '{}'::jsonb)
+       WHERE id = $12`,
+      [
+        input.notes,
+        input.actor || null,
+        input.closureType === 'resolved' ? 'manual' : input.closureType,
+        closureSubtype,
+        input.reasonCode || null,
+        input.reasonLabel || null,
+        isFalse,
+        input.documentUrl || null,
+        input.documentName || null,
+        input.documentType || null,
+        JSON.stringify(input.payload || {}),
+        input.alertId
+      ]
+    );
+
+    const ok = (result.rowCount || 0) > 0;
+    if (ok) {
+      await this.recordResolutionEvent(input.alertId, {
+        actionType: input.closureType === 'resolved' ? 'resolved' : input.closureType,
+        actor: input.actor,
+        notes: input.notes,
+        reasonCode: input.reasonCode,
+        reasonLabel: input.reasonLabel,
+        closureType: input.closureType,
+        documentUrl: input.documentUrl,
+        documentName: input.documentName,
+        documentType: input.documentType,
+        payload: input.payload
+      });
+    }
+    return ok;
+  }
+
   async saveAlert(alert: AlertEvent) {
     await query(
       `INSERT INTO alerts (id, device_id, channel, alert_type, priority, status, resolved, escalation_level, timestamp, latitude, longitude, metadata)
@@ -51,21 +157,15 @@ export class AlertStorageDB {
     ncrDocumentUrl?: string,
     ncrDocumentName?: string
   ): Promise<boolean> {
-    const result = await query(
-      `UPDATE alerts
-       SET status = 'resolved',
-           resolved = TRUE,
-           resolved_at = NOW(),
-           resolution_notes = $1,
-           resolved_by = $2,
-           closure_type = 'ncr',
-           ncr_document_url = $3,
-           ncr_document_name = $4,
-           is_false_alert = FALSE
-       WHERE id = $5`,
-      [notes, resolvedBy || null, ncrDocumentUrl || null, ncrDocumentName || null, alertId]
-    );
-    return (result.rowCount || 0) > 0;
+    return this.closeAlertWithDetails({
+      alertId,
+      closureType: 'ncr',
+      notes,
+      actor: resolvedBy,
+      documentUrl: ncrDocumentUrl,
+      documentName: ncrDocumentName,
+      documentType: 'ncr'
+    });
   }
 
   async markAsFalseAlert(
@@ -74,20 +174,14 @@ export class AlertStorageDB {
     markedBy?: string,
     reasonCode?: string
   ): Promise<boolean> {
-    const result = await query(
-      `UPDATE alerts
-       SET is_false_alert = TRUE,
-           false_alert_reason = $1,
-           false_alert_reason_code = $2,
-           resolved_by = $3,
-           resolved_at = NOW(),
-           status = 'resolved',
-           resolved = TRUE,
-           closure_type = 'false_alert'
-       WHERE id = $4`,
-      [reason, reasonCode || null, markedBy || null, alertId]
-    );
-    return (result.rowCount || 0) > 0;
+    return this.closeAlertWithDetails({
+      alertId,
+      closureType: 'false_alert',
+      notes: reason,
+      actor: markedBy,
+      reasonCode,
+      reasonLabel: reason
+    });
   }
 
   async getUnattendedAlerts(minutesThreshold: number = 30) {
