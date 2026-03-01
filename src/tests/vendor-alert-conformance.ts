@@ -5,6 +5,7 @@ import { getVendorAlarmByCode, getVendorAlarmBySignalCode } from '../protocol/ve
 
 const run = () => {
   process.env.ALERT_MODE = 'strict';
+  process.env.STRICT_VENDOR_PASS_THROUGH_TYPES = '0xA1';
 
   const server = new JTT808Server(0, 0) as any;
   const alertManager = new AlertManager() as any;
@@ -33,14 +34,17 @@ const run = () => {
   );
   assert.equal(phraseOnly.length, 0, 'Expected no alert from phrase-only payload');
 
-  // 4) Duplicate code in payload should dedupe to a single alert.
-  const duplicate = server.mapVendorAlarmsFromBytes(
-    Buffer.from('10117 10117 10117', 'ascii'),
+  // 4) Duplicate deterministic mapping paths should dedupe to a single alert.
+  // For pass-through type 0xA1, compact decoder + first WORD decoder can resolve same 0x0101.
+  const duplicate = server.extractPassThroughAlarms(
+    0xA1,
+    Buffer.from([0x01, 0x01, 0x00, 0x00]),
+    '',
     true,
-    { strictMode: true, extractionMethod: 'ascii_code', requireDeterministic: true }
+    'pass_through'
   );
   assert.equal(duplicate.length, 1, 'Expected duplicate code dedupe');
-  assert.equal(duplicate[0].signalCode, 'dms_10117_driver_change');
+  assert.equal(duplicate[0].signalCode, 'platform_video_alarm_0101');
 
   // 5) Catalog and signal labeling must be consistent.
   const catalogSignal = getVendorAlarmBySignalCode('dms_10102_handheld_phone_alarm');

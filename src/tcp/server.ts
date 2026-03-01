@@ -218,8 +218,8 @@ export class JTT808Server {
   private isVendorAlertEmittable(mapped: VendorMappedAlert): boolean {
     if (!this.isStrictAlertMode()) return true;
     const confidence = mapped.confidence || 'low';
-    if (confidence === 'low') {
-      this.bumpVendorTelemetry('suppressedByReason', 'low_confidence');
+    if (confidence !== 'high') {
+      this.bumpVendorTelemetry('suppressedByReason', `strict_non_high_confidence_${confidence}`);
       return false;
     }
     return true;
@@ -447,7 +447,10 @@ export class JTT808Server {
   }
 
   private detectVendorAlarmsFromAnyProtocol(message: any): void {
-    const enabled = String(process.env.PARSE_VENDOR_ALARMS_FROM_UNKNOWN_MESSAGES ?? (this.isStrictAlertMode() ? 'false' : 'true')).toLowerCase() === 'true';
+    const strictMode = this.isStrictAlertMode();
+    const strictAllowGlobalSweep = String(process.env.ENABLE_STRICT_GLOBAL_VENDOR_SWEEP ?? 'false').toLowerCase() === 'true';
+    if (strictMode && !strictAllowGlobalSweep) return;
+    const enabled = String(process.env.PARSE_VENDOR_ALARMS_FROM_UNKNOWN_MESSAGES ?? (strictMode ? 'false' : 'true')).toLowerCase() === 'true';
     if (!enabled) return;
     const body: Buffer = message?.body || Buffer.alloc(0);
     if (!body.length) return;
@@ -1023,12 +1026,34 @@ export class JTT808Server {
       return false;
     }
     // Strict default: only explicitly-approved types unless env opts into parse-all.
-    const strictDefault = this.isStrictAlertMode() ? 'false' : 'true';
+    const strictMode = this.isStrictAlertMode();
+    const strictAllowParseAll = String(process.env.STRICT_ALLOW_PARSE_ALL_PASS_THROUGH ?? 'false').toLowerCase() === 'true';
+    const strictDefault = strictMode ? 'false' : 'true';
     const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? strictDefault).toLowerCase() === 'true';
+    if (strictMode && parseAllTypes && !strictAllowParseAll) {
+      this.bumpVendorTelemetry('suppressedByReason', 'strict_parse_all_pass_through_disabled');
+      return false;
+    }
     if (parseAllTypes) return true;
 
-    // JT/T 808 Table 93: serial pass-through (0x41/0x42) and user-defined (0xF0~0xFF)
-    // are the only types likely to carry proprietary ADAS/DMS alarm payloads.
+    if (strictMode) {
+      // Strict mode only allows explicitly configured pass-through types.
+      // Example: STRICT_VENDOR_PASS_THROUGH_TYPES=0xA1
+      const strictRaw = String(process.env.STRICT_VENDOR_PASS_THROUGH_TYPES || process.env.ALARM_PASS_THROUGH_TYPES || '').trim();
+      if (!strictRaw) {
+        this.bumpVendorTelemetry('suppressedByReason', 'strict_pass_through_types_not_configured');
+        return false;
+      }
+      const strictTypes = strictRaw
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10))
+        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xFF);
+      return strictTypes.includes(passThroughType);
+    }
+
+    // Non-strict defaults.
     if (passThroughType === 0x41 || passThroughType === 0x42) return true;
     if (passThroughType >= 0xF0 && passThroughType <= 0xFF) return true;
 
@@ -1061,7 +1086,7 @@ export class JTT808Server {
     const seen = new Set<string>();
     const add = (item: VendorMappedAlert | null) => {
       if (!item) return;
-      const key = `${item.signalCode}|${item.alarmCode ?? ''}|${item.channel ?? ''}`;
+      const key = `${item.signalCode}|${item.alarmCode ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
       results.push({ ...item, sourceType });
@@ -1078,19 +1103,20 @@ export class JTT808Server {
       });
     }
 
-    // Always attempt explicit documented code extraction from text preview.
-    // This is deterministic and does not rely on payload-type assumptions.
-    const codeFromTextList = this.extractAllAlarmCodesFromText(text);
-    for (const codeFromText of codeFromTextList) {
-      const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
-      if (mapped) {
-        add({
-          ...mapped,
-          channel,
-          alarmCode: codeFromText,
-          extractionMethod: 'ascii_code',
-          confidence: strictMode ? 'medium' : 'high'
-        });
+    const strictAllowTextCodes = String(process.env.STRICT_VENDOR_ALLOW_TEXT_CODES ?? 'false').toLowerCase() === 'true';
+    if (!strictMode || strictAllowTextCodes) {
+      const codeFromTextList = this.extractAllAlarmCodesFromText(text);
+      for (const codeFromText of codeFromTextList) {
+        const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
+        if (mapped) {
+          add({
+            ...mapped,
+            channel,
+            alarmCode: codeFromText,
+            extractionMethod: 'ascii_code',
+            confidence: strictMode ? 'medium' : 'high'
+          });
+        }
       }
     }
 
@@ -1117,31 +1143,36 @@ export class JTT808Server {
       for (const mapped of mappedList) add(mapped);
     }
 
-    // Deterministic fallback: some terminals place the alarm code in the first WORD.
-    if (payload.length >= 2) {
-      const firstBe = payload.readUInt16BE(0);
-      const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
-      if (mappedBe) {
-        add({
-          ...mappedBe,
-          channel,
-          alarmCode: firstBe,
-          extractionMethod: 'numeric_be',
-          confidence: 'high'
-        });
-      }
+    const allowFirstWordFallback = String(process.env.STRICT_VENDOR_ALLOW_FIRST_WORD_FALLBACK ?? 'false').toLowerCase() === 'true';
+    // Deterministic first-word fallback is disabled in strict mode by default.
+    if (!strictMode || allowFirstWordFallback) {
+      if (payload.length >= 2) {
+        const firstBe = payload.readUInt16BE(0);
+        const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
+        if (mappedBe) {
+          add({
+            ...mappedBe,
+            channel,
+            alarmCode: firstBe,
+            extractionMethod: 'numeric_be',
+            confidence: 'high'
+          });
+        }
 
-      const firstLe = payload.readUInt16LE(0);
-      const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
-      if (mappedLe) {
-        add({
-          ...mappedLe,
-          channel,
-          alarmCode: firstLe,
-          extractionMethod: 'numeric_le',
-          confidence: 'high'
-        });
+        const firstLe = payload.readUInt16LE(0);
+        const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
+        if (mappedLe) {
+          add({
+            ...mappedLe,
+            channel,
+            alarmCode: firstLe,
+            extractionMethod: 'numeric_le',
+            confidence: 'high'
+          });
+        }
       }
+    } else {
+      this.bumpVendorTelemetry('suppressedByReason', 'strict_first_word_fallback_disabled');
     }
 
     return results;
@@ -1325,9 +1356,12 @@ export class JTT808Server {
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
     const mergedCodes = new Set<number>();
-    const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
-    for (const c of codeFromTextList) mergedCodes.add(c);
-    if (!strictMode) {
+    if (strictMode) {
+      const strictCodes = this.extractStrictDeterministicVendorCodes(payload);
+      for (const c of strictCodes) mergedCodes.add(c);
+    } else {
+      const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
+      for (const c of codeFromTextList) mergedCodes.add(c);
       const codeFromBinaryList = this.extractAllAlarmCodesFromBinary(payload);
       for (const c of codeFromBinaryList) mergedCodes.add(c);
     }
@@ -1385,8 +1419,12 @@ export class JTT808Server {
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
-    // JT/T 808-2011 location additional-info defines custom extension area as 0xE1~0xFF.
-    // Keep strict default on documented custom range; allow override by env when a vendor spec is confirmed.
+    // In strict mode we require explicit configuration of vendor extension IDs.
+    if (this.isStrictAlertMode() && !process.env.LOCATION_VENDOR_ALARM_INFO_IDS) {
+      this.bumpVendorTelemetry('suppressedByReason', 'strict_location_vendor_ids_not_configured');
+      return false;
+    }
+    // JT/T 808 custom extension area is often 0xE1~0xFF; non-strict fallback keeps this range.
     const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0xE1-0xFF');
     const tokens = raw
       .split(',')
@@ -1546,6 +1584,28 @@ export class JTT808Server {
       const n = Number(m);
       if (Number.isFinite(n) && known.has(n)) result.add(n);
     }
+    return Array.from(result.values());
+  }
+
+  private extractStrictDeterministicVendorCodes(payload: Buffer): number[] {
+    if (!payload || payload.length === 0) return [];
+    const known = getKnownVendorCodes();
+    const result = new Set<number>();
+
+    // Strict mode only accepts deterministic leading-field candidates.
+    if (payload.length >= 2) {
+      const firstBe = payload.readUInt16BE(0);
+      const firstLe = payload.readUInt16LE(0);
+      if (known.has(firstBe)) result.add(firstBe);
+      if (known.has(firstLe)) result.add(firstLe);
+    }
+    if (payload.length >= 4) {
+      const firstBe32 = payload.readUInt32BE(0);
+      const firstLe32 = payload.readUInt32LE(0);
+      if (known.has(firstBe32)) result.add(firstBe32);
+      if (known.has(firstLe32)) result.add(firstLe32);
+    }
+
     return Array.from(result.values());
   }
 
