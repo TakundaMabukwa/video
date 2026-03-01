@@ -207,6 +207,16 @@ export class AlertStorageDB {
     return result.rows[0];
   }
 
+  async updateAlertMetadata(alertId: string, metadata: Record<string, any>): Promise<boolean> {
+    const result = await query(
+      `UPDATE alerts
+       SET metadata = $1
+       WHERE id = $2`,
+      [JSON.stringify(metadata || {}), alertId]
+    );
+    return (result.rowCount || 0) > 0;
+  }
+
   async getAlertWithVideos(alertId: string) {
     const result = await query(
       `SELECT a.*,

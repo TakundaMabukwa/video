@@ -93,6 +93,20 @@ type VendorMappedAlert = {
   domain?: string;
 };
 
+type VehicleIdentity = {
+  vehicleId: string;
+  terminalPhone: string;
+  ipAddress?: string;
+  registeredAt?: string;
+  provinceId?: number;
+  cityId?: number;
+  manufacturerId?: string;
+  terminalModel?: string;
+  terminalId?: string;
+  plateColor?: number;
+  plateNumber?: string;
+};
+
 export class JTT808Server {
   private server: net.Server;
   private vehicles = new Map<string, Vehicle>();
@@ -112,6 +126,7 @@ export class JTT808Server {
   private recentMessageTraces: MessageTraceEntry[] = [];
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
+  private vehicleIdentityById = new Map<string, VehicleIdentity>();
   private readonly vendorDecoderVersion = 'vendor-catalog-v1';
   private vendorAlertTelemetry = {
     emittedBySourceCode: new Map<string, number>(),
@@ -441,55 +456,7 @@ export class JTT808Server {
         this.handleUnknownMessage(message, socket, buffer);
     }
 
-    // Global vendor alarm sweep across all JT/T 808 message bodies.
-    // Apply to every message type so the vendor code mapper is consistently enforced.
-    this.detectVendorAlarmsFromAnyProtocol(message);
-  }
-
-  private detectVendorAlarmsFromAnyProtocol(message: any): void {
-    const strictMode = this.isStrictAlertMode();
-    const strictAllowGlobalSweep = String(process.env.ENABLE_STRICT_GLOBAL_VENDOR_SWEEP ?? 'false').toLowerCase() === 'true';
-    if (strictMode && !strictAllowGlobalSweep) return;
-    const enabled = String(process.env.PARSE_VENDOR_ALARMS_FROM_UNKNOWN_MESSAGES ?? (strictMode ? 'false' : 'true')).toLowerCase() === 'true';
-    if (!enabled) return;
-    const body: Buffer = message?.body || Buffer.alloc(0);
-    if (!body.length) return;
-
-    const vendorMappedList = this.detectVendorAlarmsFromPayload(body, 'global_payload');
-    if (!vendorMappedList.length) return;
-
-    const last = this.lastKnownLocation.get(message.terminalPhone);
-    const sourceMessageId = `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`;
-
-    for (const vendorMapped of vendorMappedList) {
-      if (!this.isVendorAlertEmittable(vendorMapped)) continue;
-      this.bumpVendorTelemetry(
-        'emittedBySourceCode',
-        `global_payload:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
-      );
-      void this.alertManager.processExternalAlert({
-        vehicleId: message.terminalPhone,
-        channel: vendorMapped.channel || 1,
-        type: vendorMapped.type,
-        signalCode: vendorMapped.signalCode,
-        priority: vendorMapped.priority,
-        timestamp: new Date(),
-        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-        metadata: {
-          sourceMessageId,
-          vendorCodeMapped: true,
-          sourceType: vendorMapped.sourceType || 'global_payload',
-          extractionMethod: vendorMapped.extractionMethod || null,
-          confidence: vendorMapped.confidence || null,
-          decoderVersion: this.vendorDecoderVersion,
-          domain: vendorMapped.domain || null,
-          alarmCode: vendorMapped.alarmCode ?? null,
-          parser: 'global_vendor_alarm_sweep',
-          rawPayloadHash: this.buildPayloadHash(body),
-          rawBodyHex: body.toString('hex').slice(0, 1024)
-        }
-      });
-    }
+    // Intentionally no global vendor sweep: vendor alarms must come from deterministic protocol paths only.
   }
 
   private handleRTPData(buffer: Buffer, socket: net.Socket): void {
@@ -505,6 +472,14 @@ export class JTT808Server {
   private handleTerminalRegister(message: any, socket: net.Socket): void {
     const ipAddress = socket.remoteAddress?.replace('::ffff:', '') || 'unknown';
     this.deviceStorage.upsertDevice(message.terminalPhone, ipAddress);
+    const registerInfo = this.parseTerminalRegisterInfo(
+      message.body || Buffer.alloc(0),
+      message.terminalPhone,
+      ipAddress
+    );
+    if (registerInfo) {
+      this.vehicleIdentityById.set(message.terminalPhone, registerInfo);
+    }
     
     const vehicle: Vehicle = {
       id: message.terminalPhone,
@@ -536,6 +511,84 @@ export class JTT808Server {
       socket.setKeepAlive(true, 30000);
     }
     this.flushPendingCameraRequests(message.terminalPhone);
+  }
+
+  private parseTerminalRegisterInfo(body: Buffer, terminalPhone: string, ipAddress?: string): VehicleIdentity | null {
+    // JT/T 808 0x0100 terminal register body:
+    // province(2), city(2), manufacturer(5), model(20), terminalId(7), plateColor(1), plateNo(n)
+    if (!body || body.length < 37) return null;
+    try {
+      const provinceId = body.readUInt16BE(0);
+      const cityId = body.readUInt16BE(2);
+      const manufacturerId = body.slice(4, 9).toString('ascii').replace(/\0/g, '').trim() || undefined;
+      const terminalModel = this.decodeTerminalText(body.slice(9, 29)) || undefined;
+      const terminalId = this.decodeTerminalText(body.slice(29, 36)) || undefined;
+      const plateColor = body.readUInt8(36);
+      const plateNumber = this.decodeTerminalText(body.slice(37)) || undefined;
+
+      return {
+        vehicleId: terminalPhone,
+        terminalPhone,
+        ipAddress,
+        registeredAt: new Date().toISOString(),
+        provinceId,
+        cityId,
+        manufacturerId,
+        terminalModel,
+        terminalId,
+        plateColor,
+        plateNumber
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private decodeTerminalText(raw: Buffer): string {
+    if (!raw || raw.length === 0) return '';
+    const utf8 = raw.toString('utf8').replace(/\0/g, '').trim();
+    const latin = raw.toString('latin1').replace(/\0/g, '').trim();
+    const picked = utf8.length >= latin.length ? utf8 : latin;
+    return picked.replace(/[^\x20-\x7E\u00A0-\uFFFF]+/g, '').trim();
+  }
+
+  private getVehicleIdentity(vehicleId: string): VehicleIdentity {
+    const cached = this.vehicleIdentityById.get(vehicleId);
+    const vehicle = this.vehicles.get(vehicleId);
+    return {
+      vehicleId,
+      terminalPhone: vehicle?.phone || cached?.terminalPhone || vehicleId,
+      ipAddress: cached?.ipAddress,
+      registeredAt: cached?.registeredAt,
+      provinceId: cached?.provinceId,
+      cityId: cached?.cityId,
+      manufacturerId: cached?.manufacturerId,
+      terminalModel: cached?.terminalModel,
+      terminalId: cached?.terminalId,
+      plateColor: cached?.plateColor,
+      plateNumber: cached?.plateNumber
+    };
+  }
+
+  private buildAlertContextMetadata(
+    vehicleId: string,
+    sourceMessageId: string,
+    location?: { latitude: number; longitude: number }
+  ): Record<string, unknown> {
+    const identity = this.getVehicleIdentity(vehicleId);
+    const last = this.lastKnownLocation.get(vehicleId);
+    const selected = location || (last ? { latitude: last.latitude, longitude: last.longitude } : undefined);
+    return {
+      sourceMessageId,
+      vehicle: identity,
+      locationFix: selected
+        ? {
+            latitude: selected.latitude,
+            longitude: selected.longitude,
+            timestamp: (last?.timestamp || new Date()).toISOString()
+          }
+        : null
+    };
   }
 
   private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {
@@ -711,7 +764,7 @@ export class JTT808Server {
       });
 
       // Always process protocol-native alarms first.
-      this.processAlert(alert);
+      this.processAlert(alert, '0x0200');
 
       // Also process any vendor-coded alarms found in additional info extensions.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(message.body);
@@ -730,7 +783,10 @@ export class JTT808Server {
           timestamp: alert.timestamp,
           location: { latitude: alert.latitude, longitude: alert.longitude },
           metadata: {
-            sourceMessageId: '0x0200',
+            ...this.buildAlertContextMetadata(alert.vehicleId, '0x0200', {
+              latitude: alert.latitude,
+              longitude: alert.longitude
+            }),
             vendorCodeMapped: true,
             sourceType: vendorMapped.sourceType || 'location_extension',
             extractionMethod: vendorMapped.extractionMethod || null,
@@ -868,7 +924,7 @@ export class JTT808Server {
 
       const hadBefore = this.alertManager.getAlertStats().total;
       // Always process protocol-native alarms.
-      this.processAlert(alert);
+      this.processAlert(alert, '0x0704');
 
       // Also process vendor-coded alarms from extension payloads.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(itemBody);
@@ -887,7 +943,10 @@ export class JTT808Server {
           timestamp: alert.timestamp,
           location: { latitude: alert.latitude, longitude: alert.longitude },
           metadata: {
-            sourceMessageId: '0x0704',
+            ...this.buildAlertContextMetadata(alert.vehicleId, '0x0704', {
+              latitude: alert.latitude,
+              longitude: alert.longitude
+            }),
             vendorCodeMapped: true,
             sourceType: vendorMapped.sourceType || 'location_extension',
             extractionMethod: vendorMapped.extractionMethod || null,
@@ -959,7 +1018,7 @@ export class JTT808Server {
         timestamp: new Date(),
         location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
         metadata: {
-          sourceMessageId: '0x0900',
+          ...this.buildAlertContextMetadata(message.terminalPhone, '0x0900'),
           sourceType: parsed.sourceType || 'pass_through',
           extractionMethod: parsed.extractionMethod || null,
           confidence: parsed.confidence || null,
@@ -1025,47 +1084,12 @@ export class JTT808Server {
     if (!Number.isFinite(passThroughType) || passThroughType < 0 || passThroughType > 0xFF) {
       return false;
     }
-    // Strict default: only explicitly-approved types unless env opts into parse-all.
-    const strictMode = this.isStrictAlertMode();
-    const strictAllowParseAll = String(process.env.STRICT_ALLOW_PARSE_ALL_PASS_THROUGH ?? 'false').toLowerCase() === 'true';
-    const strictDefault = strictMode ? 'false' : 'true';
-    const parseAllTypes = String(process.env.PARSE_VENDOR_ALERTS_ON_ALL_PASS_THROUGH ?? strictDefault).toLowerCase() === 'true';
-    if (strictMode && parseAllTypes && !strictAllowParseAll) {
-      this.bumpVendorTelemetry('suppressedByReason', 'strict_parse_all_pass_through_disabled');
-      return false;
-    }
-    if (parseAllTypes) return true;
-
-    if (strictMode) {
-      // Strict mode only allows explicitly configured pass-through types.
-      // Example: STRICT_VENDOR_PASS_THROUGH_TYPES=0xA1
-      const strictRaw = String(process.env.STRICT_VENDOR_PASS_THROUGH_TYPES || process.env.ALARM_PASS_THROUGH_TYPES || '').trim();
-      if (!strictRaw) {
-        this.bumpVendorTelemetry('suppressedByReason', 'strict_pass_through_types_not_configured');
-        return false;
-      }
-      const strictTypes = strictRaw
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10))
-        .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xFF);
-      return strictTypes.includes(passThroughType);
-    }
-
-    // Non-strict defaults.
+    // JT/T 808 8.62 / Table 93 documented pass-through types.
+    // Keep vendor-observed compact type 0xA1 explicitly enabled as a deterministic path.
     if (passThroughType === 0x41 || passThroughType === 0x42) return true;
     if (passThroughType >= 0xF0 && passThroughType <= 0xFF) return true;
-
-    const extraRaw = String(process.env.ALARM_PASS_THROUGH_TYPES ?? '').trim();
-    if (!extraRaw) return false;
-    const extraTypes = extraRaw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => s.toLowerCase().startsWith('0x') ? parseInt(s, 16) : parseInt(s, 10))
-      .filter((n) => Number.isFinite(n) && n >= 0 && n <= 0xFF);
-    return extraTypes.includes(passThroughType);
+    if (passThroughType === 0xA1) return true;
+    return false;
   }
 
   private extractPassThroughAlarms(
@@ -1078,7 +1102,7 @@ export class JTT808Server {
     const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
     const strictMode = this.isStrictAlertMode();
-    if (!allowHeuristicBinaryDecode && strictMode) {
+    if (!allowHeuristicBinaryDecode) {
       this.bumpVendorTelemetry('suppressedByReason', `pass_through_type_not_whitelisted_${passThroughType}`);
       return [];
     }
@@ -1103,22 +1127,7 @@ export class JTT808Server {
       });
     }
 
-    const strictAllowTextCodes = String(process.env.STRICT_VENDOR_ALLOW_TEXT_CODES ?? 'false').toLowerCase() === 'true';
-    if (!strictMode || strictAllowTextCodes) {
-      const codeFromTextList = this.extractAllAlarmCodesFromText(text);
-      for (const codeFromText of codeFromTextList) {
-        const mapped = this.mapVendorAlarmCode(codeFromText, { allowPlatformVideoCodes: true });
-        if (mapped) {
-          add({
-            ...mapped,
-            channel,
-            alarmCode: codeFromText,
-            extractionMethod: 'ascii_code',
-            confidence: strictMode ? 'medium' : 'high'
-          });
-        }
-      }
-    }
+    // No free-text fallback for vendor alarms.
 
     // Binary decode is only attempted for pass-through types aligned to alarm payloads.
     if (!allowHeuristicBinaryDecode) {
@@ -1143,37 +1152,7 @@ export class JTT808Server {
       for (const mapped of mappedList) add(mapped);
     }
 
-    const allowFirstWordFallback = String(process.env.STRICT_VENDOR_ALLOW_FIRST_WORD_FALLBACK ?? 'false').toLowerCase() === 'true';
-    // Deterministic first-word fallback is disabled in strict mode by default.
-    if (!strictMode || allowFirstWordFallback) {
-      if (payload.length >= 2) {
-        const firstBe = payload.readUInt16BE(0);
-        const mappedBe = this.mapVendorAlarmCode(firstBe, { allowPlatformVideoCodes: true });
-        if (mappedBe) {
-          add({
-            ...mappedBe,
-            channel,
-            alarmCode: firstBe,
-            extractionMethod: 'numeric_be',
-            confidence: 'high'
-          });
-        }
-
-        const firstLe = payload.readUInt16LE(0);
-        const mappedLe = this.mapVendorAlarmCode(firstLe, { allowPlatformVideoCodes: true });
-        if (mappedLe) {
-          add({
-            ...mappedLe,
-            channel,
-            alarmCode: firstLe,
-            extractionMethod: 'numeric_le',
-            confidence: 'high'
-          });
-        }
-      }
-    } else {
-      this.bumpVendorTelemetry('suppressedByReason', 'strict_first_word_fallback_disabled');
-    }
+    // No generic first-word fallback in pass-through path.
 
     return results;
   }
@@ -1303,6 +1282,17 @@ export class JTT808Server {
         this.bumpVendorTelemetry('suppressedByReason', 'invalid_peripheral_checksum');
         continue;
       }
+      if (strictMode) {
+        // Appendix-A strictness:
+        // - user-defined peripheral type: 0xF0-0xFF
+        // - proprietary command types: 0x44-0xFF
+        const userDefinedPeripheral = frame.peripheralType >= 0xF0 && frame.peripheralType <= 0xFF;
+        const proprietaryCommand = frame.commandType >= 0x44 && frame.commandType <= 0xFF;
+        if (!userDefinedPeripheral || !proprietaryCommand) {
+          this.bumpVendorTelemetry('suppressedByReason', 'strict_peripheral_type_or_command_not_vendor');
+          continue;
+        }
+      }
       const mappedList = this.mapVendorAlarmsFromBytes(frame.userData, false, {
         strictMode,
         extractionMethod: 'framed_peripheral',
@@ -1311,16 +1301,9 @@ export class JTT808Server {
       for (const mapped of mappedList) add(mapped);
     }
 
-    // Fallback raw scan is disabled in strict mode to reduce false positives.
-    if (!strictMode) {
-      const mappedRaw = this.mapVendorAlarmsFromBytes(payload, true, {
-        strictMode: false,
-        extractionMethod: 'ascii_code',
-        requireDeterministic: false
-      });
-      for (const mapped of mappedRaw) add(mapped);
-    } else if (results.length === 0) {
-      this.bumpVendorTelemetry('suppressedByReason', 'strict_raw_scan_disabled');
+    // No raw scan fallback: vendor alarms must come from deterministic framed/protocol paths.
+    if (results.length === 0) {
+      this.bumpVendorTelemetry('suppressedByReason', 'no_deterministic_vendor_pattern_detected');
     }
 
     return results;
@@ -1337,8 +1320,8 @@ export class JTT808Server {
   ): VendorMappedAlert[] {
     if (!payload || payload.length === 0) return [];
     const strictMode = options?.strictMode ?? this.isStrictAlertMode();
-    const extractionMethod = options?.extractionMethod || 'ascii_code';
-    const requireDeterministic = options?.requireDeterministic ?? strictMode;
+    const extractionMethod = options?.extractionMethod || 'framed_peripheral';
+    const requireDeterministic = options?.requireDeterministic ?? true;
     const results: VendorMappedAlert[] = [];
     const seen = new Set<string>();
     const add = (item: VendorMappedAlert | null) => {
@@ -1356,15 +1339,8 @@ export class JTT808Server {
     const channel = channelMatch ? Number(channelMatch[1]) : undefined;
 
     const mergedCodes = new Set<number>();
-    if (strictMode) {
-      const strictCodes = this.extractStrictDeterministicVendorCodes(payload);
-      for (const c of strictCodes) mergedCodes.add(c);
-    } else {
-      const codeFromTextList = this.extractAllAlarmCodesFromText(combined);
-      for (const c of codeFromTextList) mergedCodes.add(c);
-      const codeFromBinaryList = this.extractAllAlarmCodesFromBinary(payload);
-      for (const c of codeFromBinaryList) mergedCodes.add(c);
-    }
+    const strictCodes = this.extractStrictDeterministicVendorCodes(payload);
+    for (const c of strictCodes) mergedCodes.add(c);
 
     for (const code of mergedCodes) {
       const mapped = this.mapVendorAlarmCode(code, { allowPlatformVideoCodes });
@@ -1374,7 +1350,7 @@ export class JTT808Server {
           channel,
           alarmCode: code,
           extractionMethod,
-          confidence: extractionMethod === 'ascii_code' ? 'medium' : 'high'
+          confidence: 'high'
         });
       }
     }
@@ -1386,68 +1362,10 @@ export class JTT808Server {
     return results;
   }
 
-  private extractAllAlarmCodesFromBinary(payload: Buffer): number[] {
-    if (!payload || payload.length === 0) return [];
-    const result = new Set<number>();
-    const known = getKnownVendorCodes();
-
-    // Scan every 2-byte window (BE/LE) for mapped codes.
-    for (let i = 0; i <= payload.length - 2; i++) {
-      const be = payload.readUInt16BE(i);
-      const le = payload.readUInt16LE(i);
-      if (known.has(be)) result.add(be);
-      if (known.has(le)) result.add(le);
-    }
-
-    // Scan every 4-byte window (BE/LE). Some vendors encode alarm codes as DWORD.
-    for (let i = 0; i <= payload.length - 4; i++) {
-      const be = payload.readUInt32BE(i);
-      const le = payload.readUInt32LE(i);
-      if (known.has(be)) result.add(be);
-      if (known.has(le)) result.add(le);
-    }
-
-    // Also scan ASCII digit runs directly from bytes (without relying on preview decoding).
-    const ascii = payload.toString('latin1');
-    const digitMatches = ascii.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/g) || [];
-    for (const m of digitMatches) {
-      const n = Number(m);
-      if (Number.isFinite(n)) result.add(n);
-    }
-
-    return Array.from(result.values());
-  }
-
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
-    // In strict mode we require explicit configuration of vendor extension IDs.
-    if (this.isStrictAlertMode() && !process.env.LOCATION_VENDOR_ALARM_INFO_IDS) {
-      this.bumpVendorTelemetry('suppressedByReason', 'strict_location_vendor_ids_not_configured');
-      return false;
-    }
-    // JT/T 808 custom extension area is often 0xE1~0xFF; non-strict fallback keeps this range.
-    const raw = String(process.env.LOCATION_VENDOR_ALARM_INFO_IDS ?? '0xE1-0xFF');
-    const tokens = raw
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-
-    for (const token of tokens) {
-      const parts = token.split('-').map((p) => p.trim()).filter(Boolean);
-      if (parts.length === 1) {
-        const n = parts[0].toLowerCase().startsWith('0x') ? parseInt(parts[0], 16) : parseInt(parts[0], 10);
-        if (Number.isFinite(n) && n >= 0 && n <= 0xff && n === infoId) return true;
-        continue;
-      }
-      if (parts.length === 2) {
-        const a = parts[0].toLowerCase().startsWith('0x') ? parseInt(parts[0], 16) : parseInt(parts[0], 10);
-        const b = parts[1].toLowerCase().startsWith('0x') ? parseInt(parts[1], 16) : parseInt(parts[1], 10);
-        if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-        const start = Math.min(a, b);
-        const end = Math.max(a, b);
-        if (infoId >= start && infoId <= end) return true;
-      }
-    }
-    return false;
+    // Deterministic, env-independent vendor extension matching.
+    // JT/T 808 custom additional info IDs are in 0xE1~0xFF.
+    return Number.isFinite(infoId) && infoId >= 0xE1 && infoId <= 0xFF;
   }
 
   private decodePeripheralProtocolFrames(payload: Buffer): Array<{
@@ -1570,23 +1488,6 @@ export class JTT808Server {
     return Buffer.from(out);
   }
 
-  private extractAllAlarmCodesFromText(text: string): number[] {
-    if (!text) return [];
-    const known = getKnownVendorCodes();
-    const result = new Set<number>();
-    const hexMatches = text.match(/\b0x([0-9a-f]{4})\b/gi) || [];
-    for (const m of hexMatches) {
-      const n = parseInt(m.replace(/^0x/i, ''), 16);
-      if (Number.isFinite(n) && known.has(n)) result.add(n);
-    }
-    const decMatches = text.match(/\b\d{5}\b/g) || [];
-    for (const m of decMatches) {
-      const n = Number(m);
-      if (Number.isFinite(n) && known.has(n)) result.add(n);
-    }
-    return Array.from(result.values());
-  }
-
   private extractStrictDeterministicVendorCodes(payload: Buffer): number[] {
     if (!payload || payload.length === 0) return [];
     const known = getKnownVendorCodes();
@@ -1623,7 +1524,16 @@ export class JTT808Server {
     };
   }
 
-  private processAlert(alert: LocationAlert): void {
+  private processAlert(alert: LocationAlert, sourceMessageId: string = '0x0200'): void {
+    const enriched = alert as LocationAlert & Record<string, unknown>;
+    enriched.sourceMessageId = sourceMessageId;
+    enriched.vehicle = this.getVehicleIdentity(alert.vehicleId);
+    enriched.locationFix = {
+      latitude: alert.latitude,
+      longitude: alert.longitude,
+      timestamp: alert.timestamp?.toISOString?.() || new Date().toISOString()
+    };
+
     // Check if there are any actual alerts
     const hasKnownBaseAlarmFlags = !!(alert.alarmFlags && (
       alert.alarmFlags.emergency ||
@@ -1656,7 +1566,7 @@ export class JTT808Server {
     // Always forward to AlertManager so it can clear edge-trigger state when alarms drop.
     // Only skip verbose logging for "no-alert" packets.
     if (!hasAnyAlert) {
-      this.alertManager.processAlert(alert);
+      this.alertManager.processAlert(enriched as LocationAlert);
       return;
     }
     
@@ -1715,7 +1625,7 @@ export class JTT808Server {
     // this.alertStorage.saveAlert(alert);
     
     // Process through alert manager for escalation and screenshot capture
-    this.alertManager.processAlert(alert);
+    this.alertManager.processAlert(enriched as LocationAlert);
   }
 
   private handleDisconnection(socket: net.Socket): void {
@@ -2182,6 +2092,18 @@ export class JTT808Server {
         return { ok: false, reason: 'ffmpeg video capture failed' };
       }
 
+      if (alertId) {
+        await this.alertManager.registerAlertVideoEvidence({
+          alertId,
+          channel,
+          filePath: outPath,
+          source: 'hls_backup',
+          durationSec
+        }).catch((err: any) => {
+          console.warn(`Failed to register fallback video evidence for ${alertId}:`, err?.message || err);
+        });
+      }
+
       return { ok: true, path: outPath };
     } catch (error: any) {
       return { ok: false, reason: error?.message || 'video evidence fallback error' };
@@ -2246,6 +2168,16 @@ export class JTT808Server {
       }
 
       const imageId = await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      if (alertId) {
+        await this.alertManager.registerAlertScreenshotEvidence({
+          alertId,
+          imageId: String(imageId),
+          channel,
+          source: 'video_frame_fallback'
+        }).catch((err: any) => {
+          console.warn(`Failed to register video-frame screenshot evidence for ${alertId}:`, err?.message || err);
+        });
+      }
       console.log(`Alert ${alertId || 'manual'}: Video-frame fallback screenshot saved for ${vehicleId} ch${channel}`);
       return { ok: true, imageId };
     } catch (error: any) {
@@ -2309,6 +2241,16 @@ export class JTT808Server {
       }
 
       const imageId = await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      if (alertId) {
+        await this.alertManager.registerAlertScreenshotEvidence({
+          alertId,
+          imageId: String(imageId),
+          channel,
+          source: 'hls_fallback'
+        }).catch((err: any) => {
+          console.warn(`Failed to register HLS screenshot evidence for ${alertId}:`, err?.message || err);
+        });
+      }
       console.log(`Alert ${alertId || 'manual'}: HLS fallback screenshot saved for ${vehicleId} ch${channel}`);
       return { ok: true, imageId };
     } catch (error: any) {
@@ -2728,7 +2670,7 @@ export class JTT808Server {
           timestamp: new Date(),
           location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
           metadata: {
-            sourceMessageId: '0x0800',
+            ...this.buildAlertContextMetadata(message.terminalPhone, '0x0800'),
             multimediaId,
             multimediaType,
             multimediaFormat,
@@ -2922,20 +2864,34 @@ export class JTT808Server {
   private async handleMultimediaData(message: any, socket: net.Socket): Promise<void> {
     try {
       const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
-      
+
       if (multimedia && multimedia.type === 'jpeg') {
         // Save image to Supabase and database (with error handling)
         const pendingAlertId = this.consumePendingScreenshotAlertId(message.terminalPhone, multimedia.channel);
-        await this.imageStorage.saveImage(message.terminalPhone, multimedia.channel, multimedia.data, pendingAlertId).catch(err => {
-          console.error(`Failed to save image: ${err.message}`);
-        });
-        
-        console.log(`📷 Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
+        const imageId = await this.imageStorage
+          .saveImage(message.terminalPhone, multimedia.channel, multimedia.data, pendingAlertId)
+          .catch((err) => {
+            console.error(`Failed to save image: ${err.message}`);
+            return null;
+          });
+
+        if (pendingAlertId && imageId) {
+          await this.alertManager.registerAlertScreenshotEvidence({
+            alertId: pendingAlertId,
+            imageId: String(imageId),
+            channel: multimedia.channel,
+            source: 'multimedia_0801'
+          }).catch((err: any) => {
+            console.warn(`Failed to register multimedia screenshot evidence for ${pendingAlertId}:`, err?.message || err);
+          });
+        }
+
+        console.log(`Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
       }
     } catch (error) {
       console.error('Error handling multimedia data:', error);
     }
-    
+
     const response = JTT1078Commands.buildGeneralResponse(
       message.terminalPhone,
       this.getNextSerial(),
@@ -2946,6 +2902,8 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
+
 
 
 

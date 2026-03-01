@@ -5,7 +5,6 @@ import { getVendorAlarmByCode, getVendorAlarmBySignalCode } from '../protocol/ve
 
 const run = () => {
   process.env.ALERT_MODE = 'strict';
-  process.env.STRICT_VENDOR_PASS_THROUGH_TYPES = '0xA1';
 
   const server = new JTT808Server(0, 0) as any;
   const alertManager = new AlertManager() as any;

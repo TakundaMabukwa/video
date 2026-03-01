@@ -128,7 +128,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   const loadAlertRow = async (alertId: string): Promise<any | null> => {
     const db = require('../storage/database');
     const result = await db.query(
-      `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, metadata,
+      `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, latitude, longitude, metadata,
               resolution_notes, resolved_by, resolved_at,
               closure_type, closure_subtype,
               resolution_reason_code, resolution_reason_label,
@@ -471,10 +471,28 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const metadata = typeof alert?.metadata === 'string'
       ? (() => { try { return JSON.parse(alert.metadata || '{}'); } catch { return {}; } })()
       : (alert?.metadata || {});
+    const latitude =
+      Number.isFinite(Number(alert?.latitude)) ? Number(alert?.latitude)
+      : (Number.isFinite(Number(metadata?.locationFix?.latitude)) ? Number(metadata.locationFix.latitude) : null);
+    const longitude =
+      Number.isFinite(Number(alert?.longitude)) ? Number(alert?.longitude)
+      : (Number.isFinite(Number(metadata?.locationFix?.longitude)) ? Number(metadata.locationFix.longitude) : null);
+    const vehicle = metadata?.vehicle || {};
+    const vehicleId = alert?.vehicleId || alert?.device_id || alert?.deviceId;
     return {
       ...alert,
       metadata,
-      vehicleId: alert?.vehicleId || alert?.device_id || alert?.deviceId,
+      vehicleId,
+      location: (latitude !== null && longitude !== null) ? { latitude, longitude } : null,
+      vehicle: {
+        vehicleId,
+        terminalPhone: vehicle?.terminalPhone || vehicleId || null,
+        plateNumber: vehicle?.plateNumber || null,
+        plateColor: vehicle?.plateColor ?? null,
+        manufacturerId: vehicle?.manufacturerId || null,
+        terminalModel: vehicle?.terminalModel || null,
+        terminalId: vehicle?.terminalId || null
+      },
       type: alert?.type || alert?.alert_type,
       priority: alert?.priority || 'high',
       status: alert?.status || (alert?.resolved ? 'resolved' : 'new'),
@@ -1135,7 +1153,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       }
       params.push(Math.max(limit * 5, 50));
       const dbResult = await require('../storage/database').query(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
          FROM alerts
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
          ORDER BY timestamp DESC
@@ -1309,7 +1327,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         }
         dbParams.push(Math.max(limit * 5, 50));
         const dbResult = await require('../storage/database').query(
-          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
            FROM alerts
            WHERE ${dbWhere.join(' AND ')}
            ORDER BY timestamp DESC
@@ -1694,7 +1712,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
   // Single endpoint for frontend: alert + screenshots + videos
   router.get('/alerts/:id/media', async (req, res) => {
     const { id } = req.params;
-    const ensureMedia = String(req.query.ensureMedia ?? 'true').toLowerCase() !== 'false';
+    const ensureMedia = String(req.query.ensureMedia ?? 'false').toLowerCase() === 'true';
 
     try {
       const row = await loadAlertRow(id);
@@ -1825,7 +1843,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (!alert) {
       try {
         const dbAlert = await dbQuery(
-          `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, metadata,
+          `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, latitude, longitude, metadata,
                   resolution_notes, resolved_by, resolved_at,
                   closure_type, closure_subtype,
                   resolution_reason_code, resolution_reason_label,
@@ -1838,6 +1856,8 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         );
         if (dbAlert.rows.length > 0) {
           const row = dbAlert.rows[0];
+          const parsedMeta = typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {});
+          const v = parsedMeta?.vehicle || {};
           alert = {
             id: row.id,
             vehicleId: row.device_id,
@@ -1847,7 +1867,19 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             status: row.status,
             resolved: !!row.resolved,
             timestamp: row.timestamp,
-            metadata: typeof row.metadata === 'string' ? JSON.parse(row.metadata || '{}') : (row.metadata || {}),
+            location: (Number.isFinite(Number(row.latitude)) && Number.isFinite(Number(row.longitude)))
+              ? { latitude: Number(row.latitude), longitude: Number(row.longitude) }
+              : (parsedMeta?.locationFix || null),
+            vehicle: {
+              vehicleId: row.device_id,
+              terminalPhone: v?.terminalPhone || row.device_id || null,
+              plateNumber: v?.plateNumber || null,
+              plateColor: v?.plateColor ?? null,
+              manufacturerId: v?.manufacturerId || null,
+              terminalModel: v?.terminalModel || null,
+              terminalId: v?.terminalId || null
+            },
+            metadata: parsedMeta,
             resolution_notes: row.resolution_notes,
             resolved_by: row.resolved_by,
             resolved_at: row.resolved_at,
@@ -1878,7 +1910,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const rowForLink = await loadAlertRow(id);
     const linked = rowForLink ? await backfillAlertMediaLinks(id, rowForLink) : { screenshotsLinked: 0, videosLinked: 0 };
 
-    const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
+    const ensureMedia = String(req.query?.ensureMedia ?? 'false').toLowerCase() === 'true';
     let ensureInfo: any = null;
     if (ensureMedia) {
       try {
@@ -2008,7 +2040,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     try {
       const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
       const rows = await dbQuery(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata,
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata,
                 is_false_alert, false_alert_reason, false_alert_reason_code
          FROM alerts
          WHERE (metadata->>'vendorCodeMapped')::boolean = true
@@ -2372,7 +2404,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
       const alert = alertResult.rows[0];
       const linked = await backfillAlertMediaLinks(id, alert);
-      const ensureMedia = String(req.query?.ensureMedia ?? 'true').toLowerCase() !== 'false';
+      const ensureMedia = String(req.query?.ensureMedia ?? 'false').toLowerCase() === 'true';
       let ensureInfo: any = null;
       if (ensureMedia) {
         try {

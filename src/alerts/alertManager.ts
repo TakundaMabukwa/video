@@ -6,6 +6,7 @@ import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
 import { getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
+import * as fs from 'fs';
 
 export enum AlertPriority {
   LOW = 'low',
@@ -65,6 +66,138 @@ export class AlertManager extends EventEmitter {
   private videoStorage = new VideoStorage();
   private alertCounter = 0;
   private readonly duplicateWindowMs = Math.max(0, Number(process.env.ALERT_DEDUP_WINDOW_MS || 30000));
+
+  private buildEvidenceSummary(metadata: any): any {
+    const evidence = metadata?.evidence || {};
+    const screenshots = Array.isArray(evidence?.screenshots) ? evidence.screenshots : [];
+    const videos = Array.isArray(evidence?.videos) ? evidence.videos : [];
+    return {
+      screenshots,
+      videos,
+      screenshotCount: screenshots.length,
+      videoCount: videos.length,
+      lastUpdatedAt: new Date().toISOString()
+    };
+  }
+
+  private async patchAlertMetadata(
+    alertId: string,
+    patcher: (metadata: Record<string, any>) => Record<string, any>
+  ): Promise<void> {
+    const active = this.activeAlerts.get(alertId);
+    if (active) {
+      const next = patcher(active.metadata || {});
+      active.metadata = next;
+      await this.alertStorage.saveAlert(active);
+      return;
+    }
+
+    const row = await this.alertStorage.getAlertById(alertId);
+    if (!row) return;
+    const current = typeof row.metadata === 'string'
+      ? (() => { try { return JSON.parse(row.metadata || '{}'); } catch { return {}; } })()
+      : (row.metadata || {});
+    const next = patcher(current);
+    await this.alertStorage.updateAlertMetadata(alertId, next);
+  }
+
+  async registerAlertScreenshotEvidence(input: {
+    alertId: string;
+    imageId: string;
+    channel: number;
+    source: string;
+    storageUrl?: string | null;
+  }): Promise<void> {
+    if (!input.alertId || !input.imageId) return;
+    await this.patchAlertMetadata(input.alertId, (metadata) => {
+      const next = { ...(metadata || {}) };
+      next.evidence = next.evidence || {};
+      const screenshots = Array.isArray(next.evidence.screenshots) ? [...next.evidence.screenshots] : [];
+      const key = String(input.imageId);
+      if (!screenshots.some((s: any) => String(s?.imageId || '') === key)) {
+        screenshots.push({
+          imageId: input.imageId,
+          channel: input.channel,
+          source: input.source,
+          storageUrl: input.storageUrl || null,
+          capturedAt: new Date().toISOString()
+        });
+      }
+      next.evidence.screenshots = screenshots;
+      next.evidence = this.buildEvidenceSummary(next);
+      return next;
+    });
+  }
+
+  async registerAlertVideoEvidence(input: {
+    alertId: string;
+    channel: number;
+    filePath: string;
+    source: string;
+    durationSec?: number;
+  }): Promise<void> {
+    const { alertId, channel, filePath, source } = input;
+    if (!alertId || !filePath) return;
+    if (!fs.existsSync(filePath)) return;
+
+    const row = await this.alertStorage.getAlertById(alertId);
+    if (!row) return;
+
+    const deviceId = String(row.device_id || '');
+    const alertTs = new Date(row.timestamp || Date.now());
+    const duration = Math.max(1, Math.round(Number(input.durationSec || 8)));
+    const startTime = new Date(alertTs.getTime());
+    const endTime = new Date(startTime.getTime() + duration * 1000);
+    const stats = fs.statSync(filePath);
+
+    const videoId = await this.videoStorage.saveVideo(
+      deviceId,
+      Number(channel || row.channel || 1),
+      filePath,
+      startTime,
+      'camera_sd',
+      alertId
+    );
+    await this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration);
+
+    let storageUrl = filePath;
+    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      storageUrl = await this.videoStorage.uploadVideoToSupabase(
+        videoId,
+        filePath,
+        deviceId,
+        Number(channel || row.channel || 1)
+      );
+    }
+
+    await this.patchAlertMetadata(alertId, (metadata) => {
+      const next = { ...(metadata || {}) };
+      next.videoClips = next.videoClips || {};
+      next.videoClips.cameraVideoLocalPath = filePath;
+      next.videoClips.cameraVideoVideoId = String(videoId);
+      next.videoClips.cameraVideo = storageUrl || filePath;
+      next.videoClips.cameraVideoSource = source;
+      next.videoClips.cameraVideoDuration = duration;
+
+      next.evidence = next.evidence || {};
+      const videos = Array.isArray(next.evidence.videos) ? [...next.evidence.videos] : [];
+      const key = String(videoId);
+      if (!videos.some((v: any) => String(v?.videoId || '') === key)) {
+        videos.push({
+          videoId: String(videoId),
+          channel: Number(channel || row.channel || 1),
+          source,
+          durationSec: duration,
+          storageUrl: storageUrl || null,
+          localPath: filePath,
+          capturedAt: new Date().toISOString()
+        });
+      }
+      next.evidence.videos = videos;
+      next.evidence = this.buildEvidenceSummary(next);
+      return next;
+    });
+  }
 
   constructor() {
     super();
