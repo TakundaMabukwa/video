@@ -152,11 +152,13 @@ export class JTT808Server {
     this.alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
+        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${ch}`);
         void this.requestScreenshotWithFallback(vehicleId, ch, {
           fallback: true,
           fallbackDelayMs: 700,
           alertId,
+          preferFrameFirst: true,
           captureVideoEvidence: true,
           videoDurationSec: 8
         });
@@ -167,6 +169,7 @@ export class JTT808Server {
     this.alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
+        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${ch}`);
         this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
           queryResources: true,
@@ -1992,12 +1995,14 @@ export class JTT808Server {
       alertId?: string;
       captureVideoEvidence?: boolean;
       videoDurationSec?: number;
+      preferFrameFirst?: boolean;
     }
   ): Promise<{ success: boolean; fallback: ScreenshotFallbackResult }> {
     const fallbackEnabled = options?.fallback !== false;
     const fallbackDelayMs = Math.max(0, Math.min(5000, Number(options?.fallbackDelayMs) || 1800));
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
+    const preferFrameFirst = options?.preferFrameFirst === true;
     this.rememberPendingScreenshotRequest(vehicleId, channel, options?.alertId);
     const success = this.requestScreenshot(vehicleId, channel);
 
@@ -2005,9 +2010,18 @@ export class JTT808Server {
       return { success, fallback: { ok: false, reason: 'disabled' } };
     }
 
-    await new Promise((r) => setTimeout(r, fallbackDelayMs));
-    let fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    let fallback: ScreenshotFallbackResult = { ok: false, reason: 'not attempted' };
+    if (preferFrameFirst) {
+      fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+      for (let attempt = 0; attempt < 2 && !fallback.ok; attempt++) {
+        await new Promise((r) => setTimeout(r, 700));
+        fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+      }
+    }
+
     if (!fallback.ok) {
+      await new Promise((r) => setTimeout(r, fallbackDelayMs));
+      fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
       // HLS playlists/segments can appear a few seconds after startVideo().
       for (let attempt = 0; attempt < 3 && !fallback.ok; attempt++) {
         await new Promise((r) => setTimeout(r, 1200));

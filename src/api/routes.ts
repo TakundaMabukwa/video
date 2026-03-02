@@ -83,6 +83,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             fallback: true,
             fallbackDelayMs: 600,
             alertId,
+            preferFrameFirst: true,
             captureVideoEvidence: true,
             videoDurationSec: 8
           })

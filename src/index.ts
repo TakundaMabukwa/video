@@ -280,7 +280,7 @@ async function startServer() {
         .map(ch => Number(ch.logicalChannel))
         .filter(ch => Number.isFinite(ch) && ch > 0);
 
-      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : [1])];
+      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : [1, 2])];
       for (const channel of channels) {
         tcpServer.startVideo(String(v.id), channel);
       }
@@ -305,7 +305,7 @@ async function startServer() {
         .map(ch => Number(ch))
         .filter(ch => Number.isFinite(ch) && ch > 0);
 
-      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : (fromActiveStreams.length ? fromActiveStreams : [1]))];
+      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : (fromActiveStreams.length ? fromActiveStreams : [1, 2]))];
       for (const channel of channels) {
         targets.push({ vehicleId: String(v.id), channel });
       }

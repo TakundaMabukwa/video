@@ -333,8 +333,10 @@ export class AlertManager extends EventEmitter {
     // Capture video evidence for ALL alerts.
     // Flow mirrors screenshot behavior: always keep a local fallback (buffer clip),
     // and also request camera-side video retrieval.
-    await this.captureEventVideo(alertEvent);
-    await this.requestAlertVideoFromCamera(alertEvent);
+    await Promise.allSettled([
+      this.captureEventVideo(alertEvent),
+      this.requestAlertVideoFromCamera(alertEvent)
+    ]);
 
     // Send bell notification
     this.notifier.sendAlertNotification(alertEvent);
@@ -394,8 +396,10 @@ export class AlertManager extends EventEmitter {
 
     // Keep evidence workflow consistent across alert sources.
     this.emit('request-screenshot', { vehicleId: input.vehicleId, channel, alertId });
-    await this.captureEventVideo(alertEvent);
-    await this.requestAlertVideoFromCamera(alertEvent);
+    await Promise.allSettled([
+      this.captureEventVideo(alertEvent),
+      this.requestAlertVideoFromCamera(alertEvent)
+    ]);
 
     this.notifier.sendAlertNotification(alertEvent);
     this.escalation.monitorAlert(alertEvent);
