@@ -60,6 +60,7 @@ export class AlertManager extends EventEmitter {
   private activeAlerts = new Map<string, AlertEvent>();
   private signalStateByVehicleChannel = new Map<string, Set<string>>();
   private recentAlertSignatures = new Map<string, number>();
+  private noisyLogGate = new Map<string, number>();
   private escalation: AlertEscalation;
   private notifier: AlertNotifier;
   private alertStorage = new AlertStorageDB();
@@ -430,6 +431,14 @@ export class AlertManager extends EventEmitter {
     return false;
   }
 
+  private shouldLogNoisy(key: string, throttleMs: number = 10000): boolean {
+    const now = Date.now();
+    const last = this.noisyLogGate.get(key) || 0;
+    if (now - last < throttleMs) return false;
+    this.noisyLogGate.set(key, now);
+    return true;
+  }
+
   private async captureEventVideo(alert: AlertEvent): Promise<void> {
     const key = `${alert.vehicleId}_${alert.channel}`;
     const buffer = this.videoBuffers.get(key);
@@ -442,7 +451,9 @@ export class AlertManager extends EventEmitter {
     // Check buffer has enough data
     const stats = buffer.getStats();
     if (stats.totalFrames === 0) {
-      console.error(`❌ Buffer ${key} is empty - cannot capture alert video`);
+      if (this.shouldLogNoisy(`buffer_empty:${key}`, 15000)) {
+        console.warn(`Buffer ${key} is empty - cannot capture pre-event clip yet`);
+      }
       return;
     }
 
@@ -1196,7 +1207,6 @@ export class AlertManager extends EventEmitter {
     const postEndTime = new Date(alertTime.getTime() + 30 * 1000);
 
     console.log(`Requesting camera report videos (-30s..0s and 0s..+30s) for alert ${alert.id}`);
-
     this.emit('request-camera-video', {
       vehicleId: alert.vehicleId,
       channel: alert.channel,
@@ -1208,15 +1218,6 @@ export class AlertManager extends EventEmitter {
       streamType: 1,
       memoryType: 1,
       playbackMethod: 0
-    });
-
-    this.emit('request-camera-video-download', {
-      vehicleId: alert.vehicleId,
-      channel: alert.channel,
-      startTime: preStartTime,
-      endTime: preEndTime,
-      alertId: alert.id,
-      windowType: 'pre'
     });
 
     this.emit('request-camera-video', {
@@ -1232,13 +1233,5 @@ export class AlertManager extends EventEmitter {
       playbackMethod: 0
     });
 
-    this.emit('request-camera-video-download', {
-      vehicleId: alert.vehicleId,
-      channel: alert.channel,
-      startTime: postStartTime,
-      endTime: postEndTime,
-      alertId: alert.id,
-      windowType: 'post'
-    });
   }
 }

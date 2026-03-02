@@ -12,6 +12,7 @@ import { archiveToRawH264 } from '../video/frameArchive';
 
 export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): express.Router {
   const router = express.Router();
+  const FTP_DOWNLOADS_ENABLED = false;
   const speedingManager = new SpeedingManager();
   const videoStorage = new VideoStorage();
   const manualVideoJobs = new Map<string, {
@@ -96,7 +97,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       for (const ch of channels) {
         const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, start, end, {
           queryResources: true,
-          requestDownload: true
+          requestDownload: false
         });
         videoScheduled = videoScheduled || scheduled.requested || scheduled.queued;
       }
@@ -2549,13 +2550,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     }
   });
 
-  // Request camera SD playback window for reporting (default: 30s before alert)
+  // Request camera SD playback window for reporting (default: 30s before + 30s after alert)
   router.post('/alerts/:id/request-report-video', async (req, res) => {
     const { id } = req.params;
     const lookbackSeconds = Math.max(0, Math.min(600, Number(req.body?.lookbackSeconds ?? 30)));
-    const forwardSeconds = Math.max(0, Math.min(600, Number(req.body?.forwardSeconds ?? 0)));
+    const forwardSeconds = Math.max(0, Math.min(600, Number(req.body?.forwardSeconds ?? 30)));
     const queryResources = req.body?.queryResources !== false;
-    const requestDownload = req.body?.requestDownload !== false;
+    const requestDownload = false;
 
     try {
       const alertManager = tcpServer.getAlertManager();
@@ -2597,18 +2598,25 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
       const startTime = new Date(alertTimestamp!.getTime() - lookbackSeconds * 1000);
       const endTime = new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
 
-      const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, channel, startTime, endTime, {
-        queryResources,
-        requestDownload
+      const targetChannels = getVehicleChannels(vehicleId, channel);
+      const perChannel = targetChannels.map((ch) => {
+        const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
+          queryResources,
+          requestDownload
+        });
+        const manualCaptureJob = scheduled.requested
+          ? buildManualVideoJob(vehicleId!, ch, startTime, endTime, { alertId: id })
+          : null;
+        return { channel: ch, scheduled, manualCaptureJob };
       });
-      const queried = scheduled.querySent;
-      const requested = scheduled.requested;
-      const downloadRequested = scheduled.downloadSent;
-      const manualCaptureJob = requested
-        ? buildManualVideoJob(vehicleId, channel, startTime, endTime, { alertId: id })
-        : null;
 
-      if (!requested && !scheduled.queued) {
+      const queried = perChannel.some((x) => x.scheduled.querySent);
+      const requested = perChannel.some((x) => x.scheduled.requested);
+      const queued = perChannel.some((x) => x.scheduled.queued);
+      const downloadRequested = perChannel.some((x) => x.scheduled.downloadSent);
+      const manualCaptureJob = perChannel.find((x) => !!x.manualCaptureJob)?.manualCaptureJob || null;
+
+      if (!requested && !queued) {
         return res.status(409).json({
           success: false,
           message: `Vehicle ${vehicleId} is not connected; cannot request camera playback`,
@@ -2616,6 +2624,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alertId: id,
             vehicleId,
             channel,
+            channelsRequested: targetChannels,
             alertTimestamp: alertTimestamp!.toISOString(),
             startTime: startTime.toISOString(),
             endTime: endTime.toISOString(),
@@ -2632,7 +2641,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         });
       }
 
-      if (!requested && scheduled.queued) {
+      if (!requested && queued) {
         return res.status(202).json({
           success: true,
           message: `Vehicle ${vehicleId} is not connected; request queued until reconnect`,
@@ -2640,6 +2649,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
             alertId: id,
             vehicleId,
             channel,
+            channelsRequested: targetChannels,
             alertTimestamp: alertTimestamp!.toISOString(),
             startTime: startTime.toISOString(),
             endTime: endTime.toISOString(),
@@ -2664,6 +2674,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
           alertId: id,
           vehicleId,
           channel,
+          channelsRequested: targetChannels,
           alertTimestamp: alertTimestamp!.toISOString(),
           startTime: startTime.toISOString(),
           endTime: endTime.toISOString(),
@@ -2752,8 +2763,14 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
 
     const ch = Number(channel) || 1;
     const normalizedMode = String(mode).toLowerCase();
+    if ((normalizedMode === 'download' || normalizedMode === 'both') && !FTP_DOWNLOADS_ENABLED) {
+      return res.status(400).json({
+        success: false,
+        message: 'Download mode is disabled (FTP disabled). Use mode="stream".'
+      });
+    }
     const wantStream = normalizedMode === 'stream' || normalizedMode === 'both';
-    const wantDownload = normalizedMode === 'download' || normalizedMode === 'both';
+    const wantDownload = FTP_DOWNLOADS_ENABLED && (normalizedMode === 'download' || normalizedMode === 'both');
     if (!wantStream && !wantDownload) {
       return res.status(400).json({
         success: false,
@@ -2771,9 +2788,6 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     const streamRequestSent = scheduled.requested;
     const downloadRequestSent = scheduled.downloadSent;
     const warnings: string[] = [];
-    if (wantDownload && !downloadRequestSent) {
-      warnings.push('Download request not sent. Configure FTP env vars: ALERT_VIDEO_FTP_HOST/PORT/USER/PASS/PATH');
-    }
     let playbackJobId: string | null = null;
     let playbackJobUrl: string | null = null;
     if (recordPlayback && streamRequestSent) {
@@ -2786,7 +2800,7 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
     if (!anySent) {
       return res.status(409).json({
         success: false,
-        message: 'No request was sent (check connection/FTP configuration)',
+        message: 'No request was sent (check connection/mode)',
         data: {
           vehicleId: id,
           channel: ch,

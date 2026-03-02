@@ -14,10 +14,12 @@ export class LiveVideoStreamServer {
   private subscriptions = new Map<string, StreamSubscription[]>();
   private tcpServer: JTT808Server;
   private path: string;
+  private keepStreamsWithoutClients: boolean;
 
   constructor(tcpServer: JTT808Server, path = '/ws/video') {
     this.tcpServer = tcpServer;
     this.path = path;
+    this.keepStreamsWithoutClients = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'true').toLowerCase() !== 'false';
     this.wss = new WebSocket.Server({
       noServer: true
     });
@@ -90,8 +92,12 @@ export class LiveVideoStreamServer {
 
       if (filtered.length === 0) {
         this.subscriptions.delete(key);
-        this.tcpServer.stopVideo(vehicleId, channel);
-        console.log(`Stopped video stream: ${key}`);
+        if (!this.keepStreamsWithoutClients) {
+          this.tcpServer.stopVideo(vehicleId, channel);
+          console.log(`Stopped video stream: ${key}`);
+        } else {
+          console.log(`No subscribers for ${key}; keeping stream active (KEEP_STREAMS_WITHOUT_CLIENTS=true)`);
+        }
       } else {
         this.subscriptions.set(key, filtered);
       }
@@ -104,8 +110,10 @@ export class LiveVideoStreamServer {
 
       if (filtered.length === 0) {
         this.subscriptions.delete(key);
-        const [vehicleId, channel] = key.split('_');
-        this.tcpServer.stopVideo(vehicleId, parseInt(channel));
+        if (!this.keepStreamsWithoutClients) {
+          const [vehicleId, channel] = key.split('_');
+          this.tcpServer.stopVideo(vehicleId, parseInt(channel));
+        }
       } else {
         this.subscriptions.set(key, filtered);
       }

@@ -1,6 +1,10 @@
 import { JTT808Message, JTT808MessageType } from '../types/jtt';
 
 export class JTT808Parser {
+  private static lastChecksumWarnAt = 0;
+  private static lastParseErrorWarnAt = 0;
+  private static readonly LOG_THROTTLE_MS = Math.max(1000, Number(process.env.JT808_PARSE_LOG_THROTTLE_MS || 5000));
+
   // JT/T 808 message structure: 0x7E + Header + Body + Checksum + 0x7E
   static parseMessage(buffer: Buffer): JTT808Message | null {
     if (buffer.length < 12 || buffer[0] !== 0x7E || buffer[buffer.length - 1] !== 0x7E) {
@@ -44,7 +48,11 @@ export class JTT808Parser {
       // Verify checksum
       const calculatedChecksum = this.calculateChecksum(unescaped.slice(0, headerLength + bodyLength));
       if (checksum !== calculatedChecksum) {
-        console.warn(`JT/T 808 checksum mismatch for msg 0x${messageId.toString(16).padStart(4, '0')} from ${terminalPhone}`);
+        const now = Date.now();
+        if (now - this.lastChecksumWarnAt > this.LOG_THROTTLE_MS) {
+          this.lastChecksumWarnAt = now;
+          console.warn(`JT/T 808 checksum mismatch for msg 0x${messageId.toString(16).padStart(4, '0')} from ${terminalPhone}`);
+        }
         return null;
       }
 
@@ -60,7 +68,11 @@ export class JTT808Parser {
         checksum
       };
     } catch (error) {
-      console.error('Failed to parse JT/T 808 message:', error);
+      const now = Date.now();
+      if (now - this.lastParseErrorWarnAt > this.LOG_THROTTLE_MS) {
+        this.lastParseErrorWarnAt = now;
+        console.error('Failed to parse JT/T 808 message:', error);
+      }
       return null;
     }
   }

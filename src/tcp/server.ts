@@ -137,6 +137,7 @@ export class JTT808Server {
     50,
     Number(process.env.MESSAGE_TRACE_BUFFER_SIZE || 300)
   );
+  private noisyLogGate = new Map<string, number>();
 
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
@@ -174,20 +175,18 @@ export class JTT808Server {
       }
     });
 
-    this.alertManager.on('request-camera-video-download', ({ vehicleId, channel, startTime, endTime, alertId }) => {
-      const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
-      for (const ch of channels) {
-        console.log(`Alert ${alertId}: Requesting camera SD card FTP upload from ${vehicleId} channel ${ch}`);
-        this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
-          queryResources: false,
-          requestDownload: true
-        });
-      }
-    });
   }
 
   getAlertManager(): AlertManager {
     return this.alertManager;
+  }
+
+  private shouldLogNoisy(key: string, throttleMs: number = 10000): boolean {
+    const now = Date.now();
+    const last = this.noisyLogGate.get(key) || 0;
+    if (now - last < throttleMs) return false;
+    this.noisyLogGate.set(key, now);
+    return true;
   }
 
   getVendorAlertCatalog() {
@@ -356,7 +355,9 @@ export class JTT808Server {
   private async processMessage(buffer: Buffer, socket: net.Socket): Promise<void> {
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
-      console.warn('Failed to parse JT/T 808 message');
+      if (this.shouldLogNoisy('jt808_parse_failed', 5000)) {
+        console.warn('Failed to parse JT/T 808 message');
+      }
       RawIngestLogger.write('jt808_parse_failed', {
         remoteAddress: socket.remoteAddress || null,
         remotePort: socket.remotePort || null,
@@ -1207,7 +1208,10 @@ export class JTT808Server {
     const channels = [
       ...(channelsFromCapabilities || []),
       ...channelsFromActiveStreams,
-      ...(Number.isFinite(requested) && requested > 0 ? [requested] : [])
+      ...(Number.isFinite(requested) && requested > 0 ? [requested] : []),
+      // Always include both camera channels for alert evidence collection.
+      1,
+      2
     ];
 
     if (channels && channels.length > 0) {
@@ -2093,7 +2097,9 @@ export class JTT808Server {
             resolve(true);
           } else {
             if (stderr) {
-              console.warn(`Video evidence fallback ffmpeg stderr: ${stderr.slice(0, 300)}`);
+              if (this.shouldLogNoisy(`video_fallback_ffmpeg:${vehicleId}:${channel}`, 10000)) {
+                console.warn(`Video evidence fallback ffmpeg stderr: ${stderr.slice(0, 300)}`);
+              }
             }
             resolve(false);
           }
@@ -2364,47 +2370,11 @@ export class JTT808Server {
     return true;
   }
 
-  requestCameraVideoDownload(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {
-    const vehicle = this.vehicles.get(vehicleId);
-    const socket = this.connections.get(vehicleId);
-    
-    if (!vehicle || !socket || !vehicle.connected) {
-      return false;
+  requestCameraVideoDownload(vehicleId: string, channel: number, _startTime: Date, _endTime: Date): boolean {
+    if (this.shouldLogNoisy('ftp_disabled_video_download', 60000)) {
+      console.log(`FTP download disabled; skipping 0x9206 request for ${vehicleId} ch${channel}.`);
     }
-
-    const ftpHost = process.env.ALERT_VIDEO_FTP_HOST || process.env.FTP_HOST || '';
-    const ftpPort = Number(process.env.ALERT_VIDEO_FTP_PORT || process.env.FTP_PORT || 21);
-    const ftpUser = process.env.ALERT_VIDEO_FTP_USER || process.env.FTP_USER || '';
-    const ftpPass = process.env.ALERT_VIDEO_FTP_PASS || process.env.FTP_PASS || '';
-    const ftpPath = process.env.ALERT_VIDEO_FTP_PATH || process.env.FTP_PATH || '/';
-
-    if (!ftpHost || !ftpUser) {
-      console.warn(`FTP config missing; skip 0x9206 download for ${vehicleId} ch${channel}`);
-      return false;
-    }
-
-    const command = JTT1078Commands.buildFileUploadCommand(
-      vehicleId,
-      this.getNextSerial(),
-      ftpHost,
-      ftpPort,
-      ftpUser,
-      ftpPass,
-      ftpPath,
-      channel,
-      startTime,
-      endTime,
-      {
-        resourceType: 2,
-        streamType: 1,
-        storageLocation: 1,
-        taskExecutionConditions: 0b010
-      }
-    );
-    
-    console.log(`Camera FTP upload requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()} -> ftp://${ftpHost}:${ftpPort}${ftpPath}`);
-    socket.write(command);
-    return true;
+    return false;
   }
 
   queryResourceList(vehicleId: string, channel: number, startTime: Date, endTime: Date): boolean {

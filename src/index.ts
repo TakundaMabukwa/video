@@ -125,6 +125,8 @@ const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
 const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
 const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
+const KEEP_STREAMS_WITHOUT_CLIENTS = String(process.env.KEEP_STREAMS_WITHOUT_CLIENTS ?? 'true').toLowerCase() !== 'false';
+const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '45000');
 
 async function startServer() {
   console.log('Starting JT/T 1078 Video Ingestion Server...');
@@ -268,7 +270,24 @@ async function startServer() {
     socket.destroy();
   });
 
-  // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected streams.
+  // Keep camera streams alive in backend mode (independent of UI subscribers).
+  const ensureBackgroundStreams = () => {
+    if (!KEEP_STREAMS_WITHOUT_CLIENTS) return;
+    const connected = tcpServer.getVehicles().filter(v => v.connected);
+    for (const v of connected) {
+      const fromCapabilities = (v.channels || [])
+        .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
+        .map(ch => Number(ch.logicalChannel))
+        .filter(ch => Number.isFinite(ch) && ch > 0);
+
+      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : [1])];
+      for (const channel of channels) {
+        tcpServer.startVideo(String(v.id), channel);
+      }
+    }
+  };
+
+  // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected vehicles/channels.
   const runAutoScreenshotFanout = async () => {
     const connected = tcpServer.getVehicles().filter(v => v.connected);
     if (connected.length === 0) {
@@ -311,8 +330,13 @@ async function startServer() {
   };
 
   setTimeout(() => {
+    ensureBackgroundStreams();
     void runAutoScreenshotFanout();
   }, 5000);
+
+  setInterval(() => {
+    ensureBackgroundStreams();
+  }, BACKGROUND_STREAM_INTERVAL_MS);
 
   setInterval(() => {
     void runAutoScreenshotFanout();
