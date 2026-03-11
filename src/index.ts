@@ -147,6 +147,7 @@ async function startServer() {
   
   const alertManager = tcpServer.getAlertManager();
   udpServer.setAlertManager(alertManager);
+  udpServer.setVehicleIdResolver((ipAddress) => tcpServer.resolveVehicleIdByIp(ipAddress));
   tcpRTPHandler.setAlertManager(alertManager);  // *** CRITICAL: Enable 30s pre/post video capture for TCP streams ***
   
   const app = express();

@@ -2543,6 +2543,12 @@ export class JTT808Server {
     return Array.from(this.vehicles.values());
   }
 
+  resolveVehicleIdByIp(ipAddress: string): string {
+    const ip = String(ipAddress || '').replace('::ffff:', '').trim();
+    if (!ip) return '';
+    return this.ipToVehicle.get(ip) || ip;
+  }
+
   getVehicle(id: string): Vehicle | undefined {
     return this.vehicles.get(id);
   }

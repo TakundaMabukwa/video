@@ -8,6 +8,7 @@ export class VideoWriter {
   private videoStorage = new VideoStorage();
   private videoIds = new Map<string, string>();
   private startTimes = new Map<string, Date>();
+  private filePaths = new Map<string, string>();
 
   writeFrame(vehicleId: string, channel: number, frameData: Buffer): void {
     const streamKey = `${vehicleId}_${channel}`;
@@ -47,6 +48,7 @@ export class VideoWriter {
     const stream = fs.createWriteStream(filepath);
     this.fileStreams.set(streamKey, stream);
     this.startTimes.set(streamKey, new Date());
+    this.filePaths.set(streamKey, filepath);
     
     stream.on('error', (error) => {
       console.error(`Error writing video file ${filepath}:`, error);
@@ -88,17 +90,20 @@ export class VideoWriter {
       if (videoId && startTime) {
         const endTime = new Date();
         const duration = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
-        const filepath = path.join(process.cwd(), 'recordings', vehicleId, `channel_${channel}_*.h264`);
+        const filepath = this.filePaths.get(streamKey);
         
-        try {
-          const stats = fs.statSync(filepath);
-          this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
-        } catch (error) {
-          console.error('Failed to update video metadata:', error);
+        if (filepath) {
+          try {
+            const stats = fs.statSync(filepath);
+            this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
+          } catch (error) {
+            console.error('Failed to update video metadata:', error);
+          }
         }
         
         this.videoIds.delete(streamKey);
         this.startTimes.delete(streamKey);
+        this.filePaths.delete(streamKey);
       }
     }
   }
@@ -110,6 +115,7 @@ export class VideoWriter {
     }
     this.fileStreams.clear();
     this.frameCounters.clear();
+    this.filePaths.clear();
   }
 
   getRecordingStats(): { activeRecordings: number; totalFrames: number } {

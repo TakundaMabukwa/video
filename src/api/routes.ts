@@ -2119,8 +2119,13 @@ export function createRoutes(tcpServer: JTT808Server, udpServer: UDPRTPServer): 
         return res.redirect(external);
       }
 
-      const rel = String(row.file_path || '').replace(/^\/+/, '');
-      const localPath = path.join(process.cwd(), 'media', 'images', rel);
+      const rawFilePath = String(row.file_path || '').trim();
+      const rel = rawFilePath.replace(/^\/+/, '');
+      const localPath = path.isAbsolute(rawFilePath)
+        ? rawFilePath
+        : rel.startsWith(`media${path.sep}images${path.sep}`) || rel.startsWith('media/images/')
+          ? path.join(process.cwd(), rel)
+          : path.join(process.cwd(), 'media', 'images', rel);
       if (!fs.existsSync(localPath)) {
         return res.status(404).json({ success: false, message: 'Local image file not found' });
       }

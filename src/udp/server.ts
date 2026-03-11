@@ -17,6 +17,7 @@ export class UDPRTPServer {
   private lastLogTime = Date.now();
   private alertManager?: AlertManager;
   private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
+  private vehicleIdResolver?: (ipAddress: string) => string;
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -28,6 +29,10 @@ export class UDPRTPServer {
 
   setFrameCallback(callback: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void): void {
     this.onFrameCallback = callback;
+  }
+
+  setVehicleIdResolver(resolver: (ipAddress: string) => string): void {
+    this.vehicleIdResolver = resolver;
   }
 
   start(): Promise<void> {
@@ -64,8 +69,8 @@ export class UDPRTPServer {
 
     const { header, payload, dataType } = parsed;
     
-    // Use IP address as vehicle ID for UDP (no SIM in header)
-    const vehicleId = rinfo.address;
+    const vehicleIp = String(rinfo.address || '').replace('::ffff:', '');
+    const vehicleId = this.vehicleIdResolver?.(vehicleIp) || vehicleIp;
     const streamKey = `${vehicleId}_${header.channelNumber}`;
 
     // Transparent data packets can carry vendor ADAS/DMS alarms.
@@ -85,7 +90,7 @@ export class UDPRTPServer {
         lastFrame: null
       };
       this.streams.set(streamKey, streamInfo);
-      console.log(`📹 New stream: ${vehicleId} ch${header.channelNumber} from ${rinfo.address}`);
+      console.log(`📹 New stream: ${vehicleId} ch${header.channelNumber} from ${vehicleIp}`);
       
       // Auto-start HLS stream
       this.hlsStreamer.startStream(vehicleId, header.channelNumber);
