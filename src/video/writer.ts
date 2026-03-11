@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { VideoStorage } from '../storage/videoStorage';
 
 export class VideoWriter {
@@ -10,6 +11,77 @@ export class VideoWriter {
   private startTimes = new Map<string, Date>();
   private filePaths = new Map<string, string>();
   private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
+  private pendingTranscodes = new Set<string>();
+
+  private getFfmpegBinary(): string {
+    if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const installer = require('@ffmpeg-installer/ffmpeg');
+      if (installer?.path) return installer.path;
+    } catch {}
+    return 'ffmpeg';
+  }
+
+  private kickoffPlayableTranscode(sourcePath: string): void {
+    if (!sourcePath || /\.mp4$/i.test(sourcePath)) return;
+    if (!fs.existsSync(sourcePath)) return;
+
+    const parsed = path.parse(sourcePath);
+    const outputPath = path.join(parsed.dir, `${parsed.name}.playable.mp4`);
+
+    try {
+      if (fs.existsSync(outputPath)) {
+        const outStat = fs.statSync(outputPath);
+        const inStat = fs.statSync(sourcePath);
+        if (outStat.size > 0 && outStat.mtimeMs >= inStat.mtimeMs) return;
+      }
+    } catch {}
+
+    if (this.pendingTranscodes.has(outputPath)) return;
+    this.pendingTranscodes.add(outputPath);
+
+    const ffmpeg = this.getFfmpegBinary();
+    const tryRun = (args: string[]) => new Promise<void>((resolve, reject) => {
+      const proc = spawn(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+      let stderr = '';
+      proc.stderr.on('data', (d) => { stderr += String(d || ''); });
+      proc.on('error', (err) => reject(new Error(err?.message || 'ffmpeg spawn failed')));
+      proc.on('close', (code) => {
+        if (code === 0 && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+          resolve();
+          return;
+        }
+        try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch {}
+        reject(new Error(stderr.slice(0, 800) || `ffmpeg exited ${code}`));
+      });
+    });
+
+    (async () => {
+      const commonOut = ['-movflags', '+faststart', outputPath];
+      try {
+        await tryRun([
+          '-hide_banner', '-loglevel', 'error', '-y',
+          '-fflags', '+genpts', '-r', '25', '-f', 'h264', '-i', sourcePath,
+          '-c:v', 'copy',
+          ...commonOut
+        ]);
+      } catch {
+        await tryRun([
+          '-hide_banner', '-loglevel', 'error', '-y',
+          '-fflags', '+genpts', '-r', '25', '-f', 'h264', '-i', sourcePath,
+          '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p',
+          ...commonOut
+        ]);
+      }
+    })()
+      .catch((err) => {
+        console.error(`Failed to transcode ${sourcePath}:`, err?.message || err);
+      })
+      .finally(() => {
+        this.pendingTranscodes.delete(outputPath);
+      });
+  }
 
   writeFrame(vehicleId: string, channel: number, frameData: Buffer): void {
     const streamKey = `${vehicleId}_${channel}`;
@@ -93,6 +165,7 @@ export class VideoWriter {
           try {
             const stats = fs.statSync(filepath);
             this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
+            this.kickoffPlayableTranscode(filepath);
           } catch (error) {
             console.error('Failed to update video metadata:', error);
           }
