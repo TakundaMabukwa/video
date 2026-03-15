@@ -22,6 +22,7 @@ CREATE TABLE videos (
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
   duration_seconds INTEGER,
+  frame_count INTEGER,
   video_type TEXT NOT NULL, -- 'live', 'alert_pre', 'alert_post'
   alert_id TEXT, -- NULL for live videos, set for alert clips
   created_at TIMESTAMPTZ DEFAULT NOW()

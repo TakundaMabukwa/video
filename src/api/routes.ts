@@ -241,7 +241,7 @@ export function createRoutes(
   const queryStoredVideoSegments = async (vehicleId: string, channel: number, start: Date, end: Date) => {
     const db = require('../storage/database');
     const result = await db.query(
-      `SELECT id, file_path, start_time, end_time, duration_seconds, alert_id
+      `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id
        FROM videos
        WHERE device_id = $1
          AND channel = $2
@@ -256,6 +256,24 @@ export function createRoutes(
         file_path: String(row?.file_path || '').trim()
       }))
       .filter((row: any) => !!row.file_path);
+  };
+  const inferSegmentInputFps = (segment: {
+    duration_seconds?: number | null;
+    frame_count?: number | null;
+  }) => {
+    const durationSeconds = Number(segment?.duration_seconds || 0);
+    const frameCount = Number(segment?.frame_count || 0);
+    if (durationSeconds > 0 && frameCount > 0) {
+      const fps = frameCount / durationSeconds;
+      if (Number.isFinite(fps) && fps > 0) {
+        return Math.max(0.2, Math.min(30, fps));
+      }
+    }
+    const fallback = Number(process.env.VIDEO_DEFAULT_INPUT_FPS || 0);
+    if (Number.isFinite(fallback) && fallback > 0) {
+      return Math.max(0.2, Math.min(30, fallback));
+    }
+    return undefined;
   };
   const extractScreenshotFromStoredSegment = async (
     vehicleId: string,
@@ -275,7 +293,7 @@ export function createRoutes(
     const localPath = path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath);
     if (!fs.existsSync(localPath)) return null;
 
-    const sourcePath = /\.mp4$/i.test(localPath) ? localPath : await toPlayableMp4(localPath);
+    const sourcePath = /\.mp4$/i.test(localPath) ? localPath : await toPlayableMp4(localPath, inferSegmentInputFps(segment));
     if (!sourcePath || !fs.existsSync(sourcePath)) return null;
 
     const segmentStart = new Date(segment.start_time);
@@ -662,6 +680,7 @@ export function createRoutes(
       start_time: string | Date;
       end_time?: string | Date | null;
       duration_seconds?: number | null;
+      frame_count?: number | null;
       alert_id?: string | null;
     }>,
     options?: {
@@ -711,9 +730,10 @@ export function createRoutes(
           const localPath = path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath);
           if (!fs.existsSync(localPath)) continue;
 
+          const fpsHint = inferSegmentInputFps(segment);
           const playablePath = /\.mp4$/i.test(localPath)
             ? localPath
-            : await toPlayableMp4(localPath);
+            : await toPlayableMp4(localPath, fpsHint);
           if (!playablePath || !fs.existsSync(playablePath)) continue;
 
           const segmentStart = new Date(segment.start_time);
@@ -3773,7 +3793,7 @@ export function createRoutes(
     try {
       const db = require('../storage/database');
       const result = await db.query(
-        `SELECT id, file_path, start_time, end_time, duration_seconds, alert_id
+        `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id
          FROM videos
          WHERE device_id = $1
            AND channel = $2

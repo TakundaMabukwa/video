@@ -176,7 +176,7 @@ export class VideoWriter {
         'live'
       );
       this.videoIds.set(streamKey, videoId);
-      await this.videoStorage.updateVideoProgress(videoId, startedAt, 0, 0);
+      await this.videoStorage.updateVideoProgress(videoId, startedAt, 0, 0, 0);
       this.lastPersistTimes.set(streamKey, Date.now());
     } catch (error) {
       console.error('Failed to save video metadata to database:', error);
@@ -196,9 +196,10 @@ export class VideoWriter {
 
     const duration = Math.max(0, Math.floor((now - startTime.getTime()) / 1000));
     const fileSize = Math.max(0, this.bytesWritten.get(streamKey) || 0);
+    const frameCount = Math.max(0, this.frameCounters.get(streamKey) || 0);
     this.lastPersistTimes.set(streamKey, now);
     this.videoStorage
-      .updateVideoProgress(videoId, new Date(now), fileSize, duration)
+      .updateVideoProgress(videoId, new Date(now), fileSize, duration, frameCount)
       .catch((error) => {
         console.error(`Failed to persist video progress for ${streamKey}:`, error);
       });
@@ -220,7 +221,8 @@ export class VideoWriter {
             const sizeFromCounter = this.bytesWritten.get(streamKey) || 0;
             const stats = fs.existsSync(filepath) ? fs.statSync(filepath) : null;
             const finalSize = Math.max(sizeFromCounter, stats?.size || 0);
-            this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration).catch(console.error);
+            const frameCount = Math.max(0, this.frameCounters.get(streamKey) || 0);
+            this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration, frameCount).catch(console.error);
             this.kickoffPlayableTranscode(filepath);
           } catch (error) {
             console.error('Failed to update video metadata:', error);

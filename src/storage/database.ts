@@ -48,6 +48,7 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     // videos table compatibility for alert-linked clips
     `ALTER TABLE IF EXISTS videos ADD COLUMN IF NOT EXISTS storage_url TEXT`,
     `ALTER TABLE IF EXISTS videos ADD COLUMN IF NOT EXISTS alert_id TEXT`,
+    `ALTER TABLE IF EXISTS videos ADD COLUMN IF NOT EXISTS frame_count INTEGER`,
 
     // indexes used heavily by alert media routes
     `CREATE INDEX IF NOT EXISTS idx_images_alert_id ON images(alert_id)`,

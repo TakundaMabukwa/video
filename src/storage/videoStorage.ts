@@ -31,33 +31,35 @@ export class VideoStorage {
     filePath: string,
     startTime: Date,
     videoType: 'live' | 'alert_pre' | 'alert_post' | 'camera_sd' | 'manual',
-    alertId?: string
+    alertId?: string,
+    frameCount?: number
   ) {
     // Prevent FK violations on videos.device_id -> devices.device_id.
     await this.ensureDeviceExists(deviceId);
 
     const result = await query(
-      `INSERT INTO videos (device_id, channel, file_path, start_time, video_type, alert_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO videos (device_id, channel, file_path, start_time, video_type, alert_id, frame_count)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [deviceId, channel, filePath, startTime, videoType, alertId || null]
+      [deviceId, channel, filePath, startTime, videoType, alertId || null, Math.max(0, Number(frameCount || 0))]
     );
     return result.rows[0].id;
   }
 
-  async updateVideoProgress(id: string, endTime: Date, fileSize: number, duration: number) {
+  async updateVideoProgress(id: string, endTime: Date, fileSize: number, duration: number, frameCount?: number) {
     await query(
       `UPDATE videos
        SET end_time = $1,
            file_size = GREATEST(COALESCE(file_size, 0), $2),
-           duration_seconds = GREATEST(COALESCE(duration_seconds, 0), $3)
-       WHERE id = $4`,
-      [endTime, fileSize, duration, id]
+           duration_seconds = GREATEST(COALESCE(duration_seconds, 0), $3),
+           frame_count = GREATEST(COALESCE(frame_count, 0), $4)
+       WHERE id = $5`,
+      [endTime, fileSize, duration, Math.max(0, Number(frameCount || 0)), id]
     );
   }
 
-  async updateVideoEnd(id: string, endTime: Date, fileSize: number, duration: number) {
-    await this.updateVideoProgress(id, endTime, fileSize, duration);
+  async updateVideoEnd(id: string, endTime: Date, fileSize: number, duration: number, frameCount?: number) {
+    await this.updateVideoProgress(id, endTime, fileSize, duration, frameCount);
   }
 
   async uploadVideoToSupabase(id: string, localPath: string, deviceId: string, channel: number): Promise<string> {

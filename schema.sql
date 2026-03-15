@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS videos (
   start_time TIMESTAMPTZ NOT NULL,
   end_time TIMESTAMPTZ,
   duration_seconds INTEGER,
+  frame_count INTEGER,
   video_type TEXT NOT NULL CHECK (video_type IN ('live', 'alert_pre', 'alert_post')),
   alert_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
