@@ -45,11 +45,19 @@ export class VideoStorage {
     return result.rows[0].id;
   }
 
-  async updateVideoEnd(id: string, endTime: Date, fileSize: number, duration: number) {
+  async updateVideoProgress(id: string, endTime: Date, fileSize: number, duration: number) {
     await query(
-      `UPDATE videos SET end_time = $1, file_size = $2, duration_seconds = $3 WHERE id = $4`,
+      `UPDATE videos
+       SET end_time = $1,
+           file_size = GREATEST(COALESCE(file_size, 0), $2),
+           duration_seconds = GREATEST(COALESCE(duration_seconds, 0), $3)
+       WHERE id = $4`,
       [endTime, fileSize, duration, id]
     );
+  }
+
+  async updateVideoEnd(id: string, endTime: Date, fileSize: number, duration: number) {
+    await this.updateVideoProgress(id, endTime, fileSize, duration);
   }
 
   async uploadVideoToSupabase(id: string, localPath: string, deviceId: string, channel: number): Promise<string> {

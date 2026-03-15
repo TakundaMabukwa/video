@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS images (
 
 -- INDEXES
 CREATE INDEX IF NOT EXISTS idx_videos_device_time ON videos(device_id, start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_videos_device_channel_time ON videos(device_id, channel, start_time DESC);
+CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC);
 CREATE INDEX IF NOT EXISTS idx_videos_alert ON videos(alert_id) WHERE alert_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_alerts_device_time ON alerts(device_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status) WHERE status != 'resolved';

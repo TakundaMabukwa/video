@@ -53,7 +53,9 @@ export const ensureRuntimeSchema = async (): Promise<void> => {
     `CREATE INDEX IF NOT EXISTS idx_images_alert_id ON images(alert_id)`,
     `CREATE INDEX IF NOT EXISTS idx_images_device_timestamp ON images(device_id, timestamp DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_videos_alert_id ON videos(alert_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_videos_device_start_time ON videos(device_id, start_time DESC)`
+    `CREATE INDEX IF NOT EXISTS idx_videos_device_start_time ON videos(device_id, start_time DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_start_time ON videos(device_id, channel, start_time DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_videos_device_channel_end_time ON videos(device_id, channel, end_time DESC)`
   ];
 
   for (const sql of statements) {

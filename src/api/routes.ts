@@ -52,14 +52,17 @@ export function createRoutes(
       .map((ch) => Number(ch))
       .filter((ch) => Number.isFinite(ch) && ch > 0);
     const p = Number(preferredChannel);
-    const all = [
-      ...fromCaps,
-      ...fromActive,
-      ...(Number.isFinite(p) && p > 0 ? [p] : []),
-      1,
-      2
-    ];
-    return Array.from(new Set(all)).sort((a, b) => a - b);
+    const ordered: number[] = [];
+    const pushIf = (value: number) => {
+      if (!Number.isFinite(value) || value <= 0 || ordered.includes(value)) return;
+      ordered.push(value);
+    };
+    if (Number.isFinite(p) && p > 0) pushIf(p);
+    fromCaps.forEach(pushIf);
+    fromActive.forEach(pushIf);
+    pushIf(1);
+    pushIf(2);
+    return ordered;
   };
   const ensureAlertMediaRequested = async (
     alertId: string,
@@ -2988,7 +2991,9 @@ export function createRoutes(
         };
       }));
 
-      const firstStorage = perChannel.find((x) => x.storageJob);
+      const firstStorage =
+        perChannel.find((x) => x.channel === channel && x.storageJob) ||
+        perChannel.find((x) => x.storageJob);
       const queried = perChannel.some((x) => x.scheduled?.querySent);
       const requested = perChannel.some((x) => x.scheduled?.requested);
       const queued = perChannel.some((x) => x.scheduled?.queued);
@@ -3007,6 +3012,7 @@ export function createRoutes(
             alertId: id,
             vehicleId,
             channel,
+            playbackChannel: firstStorage.channel,
             channelsRequested: targetChannels,
             alertTimestamp: alertTimestamp!.toISOString(),
             startTime: startTime.toISOString(),
@@ -3389,7 +3395,8 @@ export function createRoutes(
                start_time, end_time, duration_seconds, created_at, alert_id
         FROM videos
         WHERE device_id = $1
-          AND start_time BETWEEN $2 AND $3`;
+          AND start_time <= $3
+          AND COALESCE(end_time, start_time) >= $2`;
       if (ch > 0) {
         sql += ` AND channel = $4`;
         params.push(ch);

@@ -4,14 +4,39 @@ import { spawn } from 'child_process';
 import { VideoStorage } from '../storage/videoStorage';
 
 export class VideoWriter {
+  private static shutdownHooksRegistered = false;
+  private static activeInstances = new Set<VideoWriter>();
   private fileStreams = new Map<string, fs.WriteStream>();
   private frameCounters = new Map<string, number>();
   private videoStorage = new VideoStorage();
   private videoIds = new Map<string, string>();
   private startTimes = new Map<string, Date>();
   private filePaths = new Map<string, string>();
+  private bytesWritten = new Map<string, number>();
+  private lastPersistTimes = new Map<string, number>();
   private readonly segmentDurationMs = Math.max(10_000, Number(process.env.LIVE_SEGMENT_SECONDS || 60) * 1000);
+  private readonly progressUpdateMs = Math.max(1000, Number(process.env.VIDEO_PROGRESS_UPDATE_MS || 5000));
   private pendingTranscodes = new Set<string>();
+
+  constructor() {
+    VideoWriter.activeInstances.add(this);
+    this.registerShutdownHooks();
+  }
+
+  private registerShutdownHooks(): void {
+    if (VideoWriter.shutdownHooksRegistered) return;
+    const flushAll = () => {
+      for (const instance of VideoWriter.activeInstances) {
+        try {
+          instance.stopAllRecordings();
+        } catch {}
+      }
+    };
+    process.on('SIGINT', flushAll);
+    process.on('SIGTERM', flushAll);
+    process.on('beforeExit', flushAll);
+    VideoWriter.shutdownHooksRegistered = true;
+  }
 
   private getFfmpegBinary(): string {
     if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
@@ -98,6 +123,7 @@ export class VideoWriter {
     const stream = this.fileStreams.get(streamKey);
     if (stream) {
       stream.write(frameData);
+      this.bytesWritten.set(streamKey, (this.bytesWritten.get(streamKey) || 0) + frameData.length);
       
       const frameCount = (this.frameCounters.get(streamKey) || 0) + 1;
       this.frameCounters.set(streamKey, frameCount);
@@ -109,6 +135,8 @@ export class VideoWriter {
       if (frameCount % 100 === 0) {
         console.log(`Frames written: vehicle ${vehicleId}, channel ${channel}, count ${frameCount}`);
       }
+
+      this.persistProgress(streamKey);
     }
   }
 
@@ -128,6 +156,8 @@ export class VideoWriter {
     this.fileStreams.set(streamKey, stream);
     this.startTimes.set(streamKey, startedAt);
     this.filePaths.set(streamKey, filepath);
+    this.bytesWritten.set(streamKey, 0);
+    this.lastPersistTimes.set(streamKey, 0);
     
     stream.on('error', (error) => {
       console.error(`Error writing video file ${filepath}:`, error);
@@ -146,9 +176,32 @@ export class VideoWriter {
         'live'
       );
       this.videoIds.set(streamKey, videoId);
+      await this.videoStorage.updateVideoProgress(videoId, startedAt, 0, 0);
+      this.lastPersistTimes.set(streamKey, Date.now());
     } catch (error) {
       console.error('Failed to save video metadata to database:', error);
     }
+  }
+
+  private persistProgress(streamKey: string, force = false): void {
+    const videoId = this.videoIds.get(streamKey);
+    const startTime = this.startTimes.get(streamKey);
+    if (!videoId || !startTime) return;
+
+    const now = Date.now();
+    const lastPersist = this.lastPersistTimes.get(streamKey) || 0;
+    if (!force && now - lastPersist < this.progressUpdateMs) {
+      return;
+    }
+
+    const duration = Math.max(0, Math.floor((now - startTime.getTime()) / 1000));
+    const fileSize = Math.max(0, this.bytesWritten.get(streamKey) || 0);
+    this.lastPersistTimes.set(streamKey, now);
+    this.videoStorage
+      .updateVideoProgress(videoId, new Date(now), fileSize, duration)
+      .catch((error) => {
+        console.error(`Failed to persist video progress for ${streamKey}:`, error);
+      });
   }
 
   private finalizeSegment(streamKey: string, vehicleId: string, channel: number): void {
@@ -158,13 +211,16 @@ export class VideoWriter {
       const videoId = this.videoIds.get(streamKey);
       const startTime = this.startTimes.get(streamKey);
       const filepath = this.filePaths.get(streamKey);
+      this.persistProgress(streamKey, true);
       stream.end(() => {
         if (videoId && startTime && filepath) {
           const endTime = new Date();
           const duration = Math.max(1, Math.floor((endTime.getTime() - startTime.getTime()) / 1000));
           try {
-            const stats = fs.statSync(filepath);
-            this.videoStorage.updateVideoEnd(videoId, endTime, stats.size, duration).catch(console.error);
+            const sizeFromCounter = this.bytesWritten.get(streamKey) || 0;
+            const stats = fs.existsSync(filepath) ? fs.statSync(filepath) : null;
+            const finalSize = Math.max(sizeFromCounter, stats?.size || 0);
+            this.videoStorage.updateVideoEnd(videoId, endTime, finalSize, duration).catch(console.error);
             this.kickoffPlayableTranscode(filepath);
           } catch (error) {
             console.error('Failed to update video metadata:', error);
@@ -179,6 +235,8 @@ export class VideoWriter {
       this.videoIds.delete(streamKey);
       this.startTimes.delete(streamKey);
       this.filePaths.delete(streamKey);
+      this.bytesWritten.delete(streamKey);
+      this.lastPersistTimes.delete(streamKey);
     }
   }
 
