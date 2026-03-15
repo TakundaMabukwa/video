@@ -3,6 +3,7 @@ import { JTT808Server } from '../tcp/server';
 import { UDPRTPServer } from '../udp/server';
 import { SpeedingManager } from '../services/speedingManager';
 import { VideoStorage } from '../storage/videoStorage';
+import { ImageStorage } from '../storage/imageStorage';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -20,6 +21,7 @@ export function createRoutes(
   const FTP_DOWNLOADS_ENABLED = false;
   const speedingManager = new SpeedingManager();
   const videoStorage = new VideoStorage();
+  const imageStorage = new ImageStorage();
   const manualVideoJobs = new Map<string, {
     id: string;
     vehicleId: string;
@@ -254,6 +256,128 @@ export function createRoutes(
         file_path: String(row?.file_path || '').trim()
       }))
       .filter((row: any) => !!row.file_path);
+  };
+  const extractScreenshotFromStoredSegment = async (
+    vehicleId: string,
+    channel: number,
+    alertId: string,
+    captureAt: Date,
+    segment: {
+      id: string;
+      file_path: string;
+      start_time: string | Date;
+      end_time?: string | Date | null;
+      duration_seconds?: number | null;
+    }
+  ) => {
+    const rawPath = String(segment?.file_path || '').trim();
+    if (!rawPath) return null;
+    const localPath = path.isAbsolute(rawPath) ? rawPath : path.join(process.cwd(), rawPath);
+    if (!fs.existsSync(localPath)) return null;
+
+    const sourcePath = /\.mp4$/i.test(localPath) ? localPath : await toPlayableMp4(localPath);
+    if (!sourcePath || !fs.existsSync(sourcePath)) return null;
+
+    const segmentStart = new Date(segment.start_time);
+    const segmentEnd = segment.end_time ? new Date(segment.end_time) : null;
+    const durationSeconds = Number(segment.duration_seconds || 0);
+    const maxOffset = segmentEnd && !Number.isNaN(segmentEnd.getTime())
+      ? Math.max(0, (segmentEnd.getTime() - segmentStart.getTime()) / 1000)
+      : Math.max(0, durationSeconds);
+    const rawOffset = Math.max(0, (captureAt.getTime() - segmentStart.getTime()) / 1000);
+    const offsetSeconds = maxOffset > 0 ? Math.min(rawOffset, Math.max(0, maxOffset - 0.04)) : rawOffset;
+
+    const imageData = await new Promise<Buffer | null>((resolve) => {
+      const ffmpeg = spawn(getFfmpegBinary(), [
+        '-hide_banner',
+        '-loglevel',
+        'error',
+        '-y',
+        '-ss',
+        offsetSeconds.toFixed(3),
+        '-i',
+        sourcePath,
+        '-frames:v',
+        '1',
+        '-f',
+        'image2pipe',
+        '-vcodec',
+        'mjpeg',
+        'pipe:1'
+      ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      const chunks: Buffer[] = [];
+      let resolved = false;
+      const finish = (buffer: Buffer | null) => {
+        if (resolved) return;
+        resolved = true;
+        resolve(buffer);
+      };
+      const timeout = setTimeout(() => {
+        try { ffmpeg.kill('SIGKILL'); } catch {}
+        finish(null);
+      }, 8000);
+
+      ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+      ffmpeg.on('error', () => {
+        clearTimeout(timeout);
+        finish(null);
+      });
+      ffmpeg.on('close', (code) => {
+        clearTimeout(timeout);
+        if (code === 0 && chunks.length > 0) finish(Buffer.concat(chunks));
+        else finish(null);
+      });
+    });
+
+    if (!imageData || imageData.length < 4) return null;
+    const imageId = await imageStorage.saveImage(vehicleId, channel, imageData, alertId, captureAt);
+    return {
+      id: String(imageId),
+      vehicleId,
+      channel,
+      timestamp: captureAt.toISOString(),
+      fileSize: imageData.length,
+      url: `/api/images/${encodeURIComponent(String(imageId))}/file`,
+      offsetSeconds: 0,
+      source: 'stored_video_frame'
+    };
+  };
+  const ensureAccurateAlertScreenshots = async (
+    alertId: string,
+    vehicleId: string,
+    alertChannel: number,
+    alertTs: Date
+  ) => {
+    const db = require('../storage/database');
+    const existing = await db.query(
+      `SELECT id FROM images WHERE alert_id = $1 LIMIT 1`,
+      [alertId]
+    );
+    if ((existing.rows || []).length > 0) return;
+
+    const channels = getVehicleChannels(vehicleId, alertChannel).slice(0, 2);
+    for (const ch of channels) {
+      const segments = await queryStoredVideoSegments(
+        vehicleId,
+        ch,
+        new Date(alertTs.getTime() - 45 * 1000),
+        new Date(alertTs.getTime() + 45 * 1000)
+      );
+      const bestSegment = segments.find((segment: any) => {
+        const start = new Date(segment.start_time);
+        const end = segment.end_time ? new Date(segment.end_time) : start;
+        return start.getTime() <= alertTs.getTime() && end.getTime() >= alertTs.getTime();
+      }) || segments[0];
+      if (!bestSegment) continue;
+
+      try {
+        const created = await extractScreenshotFromStoredSegment(vehicleId, ch, alertId, alertTs, bestSegment);
+        if (created?.id) {
+          await dbQuery(`UPDATE images SET alert_id = $1 WHERE id = $2`, [alertId, created.id]);
+        }
+      } catch {}
+    }
   };
   const getFfmpegBinary = () => {
     if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
@@ -1853,6 +1977,7 @@ export function createRoutes(
     const limit = Math.max(1, Math.min(200, Number(req.query.limit || 50)));
     const includeFallback = String(req.query.includeFallback ?? 'true').toLowerCase() !== 'false';
     const minutesWindow = Math.max(1, Math.min(30, Number(req.query.windowMinutes || 2)));
+    const strictThresholdSeconds = Math.max(1, Math.min(60, Number(req.query.thresholdSeconds || process.env.ALERT_SCREENSHOT_THRESHOLD_SECONDS || 10)));
 
     try {
       const row = await loadAlertRow(id);
@@ -1865,11 +1990,12 @@ export function createRoutes(
 
       const db = require('../storage/database');
       const linked = await backfillAlertMediaLinks(id, row);
-      const alertTs = new Date(row.timestamp);
-      const fallbackFrom = new Date(alertTs.getTime() - minutesWindow * 60 * 1000);
-      const fallbackTo = new Date(alertTs.getTime() + minutesWindow * 60 * 1000);
       const alertVehicleId = String(row.device_id || '');
       const alertChannel = Number(row.channel || 1);
+      const alertTs = new Date(row.timestamp);
+      await ensureAccurateAlertScreenshots(id, alertVehicleId, alertChannel, alertTs);
+      const fallbackFrom = new Date(alertTs.getTime() - minutesWindow * 60 * 1000);
+      const fallbackTo = new Date(alertTs.getTime() + minutesWindow * 60 * 1000);
 
       const queryText = includeFallback
         ? `WITH direct AS (
@@ -1905,15 +2031,30 @@ export function createRoutes(
         : [id, limit];
       const result = await db.query(queryText, params);
 
-      const screenshots = result.rows.map((img: any) => ({
+      const screenshots = result.rows.map((img: any) => {
+        const ts = new Date(img.timestamp);
+        const offsetSeconds = Number.isNaN(ts.getTime())
+          ? null
+          : Number(((ts.getTime() - alertTs.getTime()) / 1000).toFixed(3));
+        return {
         id: img.id,
         alertId: img.alert_id || id,
         vehicleId: img.device_id,
         channel: Number(img.channel || 1),
         timestamp: img.timestamp,
         fileSize: Number(img.file_size || 0),
-        url: normalizePublicImageUrl(img)
-      }));
+        url: normalizePublicImageUrl(img),
+        offsetSeconds
+      };
+      }).sort((a: any, b: any) => {
+        const aDirect = String(a.alertId || '') === id ? 0 : 1;
+        const bDirect = String(b.alertId || '') === id ? 0 : 1;
+        if (aDirect !== bDirect) return aDirect - bDirect;
+        const aOffset = Math.abs(Number(a.offsetSeconds ?? Number.MAX_SAFE_INTEGER));
+        const bOffset = Math.abs(Number(b.offsetSeconds ?? Number.MAX_SAFE_INTEGER));
+        return aOffset - bOffset;
+      }).filter((shot: any) => Math.abs(Number(shot.offsetSeconds ?? Number.MAX_SAFE_INTEGER)) <= strictThresholdSeconds)
+        .slice(0, limit);
 
       const byChannel: Record<string, any[]> = {};
       for (const s of screenshots) {
@@ -1929,6 +2070,7 @@ export function createRoutes(
           vehicleId: alertVehicleId,
           channel: alertChannel,
           alertTimestamp: row.timestamp,
+          thresholdSeconds: strictThresholdSeconds,
           count: screenshots.length,
           screenshots,
           byChannel,
@@ -1948,6 +2090,7 @@ export function createRoutes(
   router.get('/alerts/:id/media', async (req, res) => {
     const { id } = req.params;
     const ensureMedia = String(req.query.ensureMedia ?? 'false').toLowerCase() === 'true';
+    const strictThresholdSeconds = Math.max(1, Math.min(60, Number(req.query.thresholdSeconds || process.env.ALERT_SCREENSHOT_THRESHOLD_SECONDS || 10)));
 
     try {
       const row = await loadAlertRow(id);
@@ -1973,6 +2116,7 @@ export function createRoutes(
 
       const db = require('../storage/database');
       const alertTs = new Date(row.timestamp);
+      await ensureAccurateAlertScreenshots(id, String(row.device_id || ''), Number(row.channel || 1), alertTs);
       const fallbackFrom = new Date(alertTs.getTime() - 120 * 1000);
       const fallbackTo = new Date(alertTs.getTime() + 120 * 1000);
       const [screensResult, videosResult] = await Promise.all([
@@ -2029,15 +2173,27 @@ export function createRoutes(
       const metadata = parseAlertMetadata(row.metadata);
       const videoClips = metadata?.videoClips || {};
 
-      const screenshots = screensResult.rows.map((img: any) => ({
-        id: img.id,
-        alertId: img.alert_id || id,
-        vehicleId: img.device_id,
-        channel: Number(img.channel || 1),
-        timestamp: img.timestamp,
-        fileSize: Number(img.file_size || 0),
-        url: normalizePublicImageUrl(img)
-      }));
+      const screenshots = screensResult.rows.map((img: any) => {
+        const ts = new Date(img.timestamp);
+        return {
+          id: img.id,
+          alertId: img.alert_id || id,
+          vehicleId: img.device_id,
+          channel: Number(img.channel || 1),
+          timestamp: img.timestamp,
+          fileSize: Number(img.file_size || 0),
+          url: normalizePublicImageUrl(img),
+          offsetSeconds: Number.isNaN(ts.getTime())
+            ? null
+            : Number(((ts.getTime() - alertTs.getTime()) / 1000).toFixed(3))
+        };
+      }).sort((a: any, b: any) => {
+        const aDirect = String(a.alertId || '') === id ? 0 : 1;
+        const bDirect = String(b.alertId || '') === id ? 0 : 1;
+        if (aDirect !== bDirect) return aDirect - bDirect;
+        return Math.abs(Number(a.offsetSeconds ?? Number.MAX_SAFE_INTEGER))
+          - Math.abs(Number(b.offsetSeconds ?? Number.MAX_SAFE_INTEGER));
+      }).filter((shot: any) => Math.abs(Number(shot.offsetSeconds ?? Number.MAX_SAFE_INTEGER)) <= strictThresholdSeconds);
       const videos = videosResult.rows.map((v: any) => ({
         id: v.id,
         alertId: v.alert_id || id,
@@ -2074,7 +2230,8 @@ export function createRoutes(
             postRaw: normalizePublicVideoUrl(videoClips.postStorageUrl || videoClips.post, `/api/alerts/${encodeURIComponent(id)}/video/post`)
           },
           ensure: ensureInfo,
-          linked
+          linked,
+          screenshotThresholdSeconds: strictThresholdSeconds
         }
       });
     } catch (error: any) {

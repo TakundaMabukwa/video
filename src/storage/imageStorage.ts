@@ -16,8 +16,15 @@ export class ImageStorage {
     return path.join(this.localRoot, relativeFilePath);
   }
 
-  async saveImage(deviceId: string, channel: number, imageData: Buffer, alertId?: string): Promise<string> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  async saveImage(
+    deviceId: string,
+    channel: number,
+    imageData: Buffer,
+    alertId?: string,
+    capturedAt?: Date
+  ): Promise<string> {
+    const captureTime = capturedAt && !Number.isNaN(capturedAt.getTime()) ? capturedAt : new Date();
+    const timestamp = captureTime.toISOString().replace(/[:.]/g, '-');
     const relativeFilePath = `${deviceId}/ch${channel}/${timestamp}.jpg`;
     const localPath = this.buildLocalPath(relativeFilePath);
 
@@ -35,7 +42,7 @@ export class ImageStorage {
       `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING id`,
-      [deviceId, channel, relativeFilePath, '', imageData.length, new Date(), alertId || null]
+      [deviceId, channel, relativeFilePath, '', imageData.length, captureTime, alertId || null]
     );
 
     const id = result.rows[0].id;
@@ -43,9 +50,16 @@ export class ImageStorage {
     return id;
   }
 
-  async saveImageFromPath(deviceId: string, channel: number, localPath: string, fileSize: number, alertId?: string): Promise<string> {
+  async saveImageFromPath(
+    deviceId: string,
+    channel: number,
+    localPath: string,
+    fileSize: number,
+    alertId?: string,
+    capturedAt?: Date
+  ): Promise<string> {
     const imageData = fs.readFileSync(localPath);
-    return this.saveImage(deviceId, channel, imageData, alertId);
+    return this.saveImage(deviceId, channel, imageData, alertId, capturedAt);
   }
 
   async getImages(deviceId: string, limit: number = 50) {
