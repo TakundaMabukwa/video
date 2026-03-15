@@ -466,46 +466,62 @@ export function createRoutes(
         fs.mkdirSync(outputDir, { recursive: true });
       } catch {}
 
-      const ffmpeg = spawn('ffmpeg', [
-        '-hide_banner',
-        '-loglevel', 'error',
-        '-y',
-        '-i', playlistPath,
-        '-t', String(durationSec),
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        outputPath
-      ], { stdio: ['ignore', 'ignore', 'pipe'] });
-
-      let stderr = '';
-      ffmpeg.stderr.on('data', (d) => { stderr += String(d || ''); });
-      ffmpeg.on('error', (err) => {
+      void runFfmpegProfiles([
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          playlistPath,
+          '-t',
+          String(durationSec),
+          '-c:v',
+          'libx264',
+          '-preset',
+          'veryfast',
+          '-pix_fmt',
+          'yuv420p',
+          '-an',
+          '-movflags',
+          '+faststart',
+          outputPath
+        ],
+        [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-i',
+          playlistPath,
+          '-t',
+          String(durationSec),
+          '-c',
+          'copy',
+          '-movflags',
+          '+faststart',
+          outputPath
+        ]
+      ], outputPath).then(() => {
+        const finalJob = manualVideoJobs.get(id);
+        if (!finalJob) return;
+        finalJob.status = 'completed';
+        finalJob.updatedAt = new Date().toISOString();
+        manualVideoJobs.set(id, finalJob);
+        void persistManualJobVideo(finalJob).catch((err: any) => {
+          const latest = manualVideoJobs.get(id);
+          if (!latest) return;
+          latest.error = `Persist failed: ${err?.message || 'unknown error'}`;
+          latest.updatedAt = new Date().toISOString();
+          manualVideoJobs.set(id, latest);
+        });
+      }).catch((err: any) => {
         const failed = manualVideoJobs.get(id);
         if (!failed) return;
         failed.status = 'failed';
-        failed.error = err?.message || 'ffmpeg spawn failed';
+        failed.error = err?.message || 'ffmpeg failed';
         failed.updatedAt = new Date().toISOString();
         manualVideoJobs.set(id, failed);
-      });
-      ffmpeg.on('close', (code) => {
-        const finalJob = manualVideoJobs.get(id);
-        if (!finalJob) return;
-        const ok = code === 0 && fs.existsSync(outputPath);
-        if (ok) {
-          finalJob.status = 'completed';
-          void persistManualJobVideo(finalJob).catch((err: any) => {
-            const latest = manualVideoJobs.get(id);
-            if (!latest) return;
-            latest.error = `Persist failed: ${err?.message || 'unknown error'}`;
-            latest.updatedAt = new Date().toISOString();
-            manualVideoJobs.set(id, latest);
-          });
-        } else {
-          finalJob.status = 'failed';
-          finalJob.error = stderr?.slice(0, 500) || `ffmpeg exited with code ${code}`;
-        }
-        finalJob.updatedAt = new Date().toISOString();
-        manualVideoJobs.set(id, finalJob);
       });
     }, 1200);
 
@@ -599,28 +615,7 @@ export function createRoutes(
 
         const firstStart = preparedSources[0].startTime;
         const trimOffsetSec = Math.max(0, (start.getTime() - firstStart.getTime()) / 1000);
-        const copyProfile = [
-          '-hide_banner',
-          '-loglevel',
-          'error',
-          '-y',
-          '-f',
-          'concat',
-          '-safe',
-          '0',
-          '-i',
-          concatFilePath,
-          '-ss',
-          trimOffsetSec.toFixed(3),
-          '-t',
-          String(durationSec),
-          '-c',
-          'copy',
-          '-movflags',
-          '+faststart',
-          outputPath
-        ];
-        const transcodeProfile = [
+        const browserSafeProfile = [
           '-hide_banner',
           '-loglevel',
           'error',
@@ -645,8 +640,29 @@ export function createRoutes(
           '+faststart',
           outputPath
         ];
+        const copyProfile = [
+          '-hide_banner',
+          '-loglevel',
+          'error',
+          '-y',
+          '-f',
+          'concat',
+          '-safe',
+          '0',
+          '-i',
+          concatFilePath,
+          '-ss',
+          trimOffsetSec.toFixed(3),
+          '-t',
+          String(durationSec),
+          '-c',
+          'copy',
+          '-movflags',
+          '+faststart',
+          outputPath
+        ];
 
-        await runFfmpegProfiles([copyProfile, transcodeProfile], outputPath);
+        await runFfmpegProfiles([browserSafeProfile, copyProfile], outputPath);
 
         const finalJob = manualVideoJobs.get(id);
         if (!finalJob) return;
