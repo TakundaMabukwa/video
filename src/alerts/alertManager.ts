@@ -288,65 +288,56 @@ export class AlertManager extends EventEmitter {
     // Edge-triggered behavior: only create an alert when a new signal appears.
     if (newlyRaisedSignals.length === 0) return;
 
-    const alertSignalDetails = newlyRaisedSignals.map((s) => this.getSignalDetail(s));
-    const alertLabels = alertSignalDetails.map((d) => d.label);
-    const primaryType = this.getPrimaryAlertType(alert, newlyRaisedSignals);
-    const signature = this.buildAlertSignature(alert.vehicleId, channel, primaryType);
+    for (const signalCode of newlyRaisedSignals) {
+      const alertSignalDetail = this.getSignalDetail(signalCode);
+      const primaryType = this.getPrimaryAlertTypeForSignal(alert, signalCode, alertSignalDetail.label);
+      const signature = this.buildAlertSignature(alert.vehicleId, channel, signalCode);
 
-    if (this.shouldSuppressDuplicate(signature, alert.timestamp)) {
-      return;
-    }
-
-    const priority = this.determinePriority(alert, newlyRaisedSignals);
-    const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
-
-    const alertEvent: AlertEvent = {
-      id: alertId,
-      vehicleId: alert.vehicleId,
-      channel,
-      priority,
-      type: primaryType,
-      timestamp: alert.timestamp,
-      location: { latitude: alert.latitude, longitude: alert.longitude },
-      status: 'new',
-      escalationLevel: 0,
-      metadata: {
-        ...alert,
-        alertSignals: newlyRaisedSignals,
-        activeSignalsSnapshot: alertSignals,
-        rawAlertSignals: allAlertSignals,
-        alertLabels,
-        alertSignalDetails,
-        primaryAlertType: primaryType
+      if (this.shouldSuppressDuplicate(signature, alert.timestamp)) {
+        continue;
       }
-    };
 
-    this.activeAlerts.set(alertId, alertEvent);
+      const priority = this.determinePriorityForSignal(alert, signalCode);
+      const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
 
-    // Save alert to database
-    await this.alertStorage.saveAlert(alertEvent);
+      const alertEvent: AlertEvent = {
+        id: alertId,
+        vehicleId: alert.vehicleId,
+        channel,
+        priority,
+        type: primaryType,
+        timestamp: alert.timestamp,
+        location: { latitude: alert.latitude, longitude: alert.longitude },
+        status: 'new',
+        escalationLevel: 0,
+        metadata: {
+          ...alert,
+          alertSignals: [signalCode],
+          activeSignalsSnapshot: alertSignals,
+          rawAlertSignals: allAlertSignals,
+          alertLabels: [alertSignalDetail.label],
+          alertSignalDetails: [alertSignalDetail],
+          primaryAlertType: primaryType
+        }
+      };
 
-    // Request immediate screenshot for alert evidence (ALL alerts)
-    console.log(`📸 Requesting screenshot for alert ${alertId}`);
-    this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
+      this.activeAlerts.set(alertId, alertEvent);
+      await this.alertStorage.saveAlert(alertEvent);
 
-    // Capture video evidence for ALL alerts.
-    // Flow mirrors screenshot behavior: always keep a local fallback (buffer clip),
-    // and also request camera-side video retrieval.
-    await Promise.allSettled([
-      this.captureEventVideo(alertEvent),
-      this.requestAlertVideoFromCamera(alertEvent)
-    ]);
+      console.log(`📸 Requesting screenshot for alert ${alertId}`);
+      this.emit('request-screenshot', { vehicleId: alert.vehicleId, channel, alertId });
 
-    // Send bell notification
-    this.notifier.sendAlertNotification(alertEvent);
+      await Promise.allSettled([
+        this.captureEventVideo(alertEvent),
+        this.requestAlertVideoFromCamera(alertEvent)
+      ]);
 
-    // Start escalation monitoring
-    this.escalation.monitorAlert(alertEvent);
+      this.notifier.sendAlertNotification(alertEvent);
+      this.escalation.monitorAlert(alertEvent);
+      this.emit('alert', alertEvent);
 
-    this.emit('alert', alertEvent);
-
-    console.log(`🚨 Alert ${alertId}: ${alertEvent.type} [${priority}]`);
+      console.log(`🚨 Alert ${alertId}: ${alertEvent.type} [${priority}]`);
+    }
   }
 
   async processExternalAlert(input: ExternalAlertInput): Promise<void> {
@@ -515,6 +506,50 @@ export class AlertManager extends EventEmitter {
     return AlertPriority.LOW;
   }
 
+  private determinePriorityForSignal(alert: LocationAlert, signalCode: string): AlertPriority {
+    if (signalCode.startsWith('adas_')) return this.lookupCatalogPriority(signalCode) || AlertPriority.HIGH;
+    if (signalCode.startsWith('dms_')) return this.lookupCatalogPriority(signalCode) || AlertPriority.HIGH;
+    if (signalCode.startsWith('behavior_')) return this.lookupCatalogPriority(signalCode) || AlertPriority.MEDIUM;
+
+    if (signalCode === 'jt808_emergency' || signalCode === 'jt808_collision_warning' || signalCode === 'jt808_rollover_warning') {
+      return AlertPriority.CRITICAL;
+    }
+
+    if (
+      signalCode === 'jt808_fatigue' ||
+      signalCode === 'jt808_dangerous_driving' ||
+      signalCode === 'jt808_fatigue_warning' ||
+      signalCode === 'jtt1078_behavior_fatigue' ||
+      signalCode === 'jtt1078_behavior_phone_call' ||
+      signalCode === 'jtt1078_behavior_smoking' ||
+      signalCode === 'jtt1078_storage_failure' ||
+      signalCode === 'jtt1078_abnormal_driving' ||
+      signalCode === 'platform_video_alarm_0103' ||
+      signalCode === 'platform_video_alarm_0106'
+    ) {
+      return AlertPriority.HIGH;
+    }
+
+    if (
+      signalCode === 'jt808_overspeed' ||
+      signalCode === 'jt808_overspeed_warning' ||
+      signalCode === 'jtt1078_video_signal_loss' ||
+      signalCode === 'jtt1078_video_signal_blocking' ||
+      signalCode === 'jtt1078_bus_overcrowding' ||
+      signalCode === 'jtt1078_other_video_failure' ||
+      signalCode === 'jtt1078_memory_failure' ||
+      signalCode === 'platform_video_alarm_0101' ||
+      signalCode === 'platform_video_alarm_0102' ||
+      signalCode === 'platform_video_alarm_0104' ||
+      signalCode === 'platform_video_alarm_0105' ||
+      signalCode === 'platform_video_alarm_0107'
+    ) {
+      return AlertPriority.MEDIUM;
+    }
+
+    return this.determinePriority(alert, [signalCode]);
+  }
+
   private async persistAlertClipVideo(
     alert: AlertEvent,
     clipPath: string,
@@ -584,6 +619,36 @@ export class AlertManager extends EventEmitter {
     if (alert.videoAlarms?.busOvercrowding) return 'Bus Overcrowding';
     if (alertSignals.length > 0) return this.getSignalDetail(alertSignals[0]).label;
     return 'General Alert';
+  }
+
+  private getPrimaryAlertTypeForSignal(alert: LocationAlert, signalCode: string, fallbackLabel?: string): string {
+    if (signalCode === 'jt808_emergency') return 'Emergency Alarm';
+    if (signalCode === 'jt808_collision_warning') return 'Collision Warning';
+    if (signalCode === 'jt808_rollover_warning') return 'Rollover Warning';
+    if (signalCode === 'jt808_fatigue' || signalCode === 'jtt1078_behavior_fatigue') return 'Driver Fatigue';
+    if (signalCode === 'jt808_dangerous_driving' || signalCode === 'jtt1078_behavior_phone_call') return 'Dangerous Driving Behavior';
+    if (signalCode === 'jtt1078_behavior_smoking') return 'Smoking While Driving';
+    if (signalCode === 'jt808_overspeed' || signalCode === 'jt808_overspeed_warning') return 'Overspeed Alarm';
+    if (signalCode === 'jtt1078_storage_failure' || signalCode === 'platform_video_alarm_0103') return 'Storage Failure';
+    if (signalCode === 'jtt1078_video_signal_loss' || signalCode === 'platform_video_alarm_0101') return 'Video Signal Loss';
+    if (signalCode === 'jtt1078_video_signal_blocking' || signalCode === 'platform_video_alarm_0102') return 'Video Signal Blocked';
+    if (signalCode === 'jtt1078_bus_overcrowding' || signalCode === 'platform_video_alarm_0105') return 'Bus Overcrowding';
+    if (signalCode === 'jtt1078_other_video_failure' || signalCode === 'platform_video_alarm_0104') return 'Other Video Equipment Failure';
+    if (signalCode === 'jtt1078_abnormal_driving' || signalCode === 'platform_video_alarm_0106') return 'Abnormal Driving Behavior';
+    if (signalCode === 'jtt1078_special_alarm_threshold' || signalCode === 'platform_video_alarm_0107') return 'Special Alarm Recording Threshold';
+    if (signalCode.startsWith('adas_') || signalCode.startsWith('dms_') || signalCode.startsWith('behavior_')) {
+      return this.getSignalDetail(signalCode).label;
+    }
+    return fallbackLabel || this.getPrimaryAlertType(alert, [signalCode]);
+  }
+
+  private lookupCatalogPriority(signalCode: string): AlertPriority | null {
+    const mapped = getVendorAlarmBySignalCode(signalCode);
+    if (!mapped) return null;
+    if (mapped.defaultPriority === 'critical') return AlertPriority.CRITICAL;
+    if (mapped.defaultPriority === 'high') return AlertPriority.HIGH;
+    if (mapped.defaultPriority === 'medium') return AlertPriority.MEDIUM;
+    return AlertPriority.LOW;
   }
 
   private extractChannelFromAlert(alert: LocationAlert): number {
@@ -765,6 +830,8 @@ export class AlertManager extends EventEmitter {
       const signal = jtt1078VideoBitSignalMap[bit];
       if (signal) {
         signals.push(signal);
+      } else {
+        signals.push(`jtt1078_video_alarm_bit_${bit}`);
       }
     }
 

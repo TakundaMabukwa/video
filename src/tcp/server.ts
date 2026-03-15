@@ -1016,7 +1016,7 @@ export class JTT808Server {
         type: parsed.type,
         signalCode: parsed.signalCode,
         priority: parsed.priority,
-        timestamp: new Date(),
+        timestamp: last?.timestamp || new Date(),
         location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
         metadata: {
           ...this.buildAlertContextMetadata(message.terminalPhone, '0x0900'),
@@ -2663,7 +2663,7 @@ export class JTT808Server {
           type: mapped.type,
           signalCode: `external_multimedia_event_${eventCode}`,
           priority: mapped.priority,
-          timestamp: new Date(),
+          timestamp: last?.timestamp || new Date(),
           location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
           metadata: {
             ...this.buildAlertContextMetadata(message.terminalPhone, '0x0800'),

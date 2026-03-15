@@ -159,6 +159,55 @@ export function createRoutes(
     }
     return raw;
   };
+  const extractNativeSignalsFromParsedAlert = (parsedAlert: any): string[] => {
+    if (!parsedAlert || typeof parsedAlert !== 'object') return [];
+    const signals: string[] = [];
+    const alarmFlags = parsedAlert.alarmFlags || {};
+    if (alarmFlags.emergency) signals.push('jt808_emergency');
+    if (alarmFlags.overspeed) signals.push('jt808_overspeed');
+    if (alarmFlags.fatigue) signals.push('jt808_fatigue');
+    if (alarmFlags.dangerousDriving) signals.push('jt808_dangerous_driving');
+    if (alarmFlags.overspeedWarning) signals.push('jt808_overspeed_warning');
+    if (alarmFlags.fatigueWarning) signals.push('jt808_fatigue_warning');
+    if (alarmFlags.collisionWarning) signals.push('jt808_collision_warning');
+    if (alarmFlags.rolloverWarning) signals.push('jt808_rollover_warning');
+
+    const videoAlarms = parsedAlert.videoAlarms || {};
+    if (videoAlarms.videoSignalLoss) signals.push('jtt1078_video_signal_loss');
+    if (videoAlarms.videoSignalBlocking) signals.push('jtt1078_video_signal_blocking');
+    if (videoAlarms.storageFailure) signals.push('jtt1078_storage_failure');
+    if (videoAlarms.otherVideoFailure) signals.push('jtt1078_other_video_failure');
+    if (videoAlarms.busOvercrowding) signals.push('jtt1078_bus_overcrowding');
+    if (videoAlarms.abnormalDriving) signals.push('jtt1078_abnormal_driving');
+    if (videoAlarms.specialAlarmThreshold) signals.push('jtt1078_special_alarm_threshold');
+    if (Array.isArray(videoAlarms.setBits)) {
+      for (const bit of videoAlarms.setBits) {
+        if (Number(bit) > 6) signals.push(`jtt1078_video_alarm_bit_${bit}`);
+      }
+    }
+
+    if (Array.isArray(parsedAlert.signalLossChannels) && parsedAlert.signalLossChannels.length) {
+      signals.push(`jtt1078_signal_loss_channels_${parsedAlert.signalLossChannels.join('_')}`);
+    }
+    if (Array.isArray(parsedAlert.blockingChannels) && parsedAlert.blockingChannels.length) {
+      signals.push(`jtt1078_signal_blocking_channels_${parsedAlert.blockingChannels.join('_')}`);
+    }
+    if (
+      parsedAlert.memoryFailures &&
+      ((Array.isArray(parsedAlert.memoryFailures.main) && parsedAlert.memoryFailures.main.length) ||
+        (Array.isArray(parsedAlert.memoryFailures.backup) && parsedAlert.memoryFailures.backup.length))
+    ) {
+      signals.push('jtt1078_memory_failure');
+    }
+
+    const drivingBehavior = parsedAlert.drivingBehavior || {};
+    if (drivingBehavior.fatigue) signals.push('jtt1078_behavior_fatigue');
+    if (drivingBehavior.phoneCall) signals.push('jtt1078_behavior_phone_call');
+    if (drivingBehavior.smoking) signals.push('jtt1078_behavior_smoking');
+    if (Number(drivingBehavior.custom || 0) > 0) signals.push(`jtt1078_behavior_custom_${drivingBehavior.custom}`);
+
+    return Array.from(new Set(signals));
+  };
   const backfillAlertMediaLinks = async (alertId: string, row: any) => {
     const deviceId = String(row?.device_id || '').trim();
     const channel = Number(row?.channel || 1);
@@ -2521,6 +2570,145 @@ export function createRoutes(
       res.status(500).json({
         success: false,
         message: 'Failed to load vendor alert review',
+        error: error?.message || String(error)
+      });
+    }
+  });
+
+  router.get('/protocol/alert-decode-review', async (req, res) => {
+    try {
+      const vehicleId = String(req.query.vehicleId || '').trim();
+      const limit = Math.max(1, Math.min(Number(req.query.limit || 100), 500));
+      const messageIdRaw = String(req.query.messageId || req.query.messageIdHex || '').trim().toLowerCase();
+      const onlyWithSignals = String(req.query.onlyWithSignals || '').trim().toLowerCase() === 'true';
+      const messageId = messageIdRaw
+        ? (messageIdRaw.startsWith('0x') ? parseInt(messageIdRaw, 16) : parseInt(messageIdRaw, 10))
+        : undefined;
+
+      const traces = tcpServer.getRecentMessageTraces({
+        vehicleId: vehicleId || undefined,
+        messageId: Number.isFinite(messageId as number) ? messageId : undefined,
+        limit
+      });
+
+      const vehicleIds = Array.from(new Set(traces.map((trace: any) => String(trace.vehicleId || '').trim()).filter(Boolean)));
+      let linkedAlertsByVehicle = new Map<string, any[]>();
+      if (vehicleIds.length) {
+        const rows = await dbQuery(
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, metadata
+           FROM alerts
+           WHERE device_id = ANY($1::text[])
+             AND timestamp >= NOW() - INTERVAL '48 hours'
+           ORDER BY timestamp DESC
+           LIMIT 2000`,
+          [vehicleIds]
+        );
+        linkedAlertsByVehicle = rows.rows.reduce((acc: Map<string, any[]>, row: any) => {
+          const key = String(row.device_id || '').trim();
+          const list = acc.get(key) || [];
+          list.push({
+            id: row.id,
+            channel: row.channel,
+            type: row.alert_type,
+            priority: row.priority,
+            status: row.status,
+            timestamp: row.timestamp,
+            metadata: parseAlertMetadata(row.metadata)
+          });
+          acc.set(key, list);
+          return acc;
+        }, new Map<string, any[]>());
+      }
+
+      const review = traces.map((trace: any) => {
+        const parse = trace.parse || {};
+        const parsedAlert = parse.parsedAlert || null;
+        const nativeSignals = extractNativeSignalsFromParsedAlert(parsedAlert);
+        const parsedVendorAlerts = Array.isArray(parse.parsedAlerts) ? parse.parsedAlerts : [];
+        const itemDiagnostics = Array.isArray(parse.itemDiagnostics) ? parse.itemDiagnostics : [];
+        const batchNativeSignals = itemDiagnostics.flatMap((item: any) => extractNativeSignalsFromParsedAlert(item?.parsedAlert || null));
+        const nearbyAlerts = (linkedAlertsByVehicle.get(String(trace.vehicleId || '').trim()) || [])
+          .filter((alert: any) => {
+            const traceTs = new Date(trace.receivedAt).getTime();
+            const alertTs = new Date(alert.timestamp).getTime();
+            return Number.isFinite(traceTs) && Number.isFinite(alertTs) && Math.abs(traceTs - alertTs) <= 120000;
+          })
+          .slice(0, 10)
+          .map((alert: any) => ({
+            id: alert.id,
+            type: alert.type,
+            priority: alert.priority,
+            status: alert.status,
+            channel: alert.channel,
+            timestamp: alert.timestamp,
+            sourceMessageId: alert.metadata?.sourceMessageId || null,
+            alertSignals: alert.metadata?.alertSignals || []
+          }));
+
+        const emittedSignals = Array.from(
+          new Set([
+            ...nativeSignals,
+            ...batchNativeSignals,
+            ...parsedVendorAlerts.map((item: any) => String(item.signalCode || '').trim()).filter(Boolean)
+          ])
+        );
+
+        return {
+          id: trace.id,
+          receivedAt: trace.receivedAt,
+          vehicleId: trace.vehicleId,
+          messageId: trace.messageId,
+          messageIdHex: trace.messageIdHex,
+          parser: parse.parser || null,
+          parseSuccess: typeof parse.parseSuccess === 'boolean' ? parse.parseSuccess : null,
+          sourceShape: trace.messageIdHex === '0x0200' || trace.messageIdHex === '0x0704'
+            ? 'location-report-with-additional-info'
+            : trace.messageIdHex === '0x0900'
+              ? 'pass-through'
+              : trace.messageIdHex === '0x0800'
+                ? 'multimedia-event'
+                : 'other',
+          additionalInfo: parse.additionalInfo || [],
+          parsedAlert: parsedAlert,
+          batchItems: itemDiagnostics.map((item: any) => ({
+            index: item.index,
+            parseSuccess: !!item.parseSuccess,
+            additionalInfo: item.additionalInfo || [],
+            nativeSignals: extractNativeSignalsFromParsedAlert(item?.parsedAlert || null),
+            parsedAlert: item.parsedAlert || null
+          })),
+          passThroughType: parse.passThroughTypeHex || null,
+          parsedVendorAlerts,
+          emittedSignals,
+          nearbyAlerts
+        };
+      }).filter((item: any) => !onlyWithSignals || item.emittedSignals.length > 0);
+
+      const byMessageId = review.reduce((acc: Record<string, number>, item: any) => {
+        const key = item.messageIdHex || 'unknown';
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      res.json({
+        success: true,
+        count: review.length,
+        filters: {
+          vehicleId: vehicleId || null,
+          messageId: Number.isFinite(messageId as number) ? messageId : null,
+          messageIdHex: Number.isFinite(messageId as number) ? `0x${Number(messageId).toString(16).padStart(4, '0')}` : null,
+          limit,
+          onlyWithSignals
+        },
+        summary: {
+          byMessageId
+        },
+        data: review
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        message: 'Failed to build alert decode review',
         error: error?.message || String(error)
       });
     }
