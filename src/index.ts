@@ -101,6 +101,7 @@ import { createRoutes } from './api/routes';
 import { createAlertRoutes } from './api/alertRoutes';
 import { AlertWebSocketServer } from './api/websocket';
 import { DataWebSocketServer } from './api/dataWebsocket';
+import { ProtocolWebSocketServer } from './api/protocolWebsocket';
 import { LiveVideoStreamServer } from './streaming/liveStream';
 import { SSEVideoStream } from './streaming/sseStream';
 import { ReplayService } from './streaming/replay';
@@ -178,6 +179,39 @@ async function startServer() {
   
   const httpServer = createServer(app);
   const dataWsServer = new DataWebSocketServer('/ws/data');
+  const protocolWsServer = new ProtocolWebSocketServer([
+    '0x0001',
+    '0x8001',
+    '0x0002',
+    '0x0100',
+    '0x8100',
+    '0x0102',
+    '0x8103',
+    '0x8104',
+    '0x8106',
+    '0x0200',
+    '0x0201',
+    '0x0704',
+    '0x0301',
+    '0x0302',
+    '0x0700',
+    '0x0702',
+    '0x0800',
+    '0x0801',
+    '0x0802',
+    '0x0900',
+    '0x1001',
+    '0x1003',
+    '0x1205',
+    '0x9205',
+    '0x9101',
+    '0x9102',
+    '0x9103',
+    '0x9105',
+    '0x9106',
+    '0x9201',
+    '0x9301'
+  ], '/ws/protocol');
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video');
   const sseVideoStream = new SSEVideoStream(tcpServer);
   const replayService = new ReplayService(liveVideoServer);
@@ -198,12 +232,6 @@ async function startServer() {
   tcpServer.setRTPHandler((buffer, vehicleId) => {
     console.log(`📦 TCP RTP handler called: vehicleId=${vehicleId}, size=${buffer.length}`);
     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-    dataWsServer.broadcast({
-      type: 'RTP_PACKET',
-      vehicleId,
-      size: buffer.length,
-      timestamp: new Date().toISOString()
-    });
   });
 
   tcpServer.setMessageTraceCallback((trace) => {
@@ -211,6 +239,7 @@ async function startServer() {
       type: 'PROTOCOL_MESSAGE',
       trace
     });
+    protocolWsServer.broadcastTrace(trace);
   });
   
   await tcpServer.start();
@@ -285,6 +314,9 @@ async function startServer() {
     }
     if (pathname === dataWsServer.getPath()) {
       dataWsServer.handleUpgrade(request, socket, head);
+      return;
+    }
+    if (protocolWsServer.handleUpgrade(request, socket, head, pathname)) {
       return;
     }
     if (pathname === liveVideoServer.getPath()) {
@@ -407,6 +439,8 @@ async function startServer() {
     console.log(`REST API server listening on port ${API_PORT}`);
     console.log(`WebSocket - Alerts: ws://localhost:${API_PORT}/ws/alerts`);
     console.log(`WebSocket - Data: ws://localhost:${API_PORT}/ws/data`);
+    console.log(`WebSocket - Protocol All: ws://localhost:${API_PORT}/ws/protocol/all`);
+    console.log(`WebSocket - Protocol 0x1205: ws://localhost:${API_PORT}/ws/protocol/0x1205`);
     console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`);
   });
   

@@ -48,6 +48,7 @@ type PendingResourceList = {
 type MessageTraceEntry = {
   id: number;
   receivedAt: string;
+  direction?: 'inbound' | 'outbound';
   vehicleId: string;
   messageId: number;
   messageIdHex: string;
@@ -2604,6 +2605,7 @@ export class JTT808Server {
     const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
     // Use JTT 1078-2016 compliant video request (0x9201)
+    const serial = this.getNextSerial();
     const commandBody = AlertVideoCommands.createAlertVideoRequest(
       vehicleId,
       channel,
@@ -2613,10 +2615,16 @@ export class JTT808Server {
       this.udpPort
     );
     
-    const command = this.buildMessage(0x9201, vehicleId, this.getNextSerial(), commandBody);
+    const command = this.buildMessage(0x9201, vehicleId, serial, commandBody);
     
     console.log(`🎥 Camera video requested: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
     socket.write(command);
+    this.pushOutboundMessageTrace(vehicleId, 0x9201, serial, command, commandBody, {
+      parser: 'outbound-video-request-0x9201',
+      channel,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString()
+    });
     return true;
   }
 
@@ -2635,9 +2643,10 @@ export class JTT808Server {
       return false;
     }
 
+    const serial = this.getNextSerial();
     const command = JTT1078Commands.buildQueryResourceListCommand(
       vehicleId,
-      this.getNextSerial(),
+      serial,
       channel,
       startTime,
       endTime
@@ -2645,6 +2654,12 @@ export class JTT808Server {
     
     console.log(`📝 Query resource list: ${vehicleId} ch${channel} from ${startTime.toISOString()} to ${endTime.toISOString()}`);
     socket.write(command);
+    this.pushOutboundMessageTrace(vehicleId, 0x9205, serial, command, command.slice(12, -2), {
+      parser: 'outbound-resource-query-0x9205',
+      channel,
+      startTime: startTime.toISOString(),
+      endTime: endTime.toISOString()
+    });
     return true;
   }
 
@@ -2665,9 +2680,10 @@ export class JTT808Server {
 
     const serverIp = process.env.SERVER_IP || socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
+    const serial = this.getNextSerial();
     const command = JTT1078Commands.buildStartVideoCommand(
       vehicleId,
-      this.getNextSerial(),
+      serial,
       serverIp,
       this.port,      // TCP port for signaling
       this.udpPort,   // UDP port for RTP video stream
@@ -2678,6 +2694,13 @@ export class JTT808Server {
     
     console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
+    this.pushOutboundMessageTrace(vehicleId, 0x9101, serial, command, command.slice(12, -2), {
+      parser: 'outbound-realtime-video-request-0x9101',
+      channel,
+      serverIp,
+      tcpPort: this.port,
+      udpPort: this.udpPort
+    });
     vehicle.activeStreams.add(channel);
     
     return true;
@@ -2752,9 +2775,10 @@ export class JTT808Server {
       return false;
     }
 
+    const serial = this.getNextSerial();
     const command = JTT1078Commands.buildStreamControlCommand(
       vehicleId,
-      this.getNextSerial(),
+      serial,
       channel,
       1, // Switch stream
       0,
@@ -2763,6 +2787,12 @@ export class JTT808Server {
     
     console.log(`🔄 Switching to ${streamType === 0 ? 'MAIN' : 'SUB'} stream: ${vehicleId} channel ${channel}`);
     socket.write(command);
+    this.pushOutboundMessageTrace(vehicleId, 0x9102, serial, command, command.slice(12, -2), {
+      parser: 'outbound-stream-control-0x9102',
+      channel,
+      controlInstruction: 1,
+      switchStreamType: streamType
+    });
     return true;
   }
 
@@ -2825,6 +2855,7 @@ export class JTT808Server {
     const trace: MessageTraceEntry = {
       id: ++this.messageTraceSeq,
       receivedAt: new Date().toISOString(),
+      direction: 'inbound',
       vehicleId: String(message?.terminalPhone || ''),
       messageId: Number(message?.messageId || 0),
       messageIdHex: `0x${Number(message?.messageId || 0).toString(16).padStart(4, '0')}`,
@@ -2833,9 +2864,47 @@ export class JTT808Server {
       isSubpackage: !!message?.isSubpackage,
       packetCount: message?.packetCount,
       packetIndex: message?.packetIndex,
-      rawFrameHex: (rawFrame || Buffer.alloc(0)).toString('hex').slice(0, 8192),
-      bodyHex: (message?.body || Buffer.alloc(0)).toString('hex').slice(0, 8192),
+      rawFrameHex: (rawFrame || Buffer.alloc(0)).toString('hex'),
+      bodyHex: (message?.body || Buffer.alloc(0)).toString('hex'),
       bodyTextPreview: this.buildPayloadPreview(message?.body || Buffer.alloc(0), 320),
+      parse: parse || undefined
+    };
+
+    this.recentMessageTraces.push(trace);
+    if (this.recentMessageTraces.length > this.maxMessageTraceBuffer) {
+      const overflow = this.recentMessageTraces.length - this.maxMessageTraceBuffer;
+      this.recentMessageTraces.splice(0, overflow);
+    }
+
+    RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    try {
+      this.messageTraceCallback?.(trace);
+    } catch {
+      // Never allow websocket broadcast hooks to break protocol ingest.
+    }
+  }
+
+  private pushOutboundMessageTrace(
+    vehicleId: string,
+    messageId: number,
+    serialNumber: number,
+    rawFrame: Buffer,
+    body: Buffer,
+    parse?: Record<string, unknown>
+  ): void {
+    const trace: MessageTraceEntry = {
+      id: ++this.messageTraceSeq,
+      receivedAt: new Date().toISOString(),
+      direction: 'outbound',
+      vehicleId: String(vehicleId || ''),
+      messageId: Number(messageId || 0),
+      messageIdHex: `0x${Number(messageId || 0).toString(16).padStart(4, '0')}`,
+      serialNumber: Number(serialNumber || 0),
+      bodyLength: Number(body?.length || 0),
+      isSubpackage: false,
+      rawFrameHex: (rawFrame || Buffer.alloc(0)).toString('hex'),
+      bodyHex: (body || Buffer.alloc(0)).toString('hex'),
+      bodyTextPreview: this.buildPayloadPreview(body || Buffer.alloc(0), 320),
       parse: parse || undefined
     };
 
