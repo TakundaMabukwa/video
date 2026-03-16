@@ -78,7 +78,13 @@ type PendingScreenshotRequest = {
   createdAt: number;
 };
 
-type VendorExtractionMethod = 'numeric_be' | 'numeric_le' | 'ascii_code' | 'framed_peripheral';
+type VendorExtractionMethod =
+  | 'numeric_be'
+  | 'numeric_le'
+  | 'ascii_code'
+  | 'framed_peripheral'
+  | 'text_numeric'
+  | 'text_label';
 type VendorConfidence = 'high' | 'medium' | 'low';
 
 type VendorMappedAlert = {
@@ -1123,6 +1129,30 @@ export class JTT808Server {
       results.push({ ...item, sourceType });
     };
 
+    const textCode = this.extractVendorAlarmCodeFromText(text);
+    if (textCode !== null) {
+      const mapped = this.mapVendorAlarmCode(textCode, { allowPlatformVideoCodes: true });
+      if (mapped) {
+        add({
+          ...mapped,
+          channel,
+          alarmCode: textCode,
+          extractionMethod: 'text_numeric',
+          confidence: strictMode ? 'medium' : 'high'
+        });
+      }
+    }
+
+    const textMapped = !strictMode ? this.mapVendorAlertText(text) : null;
+    if (textMapped) {
+      add({
+        ...textMapped,
+        channel: textMapped.channel || channel,
+        extractionMethod: 'text_label',
+        confidence: strictMode ? 'medium' : 'high'
+      });
+    }
+
     // Vendor-observed compact video alarm payload on pass-through type 0xA1:
     // byte0 = subtype (0x01..0x07) mapping to JT/T 1078 Table 38 0x0101..0x0107.
     // This is deterministic (numeric code based), not keyword inference.
@@ -1349,6 +1379,9 @@ export class JTT808Server {
     const strictCodes = this.extractStrictDeterministicVendorCodes(payload);
     for (const c of strictCodes) mergedCodes.add(c);
 
+    const textCode = this.extractVendorAlarmCodeFromText(combined);
+    if (textCode !== null) mergedCodes.add(textCode);
+
     for (const code of mergedCodes) {
       const mapped = this.mapVendorAlarmCode(code, { allowPlatformVideoCodes });
       if (mapped) {
@@ -1362,11 +1395,66 @@ export class JTT808Server {
       }
     }
 
+    const textMapped = !strictMode ? this.mapVendorAlertText(combined) : null;
+    if (textMapped) {
+      add({
+        ...textMapped,
+        channel: textMapped.channel || channel,
+        extractionMethod: extractionMethod === 'framed_peripheral' ? 'text_label' : extractionMethod,
+        confidence: strictMode ? 'medium' : 'high'
+      });
+    }
+
     if (requireDeterministic && results.length === 0) {
       this.bumpVendorTelemetry('parseFailuresByReason', 'no_mapped_vendor_codes');
     }
 
     return results;
+  }
+
+  private extractVendorAlarmCodeFromText(text: string): number | null {
+    if (!text) return null;
+    const hexMatch = text.match(/\b0x([0-9a-f]{4})\b/i);
+    if (hexMatch) return parseInt(hexMatch[1], 16);
+    const match = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/);
+    return match ? Number(match[1]) : null;
+  }
+
+  private mapVendorAlertText(
+    text: string
+  ): ({ type: string; priority: AlertPriority; signalCode: string; channel?: number } & Partial<VendorMappedAlert>) | null {
+    if (!text) return null;
+    const patterns: Array<{ re: RegExp; type: string; priority: AlertPriority; signalCode: string }> = [
+      { re: /\bfatigue\s+driving\s+alarm\b/i, type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
+      { re: /\bhandheld\s+phone\s+alarm\b/i, type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
+      { re: /\bsmoking\s+alarm\b/i, type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
+      { re: /\bforward\s+collision\s+warning\b/i, type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
+      { re: /\blane\s+departure\s+alarm\b/i, type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
+      { re: /\bfollowing\s+distance\s+too\s+close\b/i, type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
+      { re: /\bpedestrian\s+collision\s+alarm\b/i, type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' },
+      { re: /\bfrequent\s+lane\s+change\s+alarm\b/i, type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' },
+      { re: /\broad\s+sign\s+over-?limit\s+alarm\b/i, type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' },
+      { re: /\bobstruction\s+alarm\b/i, type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' },
+      { re: /\bdriver\s+assistance\s+function\s+failure(?:\s+alarm)?\b/i, type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' },
+      { re: /\broad\s+sign\s+identification\s+event\b/i, type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' },
+      { re: /\bactive\s+capture\s+event\b/i, type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' },
+      { re: /\bforward\s+camera\s+invisible\s+too\s+long\b/i, type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' },
+      { re: /\bdriver\s+alarm\s+not\s+detected\b/i, type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' },
+      { re: /\bboth\s+hands\s+off\s+steering\s+wheel\b/i, type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' },
+      { re: /\bdriver\s+behavior\s+monitoring\s+failure\b/i, type: 'DMS: Driver behavior monitoring failure', priority: AlertPriority.MEDIUM, signalCode: 'dms_10107_behavior_monitoring_failure' },
+      { re: /\bautomatic\s+capture\s+event\b/i, type: 'DMS: Automatic capture event', priority: AlertPriority.LOW, signalCode: 'dms_10116_automatic_capture_event' },
+      { re: /\bdriver\s+change\b/i, type: 'DMS: Driver change', priority: AlertPriority.LOW, signalCode: 'dms_10117_driver_change' }
+    ];
+    const hit = patterns.find((p) => p.re.test(text));
+    if (!hit) return null;
+    const channelMatch = text.match(/\bch(?:annel)?\s*[:#-]?\s*(\d{1,2})\b/i);
+    const channel = channelMatch ? Number(channelMatch[1]) : undefined;
+    return {
+      type: hit.type,
+      priority: hit.priority,
+      signalCode: hit.signalCode,
+      channel
+    };
   }
 
   private isVendorAlarmLocationInfoId(infoId: number): boolean {
