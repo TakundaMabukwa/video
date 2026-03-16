@@ -205,6 +205,13 @@ async function startServer() {
       timestamp: new Date().toISOString()
     });
   });
+
+  tcpServer.setMessageTraceCallback((trace) => {
+    dataWsServer.broadcast({
+      type: 'PROTOCOL_MESSAGE',
+      trace
+    });
+  });
   
   await tcpServer.start();
   await udpServer.start();

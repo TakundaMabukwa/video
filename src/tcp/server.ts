@@ -133,6 +133,7 @@ export class JTT808Server {
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
+  private messageTraceCallback?: (trace: MessageTraceEntry) => void;
   private readonly vendorDecoderVersion = 'vendor-catalog-v1';
   private vendorAlertTelemetry = {
     emittedBySourceCode: new Map<string, number>(),
@@ -247,6 +248,10 @@ export class JTT808Server {
 
   setRTPHandler(handler: (buffer: Buffer, vehicleId: string) => void): void {
     this.rtpHandler = handler;
+  }
+
+  setMessageTraceCallback(handler: (trace: MessageTraceEntry) => void): void {
+    this.messageTraceCallback = handler;
   }
 
   start(): Promise<void> {
@@ -388,6 +393,7 @@ export class JTT808Server {
 
     
 
+    //handle different messages
     switch (message.messageId) {
       case JTT808MessageType.TERMINAL_REGISTER:
         this.handleTerminalRegister(message, socket);
@@ -2840,6 +2846,11 @@ export class JTT808Server {
     }
 
     RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    try {
+      this.messageTraceCallback?.(trace);
+    } catch {
+      // Never allow websocket broadcast hooks to break protocol ingest.
+    }
   }
 
   private extractLocationAdditionalInfoFields(body: Buffer): Array<{
