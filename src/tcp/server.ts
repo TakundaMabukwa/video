@@ -603,6 +603,55 @@ export class JTT808Server {
     };
   }
 
+  private emitVendorMappedAlerts(
+    vehicleId: string,
+    mappedList: VendorMappedAlert[],
+    options: {
+      sourceMessageId: string;
+      telemetryPrefix: string;
+      timestamp?: Date;
+      location?: { latitude: number; longitude: number };
+      defaultChannel?: number;
+      metadata?: Record<string, unknown>;
+    }
+  ): void {
+    const baseTimestamp = options.timestamp || this.lastKnownLocation.get(vehicleId)?.timestamp || new Date();
+    const baseLocation = options.location || (this.lastKnownLocation.get(vehicleId)
+      ? {
+          latitude: this.lastKnownLocation.get(vehicleId)!.latitude,
+          longitude: this.lastKnownLocation.get(vehicleId)!.longitude
+        }
+      : undefined);
+
+    for (const vendorMapped of mappedList) {
+      if (!this.isVendorAlertEmittable(vendorMapped)) continue;
+      this.bumpVendorTelemetry(
+        'emittedBySourceCode',
+        `${options.telemetryPrefix}:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
+      );
+      void this.alertManager.processExternalAlert({
+        vehicleId,
+        channel: vendorMapped.channel || options.defaultChannel || 1,
+        type: vendorMapped.type,
+        signalCode: vendorMapped.signalCode,
+        priority: vendorMapped.priority,
+        timestamp: baseTimestamp,
+        location: baseLocation,
+        metadata: {
+          ...this.buildAlertContextMetadata(vehicleId, options.sourceMessageId, baseLocation),
+          vendorCodeMapped: true,
+          sourceType: vendorMapped.sourceType || 'global_payload',
+          extractionMethod: vendorMapped.extractionMethod || null,
+          confidence: vendorMapped.confidence || null,
+          decoderVersion: this.vendorDecoderVersion,
+          domain: vendorMapped.domain || null,
+          alarmCode: vendorMapped.alarmCode ?? null,
+          ...(options.metadata || {})
+        }
+      });
+    }
+  }
+
   private buildMessage(messageId: number, phone: string, serial: number, body: Buffer): Buffer {
     const phoneBytes = this.stringToBcd(phone);
     const message = Buffer.alloc(13 + body.length);
@@ -754,6 +803,8 @@ export class JTT808Server {
         if (infoId === 0x16) console.log(`    → Signal Blocking Channels`);
         if (infoId === 0x17) console.log(`    → Memory Failures`);
         if (infoId === 0x18) console.log(`    → Abnormal Driving Behavior`);
+        if (infoId === 0x64) console.log(`    → ADAS Extension (vendor/proprietary)`);
+        if (infoId === 0x65) console.log(`    → DMS Extension (vendor/proprietary)`);
         
         offset += 2 + infoLength;
       }
@@ -780,37 +831,28 @@ export class JTT808Server {
 
       // Also process any vendor-coded alarms found in additional info extensions.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(message.body);
-      for (const vendorMapped of vendorMappedList) {
-        if (!this.isVendorAlertEmittable(vendorMapped)) continue;
-        this.bumpVendorTelemetry(
-          'emittedBySourceCode',
-          `location_extension:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
-        );
-        void this.alertManager.processExternalAlert({
-          vehicleId: alert.vehicleId,
-          channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
-          type: vendorMapped.type,
-          signalCode: vendorMapped.signalCode,
-          priority: vendorMapped.priority,
-          timestamp: alert.timestamp,
-          location: { latitude: alert.latitude, longitude: alert.longitude },
-          metadata: {
-            ...this.buildAlertContextMetadata(alert.vehicleId, '0x0200', {
-              latitude: alert.latitude,
-              longitude: alert.longitude
-            }),
-            vendorCodeMapped: true,
-            sourceType: vendorMapped.sourceType || 'location_extension',
-            extractionMethod: vendorMapped.extractionMethod || null,
-            confidence: vendorMapped.confidence || null,
-            decoderVersion: this.vendorDecoderVersion,
-            domain: vendorMapped.domain || null,
-            alarmCode: vendorMapped.alarmCode ?? null,
-            locationAdditionalInfoId: vendorMapped.infoId ?? null,
-            rawPayloadHash: this.buildPayloadHash(message.body)
-          }
-        });
-      }
+      this.emitVendorMappedAlerts(alert.vehicleId, vendorMappedList, {
+        sourceMessageId: '0x0200',
+        telemetryPrefix: 'location_extension',
+        timestamp: alert.timestamp,
+        location: { latitude: alert.latitude, longitude: alert.longitude },
+        defaultChannel: this.inferLocationAlertChannel(alert),
+        metadata: {
+          rawPayloadHash: this.buildPayloadHash(message.body)
+        }
+      });
+
+      const bodyVendorMapped = this.detectVendorAlarmsFromPayload(message.body, 'global_payload');
+      this.emitVendorMappedAlerts(alert.vehicleId, bodyVendorMapped, {
+        sourceMessageId: '0x0200',
+        telemetryPrefix: 'global_payload',
+        timestamp: alert.timestamp,
+        location: { latitude: alert.latitude, longitude: alert.longitude },
+        defaultChannel: this.inferLocationAlertChannel(alert),
+        metadata: {
+          rawPayloadHash: this.buildPayloadHash(message.body)
+        }
+      });
     }
 
     this.pushMessageTrace(message, rawFrame, {
@@ -837,7 +879,8 @@ export class JTT808Server {
             signalLossChannels: alert.signalLossChannels || [],
             blockingChannels: alert.blockingChannels || [],
             memoryFailures: alert.memoryFailures || null,
-            drivingBehavior: alert.drivingBehavior || null
+            drivingBehavior: alert.drivingBehavior || null,
+            vendorExtensions: alert.vendorExtensions || []
           }
         : null
     });
@@ -918,7 +961,8 @@ export class JTT808Server {
                 signalLossChannels: alert.signalLossChannels || [],
                 blockingChannels: alert.blockingChannels || [],
                 memoryFailures: alert.memoryFailures || null,
-                drivingBehavior: alert.drivingBehavior || null
+                drivingBehavior: alert.drivingBehavior || null,
+                vendorExtensions: alert.vendorExtensions || []
               }
             : null
         });
@@ -940,37 +984,28 @@ export class JTT808Server {
 
       // Also process vendor-coded alarms from extension payloads.
       const vendorMappedList = this.detectVendorAlarmsFromLocationBody(itemBody);
-      for (const vendorMapped of vendorMappedList) {
-        if (!this.isVendorAlertEmittable(vendorMapped)) continue;
-        this.bumpVendorTelemetry(
-          'emittedBySourceCode',
-          `location_extension:${vendorMapped.alarmCode ?? vendorMapped.signalCode}`
-        );
-        void this.alertManager.processExternalAlert({
-          vehicleId: alert.vehicleId,
-          channel: vendorMapped.channel || this.inferLocationAlertChannel(alert),
-          type: vendorMapped.type,
-          signalCode: vendorMapped.signalCode,
-          priority: vendorMapped.priority,
-          timestamp: alert.timestamp,
-          location: { latitude: alert.latitude, longitude: alert.longitude },
-          metadata: {
-            ...this.buildAlertContextMetadata(alert.vehicleId, '0x0704', {
-              latitude: alert.latitude,
-              longitude: alert.longitude
-            }),
-            vendorCodeMapped: true,
-            sourceType: vendorMapped.sourceType || 'location_extension',
-            extractionMethod: vendorMapped.extractionMethod || null,
-            confidence: vendorMapped.confidence || null,
-            decoderVersion: this.vendorDecoderVersion,
-            domain: vendorMapped.domain || null,
-            alarmCode: vendorMapped.alarmCode ?? null,
-            locationAdditionalInfoId: vendorMapped.infoId ?? null,
-            rawPayloadHash: this.buildPayloadHash(itemBody)
-          }
-        });
-      }
+      this.emitVendorMappedAlerts(alert.vehicleId, vendorMappedList, {
+        sourceMessageId: '0x0704',
+        telemetryPrefix: 'location_extension',
+        timestamp: alert.timestamp,
+        location: { latitude: alert.latitude, longitude: alert.longitude },
+        defaultChannel: this.inferLocationAlertChannel(alert),
+        metadata: {
+          rawPayloadHash: this.buildPayloadHash(itemBody)
+        }
+      });
+
+      const bodyVendorMapped = this.detectVendorAlarmsFromPayload(itemBody, 'global_payload');
+      this.emitVendorMappedAlerts(alert.vehicleId, bodyVendorMapped, {
+        sourceMessageId: '0x0704',
+        telemetryPrefix: 'global_payload',
+        timestamp: alert.timestamp,
+        location: { latitude: alert.latitude, longitude: alert.longitude },
+        defaultChannel: this.inferLocationAlertChannel(alert),
+        metadata: {
+          rawPayloadHash: this.buildPayloadHash(itemBody)
+        }
+      });
       const hadAfter = this.alertManager.getAlertStats().total;
       if (hadAfter > hadBefore) {
         processedAlerts += hadAfter - hadBefore;
@@ -1015,37 +1050,21 @@ export class JTT808Server {
     );
     const last = this.lastKnownLocation.get(message.terminalPhone);
 
-    for (const parsed of parsedList) {
-      if (!this.isVendorAlertEmittable(parsed)) continue;
-      this.bumpVendorTelemetry(
-        'emittedBySourceCode',
-        `pass_through:${parsed.alarmCode ?? parsed.signalCode}`
-      );
-      void this.alertManager.processExternalAlert({
-        vehicleId: message.terminalPhone,
-        channel: parsed.channel || 1,
-        type: parsed.type,
-        signalCode: parsed.signalCode,
-        priority: parsed.priority,
-        timestamp: last?.timestamp || new Date(),
-        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
-        metadata: {
-          ...this.buildAlertContextMetadata(message.terminalPhone, '0x0900'),
-          sourceType: parsed.sourceType || 'pass_through',
-          extractionMethod: parsed.extractionMethod || null,
-          confidence: parsed.confidence || null,
-          decoderVersion: this.vendorDecoderVersion,
-          domain: parsed.domain || null,
-          passThroughType,
-          passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
-          alarmCode: parsed.alarmCode ?? null,
-          decodedText: decoded || null,
-          payloadPreview: preview,
-          rawPayloadHash: this.buildPayloadHash(payload),
-          rawPayloadHex: payload.toString('hex').slice(0, 1024)
-        }
-      });
-    }
+    this.emitVendorMappedAlerts(message.terminalPhone, parsedList, {
+      sourceMessageId: '0x0900',
+      telemetryPrefix: 'pass_through',
+      timestamp: last?.timestamp || new Date(),
+      location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+      defaultChannel: 1,
+      metadata: {
+        passThroughType,
+        passThroughTypeHex: `0x${Math.max(passThroughType, 0).toString(16).padStart(2, '0')}`,
+        decodedText: decoded || null,
+        payloadPreview: preview,
+        rawPayloadHash: this.buildPayloadHash(payload),
+        rawPayloadHex: payload.toString('hex').slice(0, 1024)
+      }
+    });
 
     this.pushMessageTrace(message, rawFrame, {
       parser: 'data-uplink-pass-through-0x0900',
@@ -1077,9 +1096,32 @@ export class JTT808Server {
   }
 
   private handleUnknownMessage(message: any, socket: net.Socket, rawFrame?: Buffer): void {
+    const last = this.lastKnownLocation.get(message.terminalPhone);
+    const body = message.body || Buffer.alloc(0);
+    const mappedAlerts = this.detectVendorAlarmsFromPayload(body, 'global_payload');
+    this.emitVendorMappedAlerts(message.terminalPhone, mappedAlerts, {
+      sourceMessageId: `0x${Number(message.messageId || 0).toString(16).padStart(4, '0')}`,
+      telemetryPrefix: 'unknown_message',
+      timestamp: last?.timestamp || new Date(),
+      location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+      defaultChannel: 1,
+      metadata: {
+        rawPayloadHash: this.buildPayloadHash(body),
+        rawPayloadHex: body.toString('hex').slice(0, 1024)
+      }
+    });
     this.pushMessageTrace(message, rawFrame, {
       parser: 'unknown-message',
-      mappedAlert: null
+      parsedAlerts: mappedAlerts.map((parsed) => ({
+        type: parsed.type,
+        signalCode: parsed.signalCode,
+        priority: parsed.priority,
+        alarmCode: parsed.alarmCode ?? null,
+        channel: parsed.channel || 1,
+        extractionMethod: parsed.extractionMethod || null,
+        confidence: parsed.confidence || null,
+        sourceType: parsed.sourceType || 'global_payload'
+      }))
     });
 
     const response = JTT1078Commands.buildGeneralResponse(
@@ -1281,14 +1323,9 @@ export class JTT808Server {
       if (offset + 2 + infoLength > body.length) break;
 
       const infoData = body.slice(offset + 2, offset + 2 + infoLength);
-      // Prefer custom extension IDs (0xE1~0xFF), with optional override support.
-      // Also allow known vendor blocks if configured by environment.
-      const isVendorExtensionInfo = this.isVendorAlarmLocationInfoId(infoId);
-      if (isVendorExtensionInfo) {
-        const mappedList = this.detectVendorAlarmsFromPayload(infoData, 'location_extension');
-        for (const mapped of mappedList) {
-          add({ ...mapped, infoId });
-        }
+      const mappedList = this.detectVendorAlarmsFromPayload(infoData, 'location_extension');
+      for (const mapped of mappedList) {
+        add({ ...mapped, infoId });
       }
       offset += 2 + infoLength;
     }
@@ -2779,6 +2816,23 @@ export class JTT808Server {
           }
         });
       }
+
+      const last = this.lastKnownLocation.get(message.terminalPhone);
+      const vendorMapped = this.detectVendorAlarmsFromPayload(message.body, 'global_payload');
+      this.emitVendorMappedAlerts(message.terminalPhone, vendorMapped, {
+        sourceMessageId: '0x0800',
+        telemetryPrefix: 'multimedia_event',
+        timestamp: last?.timestamp || new Date(),
+        location: last ? { latitude: last.latitude, longitude: last.longitude } : undefined,
+        defaultChannel: channel || 1,
+        metadata: {
+          multimediaId,
+          multimediaType,
+          multimediaFormat,
+          eventCode,
+          rawPayloadHash: this.buildPayloadHash(message.body)
+        }
+      });
     }
 
     const response = JTT1078Commands.buildGeneralResponse(

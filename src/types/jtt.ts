@@ -109,6 +109,13 @@ export interface VideoAlarmStatus {
   setBits?: number[]; // all set bits from 0x14 DWORD for auditability
 }
 
+export interface VendorAdditionalInfoExtension {
+  infoId: number;
+  rawHex: string;
+  detectedCodes: number[];
+  domain: 'ADAS' | 'DMS' | 'UNKNOWN';
+}
+
 export interface AlarmFlags {
   emergency: boolean;
   overspeed: boolean;
@@ -137,4 +144,5 @@ export interface LocationAlert {
   blockingChannels?: number[]; // channels 1-32
   memoryFailures?: { main: number[]; backup: number[]; };
   drivingBehavior?: AbnormalDrivingBehavior;
+  vendorExtensions?: VendorAdditionalInfoExtension[];
 }

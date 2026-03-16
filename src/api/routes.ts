@@ -227,8 +227,10 @@ export function createRoutes(
     }
 
     const hasVideoRelatedAlertInfo = [0x14, 0x15, 0x16, 0x17, 0x18].some((id) => locationInfoIds.has(id));
+    const hasVendorActiveSafetyInfo = [0x64, 0x65].some((id) => locationInfoIds.has(id));
 
     if (messageIdHex === '0x0200' || messageIdHex === '0x0704') {
+      if (hasVendorActiveSafetyInfo) return 'vendor-active-safety';
       return hasVideoRelatedAlertInfo
         ? 'video-related-alerts'
         : 'location-report-with-additional-info';

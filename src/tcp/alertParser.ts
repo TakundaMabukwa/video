@@ -1,4 +1,5 @@
-import { AbnormalDrivingBehavior, VideoAlarmStatus, LocationAlert, AlarmFlags } from '../types/jtt';
+import { AbnormalDrivingBehavior, VideoAlarmStatus, LocationAlert, AlarmFlags, VendorAdditionalInfoExtension } from '../types/jtt';
+import { getKnownVendorCodes } from '../protocol/vendorAlarmCatalog';
 
 export class AlertParser {
   private static resolveTerminalTimezoneOffsetHours(): number {
@@ -64,6 +65,12 @@ export class AlertParser {
           break;
         case 0x18: // Abnormal driving behavior details
           alert.drivingBehavior = this.parseAbnormalDriving(infoData);
+          break;
+        case 0x64: // Proprietary/active-safety ADAS extension (deployment-specific)
+          this.pushVendorExtension(alert, infoId, infoData, 'ADAS');
+          break;
+        case 0x65: // Proprietary/active-safety DMS extension (deployment-specific)
+          this.pushVendorExtension(alert, infoId, infoData, 'DMS');
           break;
       }
       
@@ -166,6 +173,50 @@ export class AlertParser {
       // JT/T 808 Table 24: rollover warning is bit30
       rolloverWarning: !!(alarmFlag & (1 << 30))
     };
+  }
+
+  private static pushVendorExtension(
+    alert: LocationAlert,
+    infoId: number,
+    data: Buffer,
+    domain: 'ADAS' | 'DMS'
+  ): void {
+    const extension: VendorAdditionalInfoExtension = {
+      infoId,
+      rawHex: data.toString('hex'),
+      detectedCodes: this.extractKnownVendorCodes(data),
+      domain
+    };
+    if (!Array.isArray(alert.vendorExtensions)) {
+      alert.vendorExtensions = [];
+    }
+    alert.vendorExtensions.push(extension);
+  }
+
+  private static extractKnownVendorCodes(data: Buffer): number[] {
+    if (!data || data.length === 0) return [];
+    const known = getKnownVendorCodes();
+    const found = new Set<number>();
+
+    for (let i = 0; i <= data.length - 2; i++) {
+      const be = data.readUInt16BE(i);
+      if (known.has(be)) found.add(be);
+      const le = data.readUInt16LE(i);
+      if (known.has(le)) found.add(le);
+    }
+
+    const text = data
+      .toString('latin1')
+      .replace(/[^\x20-\x7E]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const matches = text.match(/\b(1000[1-8]|10016|10017|1010[1-7]|10116|10117|1120[1-3])\b/g) || [];
+    for (const match of matches) {
+      const code = Number(match);
+      if (known.has(code)) found.add(code);
+    }
+
+    return Array.from(found).sort((a, b) => a - b);
   }
 
   private static bcdToDec(value: number): number {
