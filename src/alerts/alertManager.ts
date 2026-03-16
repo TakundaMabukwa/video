@@ -5,7 +5,7 @@ import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
-import { getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
+import { getVendorAlarmByCode, getVendorAlarmBySignalCode } from '../protocol/vendorAlarmCatalog';
 import * as fs from 'fs';
 
 export enum AlertPriority {
@@ -866,6 +866,19 @@ export class AlertManager extends EventEmitter {
     if (alert.drivingBehavior?.phoneCall) signals.push('jtt1078_behavior_phone_call');
     if (alert.drivingBehavior?.smoking) signals.push('jtt1078_behavior_smoking');
     if ((alert.drivingBehavior?.custom || 0) > 0) signals.push(`jtt1078_behavior_custom_${alert.drivingBehavior?.custom}`);
+
+    if (Array.isArray(alert.vendorExtensions)) {
+      for (const extension of alert.vendorExtensions) {
+        for (const code of extension.detectedCodes || []) {
+          const mapped = getVendorAlarmByCode(code, { allowPlatformVideoCodes: false });
+          if (mapped?.signalCode) {
+            signals.push(mapped.signalCode);
+          } else {
+            signals.push(`vendor_additional_info_${extension.infoId}_${code}`);
+          }
+        }
+      }
+    }
 
     return Array.from(new Set(signals));
   }
