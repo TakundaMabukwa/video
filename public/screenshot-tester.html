@@ -255,6 +255,32 @@
         <button id="toggleAutoCaptureBtn" class="primary">Start 30s Auto Capture</button>
       </div>
 
+      <div class="row" style="margin-top:12px; grid-template-columns: 1fr 1fr;">
+        <div>
+          <label for="alertSourceFilter">Alert Source Filter</label>
+          <select id="alertSourceFilter">
+            <option value="location">Real Location Alerts (0x0200 + 0x0704)</option>
+            <option value="0200">Only 0x0200</option>
+            <option value="0704">Only 0x0704</option>
+            <option value="all-real">All Real Alerts</option>
+          </select>
+        </div>
+        <div>
+          <label for="alertTypeFilter">Alert Type Filter</label>
+          <select id="alertTypeFilter">
+            <option value="">All Alert Types</option>
+            <option value="fatigue">Driver Fatigue</option>
+            <option value="collision">Collision Warning</option>
+            <option value="rollover">Rollover Warning</option>
+            <option value="overspeed">Overspeed</option>
+            <option value="adas">ADAS Alerts</option>
+            <option value="dms">DMS Alerts</option>
+            <option value="power">Power Failure</option>
+            <option value="movement">Illegal Vehicle Displacement</option>
+          </select>
+        </div>
+      </div>
+
       <div class="row" style="margin-top:12px; grid-template-columns: 2fr 1fr auto;">
         <div>
           <label for="simulateSignal">Simulate Alert</label>
@@ -431,6 +457,8 @@
     const videoReplaySpeedEl = document.getElementById('videoReplaySpeed');
     const simulateSignalEl = document.getElementById('simulateSignal');
     const simulateChannelEl = document.getElementById('simulateChannel');
+    const alertSourceFilterEl = document.getElementById('alertSourceFilter');
+    const alertTypeFilterEl = document.getElementById('alertTypeFilter');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -477,10 +505,53 @@
       };
     }
 
-    function isReal0200Alert(alert) {
+    function isRealAlert(alert) {
       const metadata = alert?.metadata || {};
-      if (metadata?.simulated) return false;
-      return String(metadata?.sourceMessageId || '').trim().toLowerCase() === '0x0200';
+      return !metadata?.simulated;
+    }
+
+    function matchesSourceFilter(alert) {
+      if (!isRealAlert(alert)) return false;
+      const source = String(alert?.metadata?.sourceMessageId || '').trim().toLowerCase();
+      const filter = String(alertSourceFilterEl?.value || 'location').trim().toLowerCase();
+
+      if (filter === 'all-real') return true;
+      if (filter === '0200') return source === '0x0200';
+      if (filter === '0704') return source === '0x0704';
+
+      return source === '0x0200' || source === '0x0704';
+    }
+
+    function matchesAlertTypeFilter(alert) {
+      const filter = String(alertTypeFilterEl?.value || '').trim().toLowerCase();
+      if (!filter) return true;
+
+      const type = String(alert?.type || '').toLowerCase();
+      const signals = Array.isArray(alert?.metadata?.alertSignals)
+        ? alert.metadata.alertSignals.map((s) => String(s || '').toLowerCase())
+        : [];
+      const haystack = [type, ...signals].join(' ');
+
+      switch (filter) {
+        case 'fatigue':
+          return haystack.includes('fatigue');
+        case 'collision':
+          return haystack.includes('collision');
+        case 'rollover':
+          return haystack.includes('rollover');
+        case 'overspeed':
+          return haystack.includes('overspeed');
+        case 'adas':
+          return haystack.includes('adas_');
+        case 'dms':
+          return haystack.includes('dms_');
+        case 'power':
+          return haystack.includes('power failure') || haystack.includes('jt808_alarm_bit_8');
+        case 'movement':
+          return haystack.includes('illegal vehicle displacement') || haystack.includes('jt808_alarm_bit_28');
+        default:
+          return true;
+      }
     }
 
     function upsertLiveAlert(alert) {
@@ -508,7 +579,8 @@
       const cutoff = Date.now() - maxAgeMs;
       const list = Array.from(liveAlertStore.values())
         .filter((a) => {
-          if (!isReal0200Alert(a)) return false;
+          if (!matchesSourceFilter(a)) return false;
+          if (!matchesAlertTypeFilter(a)) return false;
           const t = new Date(a?.timestamp || 0).getTime();
           if (!Number.isFinite(t) || t < cutoff) return false;
           if (!vehicleFilter) return true;
@@ -1540,7 +1612,7 @@
           const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
-          alerts = Array.isArray(data.alerts) ? data.alerts.filter(isReal0200Alert) : [];
+          alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
         } catch (_) {
           alerts = [];
         }
@@ -1550,7 +1622,7 @@
             const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
             if (res.ok) {
               const data = await res.json().catch(() => ({}));
-              alerts = Array.isArray(data.alerts) ? data.alerts.filter(isReal0200Alert) : [];
+              alerts = Array.isArray(data.alerts) ? data.alerts.filter((a) => matchesSourceFilter(a) && matchesAlertTypeFilter(a)) : [];
             }
           } catch (_) {}
         }
@@ -1872,6 +1944,8 @@
     document.getElementById('requestAllBtn').addEventListener('click', requestAllScreenshots);
     document.getElementById('refreshBtn').addEventListener('click', refreshCurrentTab);
     document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
+    alertSourceFilterEl.addEventListener('change', () => scheduleAlertsRefresh(50));
+    alertTypeFilterEl.addEventListener('change', () => scheduleAlertsRefresh(50));
     document.getElementById('toggleAutoBtn').addEventListener('click', (e) => {
       autoRefresh = !autoRefresh;
       e.target.textContent = autoRefresh ? 'Pause Auto Refresh' : 'Resume Auto Refresh';
