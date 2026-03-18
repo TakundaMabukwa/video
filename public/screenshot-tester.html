@@ -252,7 +252,7 @@
         <button id="loadVehiclesBtn">Load Connected Vehicles</button>
         <button id="requestAllBtn" class="primary">Request All Vehicles/Channels</button>
         <button id="toggleAutoBtn">Pause Auto Refresh</button>
-        <button id="toggleAutoCaptureBtn" class="primary">Pause 30s Auto Capture</button>
+        <button id="toggleAutoCaptureBtn" class="primary">Start 30s Auto Capture</button>
       </div>
 
       <div class="row" style="margin-top:12px; grid-template-columns: 2fr 1fr auto;">
@@ -434,7 +434,7 @@
 
     let autoRefresh = true;
     let refreshTimer = null;
-    let autoCapture = true;
+    let autoCapture = false;
     let captureTimer = null;
     let alertCheckTimer = null;
     let activeTab = 'screenshots';
@@ -449,13 +449,14 @@
     const alertScreenshotState = new Map();
     const alertMediaCache = new Map();
     const liveAlertStore = new Map();
-    const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 3;
-    const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 12;
-    const ALERT_FETCH_LIMIT_DEFAULT = 80;
-    const ALERT_FETCH_LIMIT_MAX = 200;
-    const ALERT_MEDIA_HYDRATE_LIMIT_MAX = 120;
-    const ALERT_MEDIA_FETCH_CONCURRENCY = 8;
-    const ALERT_MEDIA_TTL_MS = 5000;
+    const AUTO_MEDIA_REQUESTS_ENABLED = false;
+    const AUTO_VIDEO_REQUEST_MAX_CONCURRENCY = 2;
+    const AUTO_VIDEO_REQUEST_MAX_PER_REFRESH = 0;
+    const ALERT_FETCH_LIMIT_DEFAULT = 40;
+    const ALERT_FETCH_LIMIT_MAX = 100;
+    const ALERT_MEDIA_HYDRATE_LIMIT_MAX = 24;
+    const ALERT_MEDIA_FETCH_CONCURRENCY = 2;
+    const ALERT_MEDIA_TTL_MS = 10000;
     const ALERT_MEDIA_PENDING_TTL_MS = 1500;
     const ALERT_VIDEO_RETRY_MS = 60000;
     const ALERT_SCREENSHOT_RETRY_MS = 30000;
@@ -1517,13 +1518,17 @@
         const minutes = Math.max(1, Math.min(10080, Number(minutesEl.value || 30)));
         const vehicleFilter = String(vehicleIdEl.value || '').trim();
         const mediaHydrateLimit = Math.min(limit, ALERT_MEDIA_HYDRATE_LIMIT_MAX);
-        const screenshotLimit = Math.max(500, Math.min(6000, limit * 8));
+        const screenshotLimit = Math.max(100, Math.min(600, limit * 3));
 
-        recentScreenshotsCache = await fetchRecentScreenshots(screenshotLimit, minutes);
+        try {
+          recentScreenshotsCache = await fetchRecentScreenshots(screenshotLimit, minutes);
+        } catch (_) {
+          recentScreenshotsCache = [];
+        }
 
         let alerts = [];
         try {
-          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+          const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
           alerts = Array.isArray(data.alerts) ? data.alerts : [];
@@ -1533,7 +1538,7 @@
 
         if (alerts.length === 0) {
           try {
-            const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}`, { cache: 'no-store' });
+            const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
             if (res.ok) {
               const data = await res.json().catch(() => ({}));
               alerts = Array.isArray(data.alerts) ? data.alerts : [];
@@ -1553,11 +1558,13 @@
         const hydratedModels = getAlertRenderModels(alerts, byAlertId);
 
         let autoRequestedCount = 0;
-        for (const model of hydratedModels) {
-          if (autoRequestedCount >= AUTO_VIDEO_REQUEST_MAX_PER_REFRESH) break;
-          await ensureAlertScreenshotRequested(model.alert, model.screenshots);
-          const requested = await ensureAlertVideoRequested(model.alert, model.videosInfo);
-          if (requested) autoRequestedCount += 1;
+        if (AUTO_MEDIA_REQUESTS_ENABLED) {
+          for (const model of hydratedModels) {
+            if (autoRequestedCount >= AUTO_VIDEO_REQUEST_MAX_PER_REFRESH) break;
+            await ensureAlertScreenshotRequested(model.alert, model.screenshots);
+            const requested = await ensureAlertVideoRequested(model.alert, model.videosInfo);
+            if (requested) autoRequestedCount += 1;
+          }
         }
 
         renderAlertsFromModels(hydratedModels);
@@ -1571,7 +1578,17 @@
         summaryEl.textContent = `${alerts.length} alert(s) | with screenshots: ${withAnyScreenshots} | with video: ${withAnyVideos} | ${sourceLabel} | last update: ${nowText}${autoRequestedCount ? ` | video requests started: ${autoRequestedCount}` : ''}`;
       } catch (err) {
         setStatus(`Alert refresh error: ${err.message}`, 'err');
-        alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
+        const fallbackAlerts = getLiveAlerts(
+          Math.max(10, Math.min(ALERT_FETCH_LIMIT_MAX, Number(limitEl.value || ALERT_FETCH_LIMIT_DEFAULT))),
+          Math.max(1, Math.min(10080, Number(minutesEl.value || 30))),
+          String(vehicleIdEl.value || '').trim()
+        );
+        const byAlertId = getFallbackScreenshotsByAlertId();
+        const models = getAlertRenderModels(fallbackAlerts, byAlertId);
+        renderAlertsFromModels(models);
+        if (fallbackAlerts.length === 0) {
+          alertsEl.innerHTML = '<div class="meta">Failed to load alerts. Check API connectivity.</div>';
+        }
       } finally {
         alertRefreshInFlight = false;
       }
