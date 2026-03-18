@@ -466,13 +466,21 @@
       if (!alert || typeof alert !== 'object') return null;
       const id = String(alert.id || '').trim();
       if (!id) return null;
+      const metadata = alert.metadata && typeof alert.metadata === 'object' ? alert.metadata : {};
       const ts = alert.timestamp ? new Date(alert.timestamp) : null;
       return {
         ...alert,
+        metadata,
         id,
         vehicleId: alert.vehicleId || alert.device_id || 'n/a',
         timestamp: ts && !Number.isNaN(ts.getTime()) ? ts.toISOString() : new Date(0).toISOString()
       };
+    }
+
+    function isReal0200Alert(alert) {
+      const metadata = alert?.metadata || {};
+      if (metadata?.simulated) return false;
+      return String(metadata?.sourceMessageId || '').trim().toLowerCase() === '0x0200';
     }
 
     function upsertLiveAlert(alert) {
@@ -500,6 +508,7 @@
       const cutoff = Date.now() - maxAgeMs;
       const list = Array.from(liveAlertStore.values())
         .filter((a) => {
+          if (!isReal0200Alert(a)) return false;
           const t = new Date(a?.timestamp || 0).getTime();
           if (!Number.isFinite(t) || t < cutoff) return false;
           if (!vehicleFilter) return true;
@@ -1531,7 +1540,7 @@
           const res = await fetch(`/api/alerts/active?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const data = await res.json().catch(() => ({}));
-          alerts = Array.isArray(data.alerts) ? data.alerts : [];
+          alerts = Array.isArray(data.alerts) ? data.alerts.filter(isReal0200Alert) : [];
         } catch (_) {
           alerts = [];
         }
@@ -1541,7 +1550,7 @@
             const res = await fetch(`/api/alerts?limit=${encodeURIComponent(limit)}&minutes=${encodeURIComponent(minutes)}`, { cache: 'no-store' });
             if (res.ok) {
               const data = await res.json().catch(() => ({}));
-              alerts = Array.isArray(data.alerts) ? data.alerts : [];
+              alerts = Array.isArray(data.alerts) ? data.alerts.filter(isReal0200Alert) : [];
             }
           } catch (_) {}
         }
