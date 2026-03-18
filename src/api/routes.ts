@@ -4341,7 +4341,13 @@ export function createRoutes(
 
   // TEST: Simulate alert to test 30s video capture
   router.post('/test/simulate-alert', async (req, res) => {
-    const { vehicleId, channel = 1, alertType = 'fatigue', fatigueLevel = 85 } = req.body;
+    const {
+      vehicleId,
+      channel = 1,
+      alertType = 'fatigue',
+      fatigueLevel = 85,
+      signalCode = ''
+    } = req.body;
 
     if (!vehicleId) {
       return res.status(400).json({
@@ -4362,27 +4368,44 @@ export function createRoutes(
       });
     }
 
-    // Create a simulated location alert
-    const simulatedAlert = {
-      vehicleId,
-      timestamp: new Date(),
-      latitude: 0,
-      longitude: 0,
-      drivingBehavior: {
-        fatigue: alertType === 'fatigue',
-        phoneCall: alertType === 'phone',
-        smoking: alertType === 'smoking',
-        custom: 0,
-        fatigueLevel: alertType === 'fatigue' ? fatigueLevel : 0
-      }
-    };
+    const normalizedSignalCode = String(signalCode || '').trim();
+    if (normalizedSignalCode) {
+      await alertManager.processExternalAlert({
+        vehicleId,
+        channel: Number(channel || 1),
+        signalCode: normalizedSignalCode,
+        type: normalizedSignalCode,
+        timestamp: new Date(),
+        metadata: {
+          sourceMessageId: 'test-simulate-alert',
+          sourceProtocol: 'tester',
+          simulated: true
+        },
+        signatureScope: `tester:${normalizedSignalCode}`
+      });
+    } else {
+      const simulatedAlert = {
+        vehicleId,
+        timestamp: new Date(),
+        latitude: 0,
+        longitude: 0,
+        drivingBehavior: {
+          fatigue: alertType === 'fatigue',
+          phoneCall: alertType === 'phone',
+          smoking: alertType === 'smoking',
+          custom: 0,
+          fatigueLevel: alertType === 'fatigue' ? fatigueLevel : 0
+        }
+      };
 
-    // Process through alert manager
-    await alertManager.processAlert(simulatedAlert as any);
+      await alertManager.processAlert(simulatedAlert as any);
+    }
 
     res.json({
       success: true,
-      message: `Alert simulated for ${vehicleId} channel ${channel}. Check recordings/${vehicleId}/alerts/ for video clips.`,
+      message: normalizedSignalCode
+        ? `Simulated ${normalizedSignalCode} for ${vehicleId} channel ${channel}.`
+        : `Alert simulated for ${vehicleId} channel ${channel}. Check recordings/${vehicleId}/alerts/ for video clips.`,
       bufferBefore: bufferStats[bufferKey],
       note: 'Pre-event video saved immediately. Post-event video will be saved in ~35 seconds.'
     });

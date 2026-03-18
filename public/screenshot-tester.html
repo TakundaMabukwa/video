@@ -255,6 +255,47 @@
         <button id="toggleAutoCaptureBtn" class="primary">Pause 30s Auto Capture</button>
       </div>
 
+      <div class="row" style="margin-top:12px; grid-template-columns: 2fr 1fr auto;">
+        <div>
+          <label for="simulateSignal">Simulate Alert</label>
+          <select id="simulateSignal">
+            <option value="jtt1078_behavior_fatigue">Driver Fatigue</option>
+            <option value="jtt1078_behavior_phone_call">Phone Call While Driving</option>
+            <option value="jtt1078_behavior_smoking">Smoking While Driving</option>
+            <option value="adas_10001_forward_collision_warning">ADAS: Forward collision warning</option>
+            <option value="adas_10002_lane_departure_alarm">ADAS: Lane departure alarm</option>
+            <option value="adas_10003_following_distance_too_close">ADAS: Following distance too close</option>
+            <option value="adas_10004_pedestrian_collision_alarm">ADAS: Pedestrian collision alarm</option>
+            <option value="adas_10005_frequent_lane_change_alarm">ADAS: Frequent lane change alarm</option>
+            <option value="adas_10006_road_sign_over_limit_alarm">ADAS: Road sign over-limit alarm</option>
+            <option value="adas_10007_obstruction_alarm">ADAS: Obstruction alarm</option>
+            <option value="adas_10008_driver_assist_function_failure">ADAS: Driver assistance function failure</option>
+            <option value="adas_10016_road_sign_identification_event">ADAS: Road sign identification event</option>
+            <option value="adas_10017_active_capture_event">ADAS: Active capture event</option>
+            <option value="dms_10101_fatigue_driving_alarm">DMS: Fatigue driving alarm</option>
+            <option value="dms_10102_handheld_phone_alarm">DMS: Handheld phone alarm</option>
+            <option value="dms_10103_smoking_alarm">DMS: Smoking alarm</option>
+            <option value="dms_10104_forward_invisible_too_long">DMS: Forward camera invisible too long</option>
+            <option value="dms_10105_driver_alarm_not_detected">DMS: Driver alarm not detected</option>
+            <option value="dms_10106_hands_off_steering">DMS: Both hands off steering wheel</option>
+            <option value="dms_10107_behavior_monitoring_failure">DMS: Driver behavior monitoring failure</option>
+            <option value="dms_10116_automatic_capture_event">DMS: Automatic capture event</option>
+            <option value="dms_10117_driver_change">DMS: Driver change</option>
+            <option value="behavior_11201_rapid_acceleration">Rapid acceleration</option>
+            <option value="behavior_11202_rapid_deceleration">Rapid deceleration</option>
+            <option value="behavior_11203_sharp_turn">Sharp turn</option>
+          </select>
+        </div>
+        <div>
+          <label for="simulateChannel">Alert Channel</label>
+          <input id="simulateChannel" type="number" min="1" value="1" />
+        </div>
+        <div>
+          <label for="simulateBtn">Action</label>
+          <button id="simulateBtn" class="primary">Simulate Alert</button>
+        </div>
+      </div>
+
       <div id="status" class="status">Ready.</div>
     </div>
 
@@ -388,6 +429,8 @@
     const videoSavedListEl = document.getElementById('videoSavedList');
     const videoLocalListEl = document.getElementById('videoLocalList');
     const videoReplaySpeedEl = document.getElementById('videoReplaySpeed');
+    const simulateSignalEl = document.getElementById('simulateSignal');
+    const simulateChannelEl = document.getElementById('simulateChannel');
 
     let autoRefresh = true;
     let refreshTimer = null;
@@ -1572,6 +1615,40 @@
       }
     }
 
+    async function simulateAlert() {
+      const vehicleId = vehicleIdEl.value.trim();
+      const signalCode = String(simulateSignalEl.value || '').trim();
+      const channel = Number(simulateChannelEl.value || channelEl.value || 1);
+
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required before simulating an alert.', 'warn');
+        return;
+      }
+      if (!signalCode) {
+        setStatus('Select an alert to simulate.', 'warn');
+        return;
+      }
+
+      setStatus(`Simulating ${signalCode} for ${vehicleId} channel ${channel}...`);
+
+      try {
+        const res = await fetch('/api/test/simulate-alert', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vehicleId, channel, signalCode })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        setStatus(body.message || 'Alert simulated.', 'ok');
+        scheduleAlertsRefresh(200);
+        setTimeout(refreshCurrentTab, 1200);
+      } catch (err) {
+        setStatus(`Simulate alert failed: ${err.message}`, 'err');
+      }
+    }
+
     async function requestAllScreenshots(silent = false) {
       setStatus('Loading connected vehicles and channels...');
       try {
@@ -1765,6 +1842,7 @@
     }
 
     document.getElementById('requestBtn').addEventListener('click', requestScreenshot);
+    document.getElementById('simulateBtn').addEventListener('click', simulateAlert);
     document.getElementById('requestAllBtn').addEventListener('click', requestAllScreenshots);
     document.getElementById('refreshBtn').addEventListener('click', refreshCurrentTab);
     document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
