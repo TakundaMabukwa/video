@@ -25,12 +25,14 @@ export class LiveVideoStreamServer {
   private tcpServer: JTT808Server;
   private path: string;
   private keepStreamsWithoutClients: boolean;
+  private ingressEnabled: boolean;
 
   constructor(tcpServer: JTT808Server, path = '/ws/video') {
     this.tcpServer = tcpServer;
     this.path = path;
     const backgroundStreamsEnabled = envFlag('BACKGROUND_STREAMS_ENABLED', true);
     this.keepStreamsWithoutClients = envFlag('KEEP_STREAMS_WITHOUT_CLIENTS', backgroundStreamsEnabled);
+    this.ingressEnabled = envFlag('INGRESS_ENABLED', true);
     this.wss = new WebSocket.Server({
       noServer: true
     });
@@ -87,8 +89,12 @@ export class LiveVideoStreamServer {
     if (!this.subscriptions.has(key)) {
       this.subscriptions.set(key, []);
       if (mode === 'live') {
-        this.tcpServer.startVideo(vehicleId, channel);
-        console.log(`Started video stream: ${key}`);
+        if (this.ingressEnabled) {
+          this.tcpServer.startVideo(vehicleId, channel);
+          console.log(`Started video stream: ${key}`);
+        } else {
+          console.log(`Live subscription attached without local startVideo: ${key}`);
+        }
       } else {
         console.log(`Replay subscription created: ${key}`);
       }
@@ -112,10 +118,10 @@ export class LiveVideoStreamServer {
       if (filtered.length === 0) {
         this.subscriptions.delete(key);
         if (mode === 'live') {
-          if (!this.keepStreamsWithoutClients) {
+          if (this.ingressEnabled && !this.keepStreamsWithoutClients) {
             this.tcpServer.stopVideo(vehicleId, channel);
             console.log(`Stopped video stream: ${key}`);
-          } else {
+          } else if (this.keepStreamsWithoutClients) {
             console.log(`No subscribers for ${key}; keeping stream active (KEEP_STREAMS_WITHOUT_CLIENTS=true)`);
           }
         }
@@ -133,7 +139,7 @@ export class LiveVideoStreamServer {
         this.subscriptions.delete(key);
         const [modePart, vehiclePart] = key.split(':');
         const mode = modePart === 'replay' ? 'replay' : 'live';
-        if (mode === 'live' && !this.keepStreamsWithoutClients) {
+        if (mode === 'live' && this.ingressEnabled && !this.keepStreamsWithoutClients) {
           const [vehicleId, channel] = vehiclePart.split('_');
           this.tcpServer.stopVideo(vehicleId, parseInt(channel));
         }
