@@ -1,7 +1,10 @@
-import { query } from './database';
+import { isDatabaseEnabled, query } from './database';
 
 export class DeviceStorage {
+  private readonly dbEnabled = isDatabaseEnabled();
+
   async upsertDevice(deviceId: string, ipAddress: string) {
+    if (!this.dbEnabled) return;
     await query(
       `INSERT INTO devices (device_id, ip_address, last_seen)
        VALUES ($1, $2, NOW())
@@ -13,6 +16,7 @@ export class DeviceStorage {
   }
 
   async getDevices() {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT * FROM devices ORDER BY last_seen DESC`
     );
@@ -20,6 +24,7 @@ export class DeviceStorage {
   }
 
   async getDevice(deviceId: string) {
+    if (!this.dbEnabled) return null;
     const result = await query(
       `SELECT * FROM devices WHERE device_id = $1`,
       [deviceId]

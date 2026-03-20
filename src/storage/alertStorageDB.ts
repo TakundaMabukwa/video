@@ -1,7 +1,9 @@
-import { query } from './database';
+import { isDatabaseEnabled, query } from './database';
 import { AlertEvent } from '../alerts/alertManager';
 
 export class AlertStorageDB {
+  private readonly dbEnabled = isDatabaseEnabled();
+
   private async recordResolutionEvent(
     alertId: string,
     data: {
@@ -17,6 +19,7 @@ export class AlertStorageDB {
       payload?: Record<string, any>;
     }
   ): Promise<void> {
+    if (!this.dbEnabled) return;
     await query(
       `INSERT INTO alert_resolution_events
        (alert_id, action_type, actor, notes, reason_code, reason_label, closure_type, document_url, document_name, document_type, payload)
@@ -49,6 +52,7 @@ export class AlertStorageDB {
     documentType?: string;
     payload?: Record<string, any>;
   }): Promise<boolean> {
+    if (!this.dbEnabled) return false;
     const closureSubtype =
       input.closureType === 'resolved' ? 'manual' : input.closureType;
     const isFalse = input.closureType === 'false_alert';
@@ -109,6 +113,7 @@ export class AlertStorageDB {
   }
 
   async saveAlert(alert: AlertEvent) {
+    if (!this.dbEnabled) return;
     // DEDUPLICATION: Check if similar alert exists within last 60 seconds
     // If yes, just increment counter (UPDATE = 50x faster than INSERT)
     // If no, insert as new alert
@@ -173,6 +178,7 @@ export class AlertStorageDB {
   }
 
   async updateAlertStatus(alertId: string, status: string, acknowledgedAt?: Date, resolvedAt?: Date, notes?: string, resolvedBy?: string) {
+    if (!this.dbEnabled) return;
     await query(
       `UPDATE alerts
        SET status = $1,
@@ -221,6 +227,7 @@ export class AlertStorageDB {
   }
 
   async getUnattendedAlerts(minutesThreshold: number = 30) {
+    if (!this.dbEnabled) return [];
     const cutoff = new Date(Date.now() - minutesThreshold * 60000);
     const result = await query(
       `SELECT * FROM alerts 
@@ -232,6 +239,7 @@ export class AlertStorageDB {
   }
 
   async getActiveAlerts() {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT * FROM alerts WHERE status IN ('new', 'escalated', 'acknowledged') ORDER BY timestamp DESC`
     );
@@ -239,11 +247,13 @@ export class AlertStorageDB {
   }
 
   async getAlertById(alertId: string) {
+    if (!this.dbEnabled) return null;
     const result = await query(`SELECT * FROM alerts WHERE id = $1`, [alertId]);
     return result.rows[0];
   }
 
   async updateAlertMetadata(alertId: string, metadata: Record<string, any>): Promise<boolean> {
+    if (!this.dbEnabled) return false;
     const result = await query(
       `UPDATE alerts
        SET metadata = $1
@@ -254,6 +264,7 @@ export class AlertStorageDB {
   }
 
   async getAlertWithVideos(alertId: string) {
+    if (!this.dbEnabled) return null;
     const result = await query(
       `SELECT a.*,
          (SELECT file_path FROM videos WHERE alert_id = a.id AND video_type = 'alert_pre') as pre_video_path,

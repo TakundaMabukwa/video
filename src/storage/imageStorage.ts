@@ -1,11 +1,13 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { query } from './database';
+import { isDatabaseEnabled, query } from './database';
 
 export class ImageStorage {
   private readonly localRoot: string;
+  private readonly dbEnabled: boolean;
 
   constructor() {
+    this.dbEnabled = isDatabaseEnabled();
     this.localRoot = path.join(process.cwd(), 'media', 'images');
     try {
       fs.mkdirSync(this.localRoot, { recursive: true });
@@ -38,6 +40,10 @@ export class ImageStorage {
 
     // Screenshots are intentionally not uploaded to Supabase.
     // Persist local path + API-served URL only.
+    if (!this.dbEnabled) {
+      return `local-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
     const result = await query(
       `INSERT INTO images (device_id, channel, file_path, storage_url, file_size, timestamp, alert_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -63,6 +69,7 @@ export class ImageStorage {
   }
 
   async getImages(deviceId: string, limit: number = 50) {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT id, device_id, channel, storage_url, file_size, timestamp
        FROM images
@@ -75,6 +82,7 @@ export class ImageStorage {
   }
 
   async getAlertImages(alertId: string) {
+    if (!this.dbEnabled) return [];
     const result = await query(
       `SELECT id, device_id, channel, storage_url, file_size, timestamp
        FROM images
