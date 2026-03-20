@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Video Hub Tester</title>
+  <style>
+    :root {
+      --bg: #0a1120;
+      --panel: #10192d;
+      --panel-2: #0d1526;
+      --text: #e8eefb;
+      --muted: #8a98b8;
+      --border: #243250;
+      --accent: #3aa0ff;
+      --ok: #2ecc71;
+      --warn: #f39c12;
+      --err: #e74c3c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, #162443, var(--bg));
+    }
+    .wrap { max-width: 1280px; margin: 24px auto; padding: 0 16px; }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .row {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      align-items: end;
+    }
+    .row-2 {
+      display: grid;
+      gap: 12px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      align-items: end;
+    }
+    @media (max-width: 980px) {
+      .row, .row-2 { grid-template-columns: 1fr; }
+    }
+    label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input, button, select {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 10px 12px;
+      font-size: 14px;
+    }
+    button { cursor: pointer; }
+    button.primary {
+      background: linear-gradient(180deg, #2f8fff, #1f76d8);
+      border-color: #3b9cff;
+      font-weight: 600;
+    }
+    button.secondary {
+      background: #16233a;
+    }
+    .status { font-size: 13px; color: var(--muted); margin-top: 10px; }
+    .status.ok { color: var(--ok); }
+    .status.warn { color: var(--warn); }
+    .status.err { color: var(--err); }
+    .meta { color: var(--muted); font-size: 12px; }
+    .grid { display: grid; gap: 14px; grid-template-columns: 2fr 1fr; }
+    @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+    .frame {
+      width: 100%;
+      min-height: 520px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #000;
+    }
+    .list {
+      display: grid;
+      gap: 10px;
+      max-height: 520px;
+      overflow: auto;
+    }
+    .item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: var(--panel-2);
+    }
+    .item strong { display: block; margin-bottom: 4px; }
+    .inline {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 10px;
+    }
+    .inline button { width: auto; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h2 style="margin:0 0 10px 0;">Video Hub Tester</h2>
+      <div class="meta">Use this on <code>vid-hub</code> to test live stream/playback locally while sending screenshot requests through the listener.</div>
+      <div class="row" style="margin-top:14px;">
+        <div>
+          <label for="videoBase">Video Hub Base URL</label>
+          <input id="videoBase" />
+        </div>
+        <div>
+          <label for="listenerBase">Listener Base URL</label>
+          <input id="listenerBase" placeholder="http://listener-ip:3000" />
+        </div>
+        <div>
+          <label for="vehicleId">Vehicle ID</label>
+          <input id="vehicleId" placeholder="221087..." />
+        </div>
+        <div>
+          <label for="channel">Channel</label>
+          <input id="channel" type="number" min="1" value="1" />
+        </div>
+        <div>
+          <label for="playlistMode">Viewer</label>
+          <select id="playlistMode">
+            <option value="live">Live Viewer</option>
+            <option value="hls">HLS Playlist</option>
+          </select>
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="connectBtn" class="primary">Open Stream</button>
+        </div>
+      </div>
+      <div class="row-2" style="margin-top:12px;">
+        <div>
+          <label for="minutes">Range Minutes</label>
+          <input id="minutes" type="number" min="1" value="30" />
+        </div>
+        <div>
+          <label for="startTime">Playback Start</label>
+          <input id="startTime" type="datetime-local" step="1" />
+        </div>
+        <div>
+          <label for="endTime">Playback End</label>
+          <input id="endTime" type="datetime-local" step="1" />
+        </div>
+        <div>
+          <label>&nbsp;</label>
+          <button id="playbackBtn" class="secondary">Request Playback Window</button>
+        </div>
+      </div>
+      <div class="inline">
+        <button id="loadVehiclesBtn" class="secondary">Load Vehicles From Listener</button>
+        <button id="screenshotBtn" class="primary">Request Screenshot Via Listener</button>
+        <button id="last60Btn" class="secondary">Set Last 60s</button>
+        <button id="streamStatsBtn" class="secondary">Refresh Video Hub Stats</button>
+      </div>
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; margin-bottom:10px;">
+          <strong>Preview</strong>
+          <div id="previewMeta" class="meta">No stream opened yet.</div>
+        </div>
+        <iframe id="viewerFrame" class="frame" src=""></iframe>
+      </div>
+
+      <div>
+        <div class="card">
+          <strong>Connected Vehicles</strong>
+          <div id="vehiclesSummary" class="meta" style="margin:8px 0;">No vehicles loaded.</div>
+          <div id="vehiclesList" class="list"></div>
+        </div>
+        <div class="card">
+          <strong>Video Hub Stats</strong>
+          <div id="streamStats" class="meta" style="margin-top:8px; white-space:pre-wrap;">No stats loaded.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const videoBaseEl = document.getElementById('videoBase');
+    const listenerBaseEl = document.getElementById('listenerBase');
+    const vehicleIdEl = document.getElementById('vehicleId');
+    const channelEl = document.getElementById('channel');
+    const playlistModeEl = document.getElementById('playlistMode');
+    const startTimeEl = document.getElementById('startTime');
+    const endTimeEl = document.getElementById('endTime');
+    const minutesEl = document.getElementById('minutes');
+    const statusEl = document.getElementById('status');
+    const viewerFrameEl = document.getElementById('viewerFrame');
+    const previewMetaEl = document.getElementById('previewMeta');
+    const vehiclesSummaryEl = document.getElementById('vehiclesSummary');
+    const vehiclesListEl = document.getElementById('vehiclesList');
+    const streamStatsEl = document.getElementById('streamStats');
+
+    function setStatus(message, kind = '') {
+      statusEl.textContent = message;
+      statusEl.className = `status ${kind}`.trim();
+    }
+
+    function normalizeBase(url, fallback) {
+      const raw = String(url || '').trim();
+      if (!raw) return fallback;
+      return raw.replace(/\/$/, '');
+    }
+
+    function currentVideoBase() {
+      return normalizeBase(videoBaseEl.value, window.location.origin);
+    }
+
+    function currentListenerBase() {
+      return normalizeBase(listenerBaseEl.value, '');
+    }
+
+    function currentVehicleId() {
+      return String(vehicleIdEl.value || '').trim();
+    }
+
+    function currentChannel() {
+      return Math.max(1, Number(channelEl.value || 1));
+    }
+
+    function setDefaultWindow() {
+      const now = new Date();
+      const start = new Date(now.getTime() - 60 * 1000);
+      startTimeEl.value = toLocalInput(start);
+      endTimeEl.value = toLocalInput(now);
+    }
+
+    function toLocalInput(date) {
+      const offset = date.getTimezoneOffset();
+      const local = new Date(date.getTime() - offset * 60000);
+      return local.toISOString().slice(0, 19);
+    }
+
+    function openViewer() {
+      const vehicleId = currentVehicleId();
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required.', 'warn');
+        return;
+      }
+      const channel = currentChannel();
+      const mode = playlistModeEl.value;
+      const videoBase = currentVideoBase();
+      let url = '';
+      if (mode === 'hls') {
+        url = `${videoBase}/api/stream/${encodeURIComponent(vehicleId)}/${encodeURIComponent(channel)}/playlist.m3u8`;
+      } else {
+        url = `${videoBase}/live-stream.html?vehicleId=${encodeURIComponent(vehicleId)}&channel=${encodeURIComponent(channel)}&autostart=1`;
+      }
+      viewerFrameEl.src = url;
+      previewMetaEl.textContent = `${vehicleId} ch${channel} via ${mode === 'hls' ? 'HLS' : 'live viewer'}`;
+      setStatus(`Opened ${mode === 'hls' ? 'HLS' : 'live'} view for ${vehicleId} ch${channel}.`, 'ok');
+    }
+
+    async function loadVehicles() {
+      const listenerBase = currentListenerBase();
+      if (!listenerBase) {
+        setStatus('Listener Base URL is required to load vehicles.', 'warn');
+        return;
+      }
+      setStatus('Loading vehicles from listener...');
+      try {
+        const res = await fetch(`${listenerBase}/api/vehicles/connected`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const vehicles = await res.json();
+        const list = Array.isArray(vehicles) ? vehicles : [];
+        vehiclesSummaryEl.textContent = `${list.length} connected vehicle(s).`;
+        vehiclesListEl.innerHTML = '';
+        if (!list.length) {
+          vehiclesListEl.innerHTML = '<div class="meta">No connected vehicles returned by listener.</div>';
+          setStatus('No connected vehicles found.', 'warn');
+          return;
+        }
+        for (const item of list) {
+          const div = document.createElement('div');
+          div.className = 'item';
+          const channels = Array.isArray(item.channels) ? item.channels.map(ch => Number(ch.logicalChannel || ch)).filter(Boolean) : [];
+          div.innerHTML = `
+            <strong>${item.id}</strong>
+            <div class="meta">Phone: ${item.phone || 'n/a'}</div>
+            <div class="meta">Channels: ${channels.length ? channels.join(', ') : '1'}</div>
+            <div class="inline">
+              <button type="button" data-select-id="${String(item.id)}" data-channel="${channels[0] || 1}">Use</button>
+            </div>
+          `;
+          vehiclesListEl.appendChild(div);
+        }
+        setStatus(`Loaded ${list.length} connected vehicle(s).`, 'ok');
+      } catch (err) {
+        setStatus(`Failed to load vehicles: ${err.message}`, 'err');
+      }
+    }
+
+    async function requestScreenshot() {
+      const listenerBase = currentListenerBase();
+      const vehicleId = currentVehicleId();
+      const channel = currentChannel();
+      if (!listenerBase) {
+        setStatus('Listener Base URL is required for screenshots.', 'warn');
+        return;
+      }
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required.', 'warn');
+        return;
+      }
+      setStatus(`Requesting screenshot for ${vehicleId} ch${channel} via listener...`);
+      try {
+        const res = await fetch(`${listenerBase}/api/vehicles/${encodeURIComponent(vehicleId)}/screenshot`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel, fallback: true })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        setStatus(body.message || 'Screenshot request sent.', 'ok');
+      } catch (err) {
+        setStatus(`Screenshot request failed: ${err.message}`, 'err');
+      }
+    }
+
+    async function requestPlayback() {
+      const listenerBase = currentListenerBase();
+      const vehicleId = currentVehicleId();
+      const channel = currentChannel();
+      if (!listenerBase) {
+        setStatus('Listener Base URL is required for playback requests.', 'warn');
+        return;
+      }
+      if (!vehicleId) {
+        setStatus('Vehicle ID is required.', 'warn');
+        return;
+      }
+      if (!startTimeEl.value || !endTimeEl.value) {
+        setStatus('Playback start and end are required.', 'warn');
+        return;
+      }
+      setStatus(`Requesting playback window for ${vehicleId} ch${channel} via listener...`);
+      try {
+        const res = await fetch(`${listenerBase}/api/vehicles/${encodeURIComponent(vehicleId)}/test-playback`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel,
+            startTime: new Date(startTimeEl.value).toISOString(),
+            endTime: new Date(endTimeEl.value).toISOString()
+          })
+        });
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok || !body.success) {
+          throw new Error(body.message || `HTTP ${res.status}`);
+        }
+        setStatus(body.message || 'Playback request sent.', 'ok');
+      } catch (err) {
+        setStatus(`Playback request failed: ${err.message}`, 'err');
+      }
+    }
+
+    async function refreshStats() {
+      const videoBase = currentVideoBase();
+      try {
+        const res = await fetch(`${videoBase}/api/stream/stats`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const body = await res.json();
+        streamStatsEl.textContent = JSON.stringify(body, null, 2);
+        setStatus('Video hub stats refreshed.', 'ok');
+      } catch (err) {
+        streamStatsEl.textContent = '';
+        setStatus(`Failed to load video hub stats: ${err.message}`, 'err');
+      }
+    }
+
+    document.getElementById('connectBtn').addEventListener('click', openViewer);
+    document.getElementById('loadVehiclesBtn').addEventListener('click', loadVehicles);
+    document.getElementById('screenshotBtn').addEventListener('click', requestScreenshot);
+    document.getElementById('playbackBtn').addEventListener('click', requestPlayback);
+    document.getElementById('last60Btn').addEventListener('click', setDefaultWindow);
+    document.getElementById('streamStatsBtn').addEventListener('click', refreshStats);
+    vehiclesListEl.addEventListener('click', (event) => {
+      const button = event.target.closest('button[data-select-id]');
+      if (!button) return;
+      vehicleIdEl.value = button.getAttribute('data-select-id') || '';
+      channelEl.value = button.getAttribute('data-channel') || '1';
+      setStatus(`Selected ${vehicleIdEl.value} ch${channelEl.value}.`, 'ok');
+    });
+
+    videoBaseEl.value = window.location.origin;
+    setDefaultWindow();
+    refreshStats();
+  </script>
+</body>
+</html>
