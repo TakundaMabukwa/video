@@ -15,6 +15,7 @@ import { DeviceStorage } from '../storage/deviceStorage';
 import { ImageStorage } from '../storage/imageStorage';
 import { AlertManager, AlertPriority } from '../alerts/alertManager';
 import { RawIngestLogger } from '../logging/rawIngestLogger';
+import { ProtocolMessageArchive } from '../logging/protocolMessageArchive';
 import { JTT808MessageType, Vehicle, LocationAlert, VehicleChannel } from '../types/jtt';
 import { getKnownVendorCodes, getVendorAlarmByCode, getVendorAlarmCatalog } from '../protocol/vendorAlarmCatalog';
 import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
@@ -413,6 +414,21 @@ export class JTT808Server {
   private async processMessage(buffer: Buffer, socket: net.Socket): Promise<void> {
     const message = JTT808Parser.parseMessage(buffer);
     if (!message) {
+      ProtocolMessageArchive.write({
+        ts: new Date().toISOString(),
+        direction: 'inbound',
+        remoteAddress: socket.remoteAddress || null,
+        remotePort: socket.remotePort || null,
+        vehicleId: null,
+        messageId: null,
+        messageIdHex: null,
+        serialNumber: null,
+        bodyLength: null,
+        isSubpackage: false,
+        parseSuccess: false,
+        parseError: 'parse_failed',
+        rawFrameHex: buffer.toString('hex')
+      });
       void this.protocolMessageStorage.save({
         receivedAt: new Date().toISOString(),
         direction: 'inbound',
@@ -455,7 +471,6 @@ export class JTT808Server {
       bodyHex: (message.body || Buffer.alloc(0)).toString('hex'),
       bodyTextPreview: this.buildPayloadPreview(message.body || Buffer.alloc(0), 320)
     });
-
     
 
     //handle different messages
@@ -3040,6 +3055,23 @@ export class JTT808Server {
     }
 
     RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    ProtocolMessageArchive.write({
+      ts: trace.receivedAt,
+      direction: trace.direction || 'inbound',
+      vehicleId: trace.vehicleId || null,
+      messageId: trace.messageId,
+      messageIdHex: trace.messageIdHex,
+      serialNumber: trace.serialNumber,
+      bodyLength: trace.bodyLength,
+      isSubpackage: trace.isSubpackage,
+      packetCount: trace.packetCount ?? null,
+      packetIndex: trace.packetIndex ?? null,
+      parseSuccess: true,
+      rawFrameHex: trace.rawFrameHex,
+      bodyHex: trace.bodyHex,
+      bodyTextPreview: trace.bodyTextPreview,
+      parse: trace.parse
+    });
     void this.protocolMessageStorage.save(trace).catch((error) => {
       console.error('Failed to persist inbound protocol message trace:', error);
     });
@@ -3082,6 +3114,23 @@ export class JTT808Server {
     }
 
     RawIngestLogger.write('jt808_message_trace', trace as unknown as Record<string, unknown>);
+    ProtocolMessageArchive.write({
+      ts: trace.receivedAt,
+      direction: trace.direction || 'outbound',
+      vehicleId: trace.vehicleId || null,
+      messageId: trace.messageId,
+      messageIdHex: trace.messageIdHex,
+      serialNumber: trace.serialNumber,
+      bodyLength: trace.bodyLength,
+      isSubpackage: trace.isSubpackage,
+      packetCount: trace.packetCount ?? null,
+      packetIndex: trace.packetIndex ?? null,
+      parseSuccess: true,
+      rawFrameHex: trace.rawFrameHex,
+      bodyHex: trace.bodyHex,
+      bodyTextPreview: trace.bodyTextPreview,
+      parse: trace.parse
+    });
     void this.protocolMessageStorage.save(trace).catch((error) => {
       console.error('Failed to persist outbound protocol message trace:', error);
     });
