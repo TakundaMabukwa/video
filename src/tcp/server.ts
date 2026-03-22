@@ -175,6 +175,15 @@ export class JTT808Server {
   private readonly videoProcessingEnabled = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
   );
+  private readonly suppressedResourceListSignals = new Set(
+    String(
+      process.env.RESOURCE_LIST_SUPPRESSED_SIGNALS ??
+        'jtt1078_storage_failure,jtt1078_abnormal_driving'
+    )
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean)
+  );
   private noisyLogGate = new Map<string, number>();
 
   private getNextSerial(): number {
@@ -2171,6 +2180,12 @@ export class JTT808Server {
       for (const bit of item.alarmBits) {
         const signalCode = this.mapResourceAlarmBitToSignal(bit);
         if (!signalCode) continue;
+        if (this.suppressedResourceListSignals.has(signalCode)) {
+          if (this.verboseResourceLogs) {
+            console.log(`Suppressed resource-list alert signal ${signalCode} for ${vehicleId} bit ${bit}`);
+          }
+          continue;
+        }
 
         const timestamp = this.parseResourceTimestamp(item.endTime) || last?.timestamp || new Date();
         void this.alertManager.processExternalAlert({
