@@ -194,12 +194,12 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10102,
-    type: 'DMS: Handheld phone alarm',
-    signalCode: 'dms_10102_handheld_phone_alarm',
+    type: 'DMS: Handheld phone use alarm',
+    signalCode: 'dms_10102_handheld_phone_use_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
     meaning: 'Handheld phone usage event reported by DMS.',
-    sourceRef: 'Vendor DMS code list'
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10103,
@@ -208,34 +208,34 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
     domain: 'DMS',
     defaultPriority: 'high',
     meaning: 'Smoking event reported by DMS.',
-    sourceRef: 'Vendor DMS code list'
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10104,
-    type: 'DMS: Forward camera invisible too long',
-    signalCode: 'dms_10104_forward_invisible_too_long',
+    type: 'DMS: Not looking forward alarm',
+    signalCode: 'dms_10104_not_looking_forward_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
-    meaning: 'Forward camera invisible too long event reported by DMS.',
-    sourceRef: 'Vendor DMS code list'
+    meaning: 'Driver not looking forward event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10105,
-    type: 'DMS: Driver alarm not detected',
-    signalCode: 'dms_10105_driver_alarm_not_detected',
+    type: 'DMS: Driver abnormal alarm',
+    signalCode: 'dms_10105_driver_abnormal_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
-    meaning: 'Driver alarm not detected event reported by DMS.',
-    sourceRef: 'Vendor DMS code list'
+    meaning: 'Driver abnormal event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10106,
-    type: 'DMS: Both hands off steering wheel',
-    signalCode: 'dms_10106_hands_off_steering',
+    type: 'DMS: Camera covered alarm',
+    signalCode: 'dms_10106_camera_covered_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
-    meaning: 'Both hands off steering wheel event reported by DMS.',
-    sourceRef: 'Vendor DMS code list'
+    meaning: 'Driver monitoring camera covered event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10107,
@@ -245,6 +245,51 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
     defaultPriority: 'medium',
     meaning: 'Driver behavior monitoring function failure event reported by DMS.',
     sourceRef: 'Vendor DMS code list'
+  },
+  {
+    code: 10108,
+    type: 'DMS: Overtime driving alarm',
+    signalCode: 'dms_10108_overtime_driving_alarm',
+    domain: 'DMS',
+    defaultPriority: 'high',
+    meaning: 'Overtime driving event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
+  },
+  {
+    code: 10110,
+    type: 'DMS: Seatbelt not fastened alarm',
+    signalCode: 'dms_10110_seatbelt_not_fastened_alarm',
+    domain: 'DMS',
+    defaultPriority: 'medium',
+    meaning: 'Seatbelt not fastened event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
+  },
+  {
+    code: 10111,
+    type: 'DMS: Infrared-blocking sunglasses failure alarm',
+    signalCode: 'dms_10111_infrared_sunglasses_failure_alarm',
+    domain: 'DMS',
+    defaultPriority: 'medium',
+    meaning: 'Infrared-blocking sunglasses failure event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
+  },
+  {
+    code: 10112,
+    type: 'DMS: Hands off wheel alarm',
+    signalCode: 'dms_10112_hands_off_wheel_alarm',
+    domain: 'DMS',
+    defaultPriority: 'high',
+    meaning: 'Both hands off the steering wheel event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
+  },
+  {
+    code: 10113,
+    type: 'DMS: Playing with phone alarm',
+    signalCode: 'dms_10113_playing_with_phone_alarm',
+    domain: 'DMS',
+    defaultPriority: 'high',
+    meaning: 'Playing with phone event reported by DMS.',
+    sourceRef: 'SmallChi JT808 YueBiao 0x65'
   },
   {
     code: 10116,
@@ -372,7 +417,11 @@ const STRUCTURED_ACTIVE_SAFETY_EVENT_CODE_MAP: Record<'ADAS' | 'DMS', Record<num
     4: 10104,
     5: 10105,
     6: 10106,
-    7: 10107,
+    8: 10108,
+    10: 10110,
+    11: 10111,
+    12: 10112,
+    13: 10113,
     16: 10116,
     17: 10117
   }
