@@ -4682,16 +4682,29 @@ export function createRoutes(
 
     // Resolve in memory if active (best effort), and always persist in DB.
     await alertManager.resolveAlert(id, notes, resolvedBy);
-    const success = await storage.resolveWithNcr(id, notes, resolvedBy, ncrDocumentUrl, ncrDocumentName);
+    const success = await storage.closeAlertWithDetails({
+      alertId: id,
+      closureType: 'resolved',
+      notes: String(notes).trim(),
+      actor: resolvedBy || null,
+      documentUrl: ncrDocumentUrl || null,
+      documentName: ncrDocumentName || null,
+      documentType: ncrDocumentUrl || ncrDocumentName ? 'legacy_attachment' : null,
+      payload: {
+        source: 'resolve-with-notes',
+        legacyDocumentUrl: ncrDocumentUrl || null,
+        legacyDocumentName: ncrDocumentName || null
+      }
+    });
 
     if (success) {
       res.json({
         success: true,
-        message: `Alert ${id} resolved with NCR details`,
+        message: `Alert ${id} resolved`,
         data: {
           alertId: id,
           resolved: true,
-          closureType: 'ncr',
+          closureType: 'resolved',
           ncrDocumentUrl: ncrDocumentUrl || null,
           ncrDocumentName: ncrDocumentName || null
         }
