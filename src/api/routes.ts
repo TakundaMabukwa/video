@@ -1682,22 +1682,27 @@ export function createRoutes(
         params.push(priority);
       }
       params.push(Math.max(limit * 5, 50));
-      const dbResult = await require('../storage/database').query(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
-         FROM alerts
-         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY timestamp DESC
-         LIMIT $${p}`,
-        params
-      );
-      const dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      let dbAlerts: any[] = [];
+      try {
+        const dbResult = await require('../storage/database').query(
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+           FROM alerts
+           ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+           ORDER BY timestamp DESC
+           LIMIT $${p}`,
+          params
+        );
+        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+      } catch (dbError: any) {
+        console.error('alerts route DB query failed, falling back to memory alerts:', dbError?.message || dbError);
+      }
 
       const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
       res.json({
         success: true,
         alerts,
         count: alerts.length,
-        source: 'merged',
+        source: dbAlerts.length > 0 ? 'merged' : 'memory_fallback',
         window_minutes: minutes
       });
     } catch (error) {
