@@ -138,6 +138,8 @@ export class JTT808Server {
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
+  private lastStartVideoAt = new Map<string, number>();
+  private lastRtpPacketAt = new Map<string, number>();
   private messageTraceCallback?: (trace: MessageTraceEntry) => void;
   private boundAlertManagerForCommands?: AlertManager;
   private boundRequestScreenshotHandler?: (payload: any) => void;
@@ -174,6 +176,14 @@ export class JTT808Server {
   );
   private readonly videoProcessingEnabled = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
+  );
+  private readonly startVideoCooldownMs = Math.max(
+    1000,
+    Number(process.env.START_VIDEO_COOLDOWN_MS || 30000)
+  );
+  private readonly activeStreamFreshnessMs = Math.max(
+    1000,
+    Number(process.env.ACTIVE_STREAM_FRESHNESS_MS || 15000)
   );
   private readonly suppressedResourceListSignals = new Set(
     String(
@@ -589,10 +599,34 @@ export class JTT808Server {
         this.ipToVehicle.set(clientIp, parsedSim);
       }
     }
+
+    const channel = Number(parsedRtp?.header?.channelNumber || 0);
+    if (vehicleId && channel > 0) {
+      this.lastRtpPacketAt.set(`${vehicleId}_${channel}`, Date.now());
+    }
     
     if (this.rtpHandler) {
       this.rtpHandler(buffer, vehicleId);
     }
+  }
+
+  private getVideoStreamKey(vehicleId: string, channel: number): string {
+    return `${vehicleId}_${channel}`;
+  }
+
+  private hasFreshStreamActivity(vehicleId: string, channel: number): boolean {
+    const lastPacketAt = this.lastRtpPacketAt.get(this.getVideoStreamKey(vehicleId, channel));
+    if (!lastPacketAt) return false;
+    return Date.now() - lastPacketAt <= this.activeStreamFreshnessMs;
+  }
+
+  private shouldSkipStartVideo(vehicleId: string, channel: number): boolean {
+    const streamKey = this.getVideoStreamKey(vehicleId, channel);
+    const lastRequestedAt = this.lastStartVideoAt.get(streamKey);
+    if (lastRequestedAt && Date.now() - lastRequestedAt < this.startVideoCooldownMs) {
+      return true;
+    }
+    return this.hasFreshStreamActivity(vehicleId, channel);
   }
 
   private handleTerminalRegister(message: any, socket: net.Socket): void {
@@ -2903,6 +2937,13 @@ export class JTT808Server {
 
     // Initialize circular buffer for this channel
     this.alertManager.initializeBuffer(vehicleId, channel);
+    if (this.shouldSkipStartVideo(vehicleId, channel)) {
+      if (this.shouldLogNoisy(`start_video_skip:${vehicleId}:${channel}`, 10000)) {
+        console.log(`Skipping 0x9101 for ${vehicleId} channel ${channel} because the stream is already active or was just requested.`);
+      }
+      vehicle.activeStreams.add(channel);
+      return true;
+    }
 
     const serverIp = process.env.SERVER_IP || socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
     
@@ -2920,6 +2961,7 @@ export class JTT808Server {
     
     console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
     socket.write(command);
+    this.lastStartVideoAt.set(this.getVideoStreamKey(vehicleId, channel), Date.now());
     this.pushOutboundMessageTrace(vehicleId, 0x9101, serial, command, command.slice(12, -2), {
       parser: 'outbound-realtime-video-request-0x9101',
       channel,
@@ -3027,6 +3069,7 @@ export class JTT808Server {
     if (!vehicle) return false;
     
     vehicle.activeStreams.delete(channel);
+    this.lastRtpPacketAt.delete(this.getVideoStreamKey(vehicleId, channel));
     
     return true;
   }
