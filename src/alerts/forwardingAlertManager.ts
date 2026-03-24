@@ -18,10 +18,6 @@ export class ForwardingAlertManager extends AlertManager {
     await this.forwarder.forwardExternalAlert(input);
   }
 
-  override addFrameToBuffer(): void {
-    // Listener mode does not retain frame buffers locally.
-  }
-
   override getActiveAlerts() {
     return [];
   }

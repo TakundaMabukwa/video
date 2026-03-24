@@ -232,7 +232,7 @@ async function startServer() {
   }
   udpServer.setAlertManager(alertManager);
   udpServer.setVehicleIdResolver((ipAddress) => tcpServer.resolveVehicleIdByIp(ipAddress));
-  if (ALERT_PROCESSING_ENABLED && VIDEO_PROCESSING_ENABLED) {
+  if (VIDEO_PROCESSING_ENABLED) {
     tcpRTPHandler.setAlertManager(alertManager);
   }
   

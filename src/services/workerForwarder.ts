@@ -34,6 +34,7 @@ export class WorkerForwarder {
   private readonly recoveryCooldownMs: number;
   private readonly recoveryCommands: Partial<Record<ForwardTarget, string>>;
   private readonly failureState = new Map<ForwardTarget, FailureState>();
+  private readonly rtpForwardRetries: number;
 
   constructor(options: ForwarderOptions) {
     this.alertWorkerUrl = this.normalizeBaseUrl(options.alertWorkerUrl);
@@ -48,6 +49,7 @@ export class WorkerForwarder {
       videoWorker: options.videoWorkerRecoveryCommand?.trim() || undefined,
       listenerServer: options.listenerServerRecoveryCommand?.trim() || undefined
     };
+    this.rtpForwardRetries = Math.max(0, Number(process.env.RTP_FORWARD_RETRIES || '2'));
   }
 
   hasAlertWorker(): boolean {
@@ -79,11 +81,28 @@ export class WorkerForwarder {
 
   async forwardRtpPacket(packet: Buffer, vehicleId: string, transport: 'tcp' | 'udp'): Promise<void> {
     if (!this.videoWorkerUrl) return;
-    await this.postJson('videoWorker', `${this.videoWorkerUrl}/api/internal/ingest/rtp`, {
+    const url = `${this.videoWorkerUrl}/api/internal/ingest/rtp`;
+    const body = {
       vehicleId,
       transport,
       packetBase64: packet.toString('base64')
-    });
+    };
+
+    let lastError: any = null;
+    for (let attempt = 0; attempt <= this.rtpForwardRetries; attempt += 1) {
+      try {
+        await this.postJson('videoWorker', url, body);
+        return;
+      } catch (error: any) {
+        lastError = error;
+        if (attempt >= this.rtpForwardRetries || !this.isRetryableForwardError(error)) {
+          throw error;
+        }
+        await this.sleep(100 * (attempt + 1));
+      }
+    }
+
+    if (lastError) throw lastError;
   }
 
   async requestScreenshot(vehicleId: string, channel: number, alertId?: string): Promise<void> {
@@ -124,6 +143,24 @@ export class WorkerForwarder {
   private normalizeBaseUrl(url?: string): string | undefined {
     const normalized = String(url || '').trim().replace(/\/+$/, '');
     return normalized || undefined;
+  }
+
+  private isRetryableForwardError(error: any): boolean {
+    const message = String(error?.message || error || '').toLowerCase();
+    return (
+      message.includes('fetch failed') ||
+      message.includes('econnreset') ||
+      message.includes('etimedout') ||
+      message.includes('timeout') ||
+      message.includes('socket hang up') ||
+      message.includes('503') ||
+      message.includes('502') ||
+      message.includes('504')
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   private async postJson(target: ForwardTarget, url: string, body: any): Promise<void> {
