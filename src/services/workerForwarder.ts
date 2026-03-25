@@ -24,17 +24,32 @@ type FailureState = {
   lastRecoveryAt?: number;
 };
 
+type QueuedRtpPacket = {
+  vehicleId: string;
+  transport: 'tcp' | 'udp';
+  packetBase64: string;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export class WorkerForwarder {
   private readonly alertWorkerUrl?: string;
   private readonly videoWorkerUrl?: string;
   private readonly listenerServerUrl?: string;
   private readonly authToken?: string;
   private readonly forwardTimeoutMs: number;
+  private readonly forwardRetryCount: number;
   private readonly failureThreshold: number;
   private readonly recoveryCooldownMs: number;
   private readonly recoveryCommands: Partial<Record<ForwardTarget, string>>;
   private readonly failureState = new Map<ForwardTarget, FailureState>();
-  private readonly rtpForwardRetries: number;
+  private readonly rtpBatchSize: number;
+  private readonly rtpBatchFlushMs: number;
+  private readonly rtpMaxQueue: number;
+  private readonly rtpQueue: QueuedRtpPacket[] = [];
+  private rtpFlushTimer: NodeJS.Timeout | null = null;
+  private rtpFlushInFlight = false;
+  private rtpDropWarnedAt = 0;
 
   constructor(options: ForwarderOptions) {
     this.alertWorkerUrl = this.normalizeBaseUrl(options.alertWorkerUrl);
@@ -42,14 +57,17 @@ export class WorkerForwarder {
     this.listenerServerUrl = this.normalizeBaseUrl(options.listenerServerUrl);
     this.authToken = options.authToken?.trim() || undefined;
     this.forwardTimeoutMs = Math.max(1000, Number(options.forwardTimeoutMs || 15000));
+    this.forwardRetryCount = Math.max(1, Number(process.env.FORWARD_RETRY_COUNT || 3));
     this.failureThreshold = Math.max(1, Number(options.failureThreshold || 5));
     this.recoveryCooldownMs = Math.max(10000, Number(options.recoveryCooldownMs || 300000));
+    this.rtpBatchSize = Math.max(1, Number(process.env.RTP_FORWARD_BATCH_SIZE || 32));
+    this.rtpBatchFlushMs = Math.max(5, Number(process.env.RTP_FORWARD_FLUSH_MS || 25));
+    this.rtpMaxQueue = Math.max(this.rtpBatchSize, Number(process.env.RTP_FORWARD_MAX_QUEUE || 20000));
     this.recoveryCommands = {
       alertWorker: options.alertWorkerRecoveryCommand?.trim() || undefined,
       videoWorker: options.videoWorkerRecoveryCommand?.trim() || undefined,
       listenerServer: options.listenerServerRecoveryCommand?.trim() || undefined
     };
-    this.rtpForwardRetries = Math.max(0, Number(process.env.RTP_FORWARD_RETRIES || '2'));
   }
 
   hasAlertWorker(): boolean {
@@ -81,28 +99,23 @@ export class WorkerForwarder {
 
   async forwardRtpPacket(packet: Buffer, vehicleId: string, transport: 'tcp' | 'udp'): Promise<void> {
     if (!this.videoWorkerUrl) return;
-    const url = `${this.videoWorkerUrl}/api/internal/ingest/rtp`;
-    const body = {
+    if (this.rtpQueue.length >= this.rtpMaxQueue) {
+      const now = Date.now();
+      if (now - this.rtpDropWarnedAt > 10000) {
+        this.rtpDropWarnedAt = now;
+        console.warn(
+          `[WorkerForwarder] RTP forward queue is full (${this.rtpQueue.length}/${this.rtpMaxQueue}). Dropping newest packet until worker catches up.`
+        );
+      }
+      return;
+    }
+
+    this.rtpQueue.push({
       vehicleId,
       transport,
       packetBase64: packet.toString('base64')
-    };
-
-    let lastError: any = null;
-    for (let attempt = 0; attempt <= this.rtpForwardRetries; attempt += 1) {
-      try {
-        await this.postJson('videoWorker', url, body);
-        return;
-      } catch (error: any) {
-        lastError = error;
-        if (attempt >= this.rtpForwardRetries || !this.isRetryableForwardError(error)) {
-          throw error;
-        }
-        await this.sleep(100 * (attempt + 1));
-      }
-    }
-
-    if (lastError) throw lastError;
+    });
+    this.scheduleRtpFlush();
   }
 
   async requestScreenshot(vehicleId: string, channel: number, alertId?: string): Promise<void> {
@@ -145,55 +158,97 @@ export class WorkerForwarder {
     return normalized || undefined;
   }
 
-  private isRetryableForwardError(error: any): boolean {
-    const message = String(error?.message || error || '').toLowerCase();
-    return (
-      message.includes('fetch failed') ||
-      message.includes('econnreset') ||
-      message.includes('etimedout') ||
-      message.includes('timeout') ||
-      message.includes('socket hang up') ||
-      message.includes('503') ||
-      message.includes('502') ||
-      message.includes('504')
-    );
+  private scheduleRtpFlush(): void {
+    if (this.rtpFlushInFlight || this.rtpFlushTimer) return;
+    this.rtpFlushTimer = setTimeout(() => {
+      this.rtpFlushTimer = null;
+      void this.flushRtpQueue();
+    }, this.rtpBatchFlushMs);
   }
 
-  private sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  private async flushRtpQueue(): Promise<void> {
+    if (!this.videoWorkerUrl || this.rtpFlushInFlight || this.rtpQueue.length === 0) {
+      return;
+    }
+
+    this.rtpFlushInFlight = true;
+    try {
+      while (this.rtpQueue.length > 0) {
+        const batch = this.rtpQueue.splice(0, this.rtpBatchSize);
+        await this.postJson('videoWorker', `${this.videoWorkerUrl}/api/internal/ingest/rtp-batch`, {
+          packets: batch
+        });
+      }
+    } catch (error: any) {
+      console.error(`[WorkerForwarder] Failed to flush RTP batch: ${error?.message || error}`);
+    } finally {
+      this.rtpFlushInFlight = false;
+      if (this.rtpQueue.length > 0) {
+        this.scheduleRtpFlush();
+      }
+    }
+  }
+
+  private isRetryableForwardError(error: any): boolean {
+    const message = String(error?.message || '').toLowerCase();
+    const causeCode = String(error?.cause?.code || '').toUpperCase();
+    return (
+      message.includes('fetch failed') ||
+      message.includes('aborted') ||
+      causeCode === 'ECONNRESET' ||
+      causeCode === 'ETIMEDOUT' ||
+      causeCode === 'UND_ERR_SOCKET' ||
+      causeCode === 'UND_ERR_CONNECT_TIMEOUT'
+    );
   }
 
   private async postJson(target: ForwardTarget, url: string, body: any): Promise<void> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json'
+      'Content-Type': 'application/json',
+      'Connection': 'close'
     };
     if (this.authToken) {
       headers['X-Internal-Token'] = this.authToken;
     }
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.forwardTimeoutMs);
+    let lastError: any = null;
+    for (let attempt = 1; attempt <= this.forwardRetryCount; attempt += 1) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), this.forwardTimeoutMs);
 
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal
-      });
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
 
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Forward failed ${response.status}: ${text || response.statusText}`);
+        if (!response.ok) {
+          const text = await response.text().catch(() => '');
+          throw new Error(`Forward failed ${response.status}: ${text || response.statusText}`);
+        }
+
+        this.resetFailureState(target);
+        return;
+      } catch (error: any) {
+        lastError = error;
+        const canRetry = attempt < this.forwardRetryCount && this.isRetryableForwardError(error);
+        if (!canRetry) {
+          this.recordFailure(target, url, error);
+          throw error;
+        }
+        console.warn(
+          `[WorkerForwarder] ${target} request failed on attempt ${attempt}/${this.forwardRetryCount} for ${url}: ${error?.message || error}`
+        );
+        await sleep(250 * attempt);
+      } finally {
+        clearTimeout(timeout);
       }
-
-      this.resetFailureState(target);
-    } catch (error: any) {
-      this.recordFailure(target, url, error);
-      throw error;
-    } finally {
-      clearTimeout(timeout);
     }
+
+    this.recordFailure(target, url, lastError);
+    throw lastError;
   }
 
   private resetFailureState(target: ForwardTarget): void {
