@@ -66,7 +66,7 @@ export class FrameAssembler {
 
     const streamFrames = this.getOrCreateStreamFrames(streamKey);
     const frameKey = this.buildFrameKey(header);
-    let frameBuffer = streamFrames.get(frameKey);
+    let frameBuffer: FrameBuffer | undefined = streamFrames.get(frameKey);
 
     if (!frameBuffer) {
       frameBuffer = this.findCandidateFrameBuffer(streamFrames, header, dataType, now);
@@ -163,8 +163,8 @@ export class FrameAssembler {
     header: JTT1078RTPHeader,
     dataType: number,
     now: number
-  ): FrameBuffer | null {
-    let bestCandidate: FrameBuffer | null = null;
+  ): FrameBuffer | undefined {
+    let bestCandidate: FrameBuffer | undefined;
     let bestScore = Number.POSITIVE_INFINITY;
 
     for (const candidate of streamFrames.values()) {

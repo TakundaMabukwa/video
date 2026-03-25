@@ -214,10 +214,11 @@ export class TCPRTPHandler {
   }
 
   getStats() {
+    const assemblerStats = this.frameAssembler.getStats();
     return {
       frameCount: this.frameCount,
-      activeStreams: this.activeStreams.size,
-      ...this.frameAssembler.getStats()
+      ...assemblerStats,
+      activeStreams: this.activeStreams.size
     };
   }
 }
