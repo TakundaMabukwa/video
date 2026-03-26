@@ -45,6 +45,41 @@ export function createRoutes(
   const queuedAlertWindows = new Set<string>();
   const alertEnsureState = new Map<string, number>();
   const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 10000));
+  const getAlertAttachmentCount = (metadata: any): number => {
+    const vendorExtensions = Array.isArray(metadata?.vendorExtensions) ? metadata.vendorExtensions : [];
+    for (const extension of vendorExtensions) {
+      const count = Number(extension?.identification?.attachmentCount);
+      if (Number.isFinite(count) && count > 0) return count;
+    }
+    return 0;
+  };
+  const isSafetyAttachmentAlert = (metadata: any): boolean => {
+    const sourceMessageId = String(metadata?.sourceMessageId || '').toLowerCase();
+    const sourceType = String(metadata?.sourceType || '').toLowerCase();
+    const alertSignals = Array.isArray(metadata?.alertSignals) ? metadata.alertSignals : [];
+    if (sourceMessageId === '0x1205' || sourceType === 'resource_list') return true;
+    if (getAlertAttachmentCount(metadata) > 0) return true;
+    return alertSignals.some((signal: any) => /^(dms|adas)_/i.test(String(signal || '')));
+  };
+  const resolveAlertEvidenceWindow = (
+    metadata: any,
+    alertTimestamp: Date
+  ): { timestamp: Date; start: Date; end: Date } => {
+    const resourceStart = parseLooseTimestamp(metadata?.resourceStartTime);
+    const resourceEnd = parseLooseTimestamp(metadata?.resourceEndTime);
+    const sourceTimestamp = parseLooseTimestamp(
+      metadata?.vendorExtensions?.[0]?.sourceTimestamp ||
+      metadata?.vendorExtensions?.[0]?.identification?.timestamp ||
+      metadata?.locationFix?.timestamp ||
+      metadata?.timestamp
+    );
+    const baseTimestamp = sourceTimestamp || alertTimestamp;
+    return {
+      timestamp: baseTimestamp,
+      start: resourceStart || new Date(baseTimestamp.getTime() - 45 * 1000),
+      end: resourceEnd || new Date(baseTimestamp.getTime() + 45 * 1000)
+    };
+  };
   const getVehicleChannels = (vehicleId: string, preferredChannel: number): number[] => {
     const vehicle = tcpServer.getVehicle(vehicleId);
     const fromCaps = Array.isArray(vehicle?.channels)
@@ -74,7 +109,7 @@ export function createRoutes(
     vehicleId: string,
     channel: number,
     alertTimestamp: Date,
-    options?: { ensureScreenshots?: boolean; ensureVideo?: boolean }
+    options?: { ensureScreenshots?: boolean; ensureVideo?: boolean; metadata?: any }
   ) => {
     const now = Date.now();
     const key = `${alertId}`;
@@ -86,11 +121,20 @@ export function createRoutes(
 
     const ensureScreenshots = options?.ensureScreenshots !== false;
     const ensureVideo = options?.ensureVideo !== false;
+    const metadata = parseAlertMetadata(options?.metadata);
     const channels = getVehicleChannels(vehicleId, channel);
     const screenshotRequests: Array<Promise<any>> = [];
+    const attachmentCount = getAlertAttachmentCount(metadata);
+    const { timestamp: evidenceTimestamp, start, end } = resolveAlertEvidenceWindow(metadata, alertTimestamp);
+    let historicalScreenshotRequested = false;
 
     if (ensureScreenshots) {
       for (const ch of channels) {
+        if (attachmentCount > 0) {
+          historicalScreenshotRequested =
+            tcpServer.requestScreenshotAt(vehicleId, ch, evidenceTimestamp, { alertId }) ||
+            historicalScreenshotRequested;
+        }
         screenshotRequests.push(
           tcpServer.requestScreenshotWithFallback(vehicleId, ch, {
             fallback: true,
@@ -105,8 +149,6 @@ export function createRoutes(
 
     let videoScheduled = false;
     if (ensureVideo) {
-      const start = new Date(alertTimestamp.getTime() - 30 * 1000);
-      const end = new Date(alertTimestamp.getTime() + 30 * 1000);
       for (const ch of channels) {
         const scheduled = tcpServer.scheduleCameraReportRequests(vehicleId, ch, start, end, {
           queryResources: true,
@@ -120,7 +162,18 @@ export function createRoutes(
       await Promise.allSettled(screenshotRequests);
     }
 
-    return { started: true, videoScheduled, channels };
+    return {
+      started: true,
+      videoScheduled,
+      channels,
+      attachmentCount,
+      historicalScreenshotRequested,
+      recoveryWindow: {
+        timestamp: evidenceTimestamp.toISOString(),
+        start: start.toISOString(),
+        end: end.toISOString()
+      }
+    };
   };
   const buildAlertMediaLinks = (alertId: string) => {
     const id = encodeURIComponent(String(alertId));
@@ -2323,7 +2376,8 @@ export function createRoutes(
 
       const ensure = await ensureAlertMediaRequested(id, vehicleId, channel, ts, {
         ensureScreenshots,
-        ensureVideo
+        ensureVideo,
+        metadata: row.metadata
       });
 
       return res.json({
@@ -2484,7 +2538,8 @@ export function createRoutes(
             id,
             String(row.device_id || ''),
             Number(row.channel || 1),
-            new Date(row.timestamp)
+            new Date(row.timestamp),
+            { metadata: row.metadata }
           );
         } catch {}
       }
@@ -2702,7 +2757,9 @@ export function createRoutes(
         const channel = Number(alert.channel || 1);
         const ts = new Date(alert.timestamp);
         if (vehicleId && Number.isFinite(ts.getTime())) {
-          ensureInfo = await ensureAlertMediaRequested(id, vehicleId, channel, ts);
+          ensureInfo = await ensureAlertMediaRequested(id, vehicleId, channel, ts, {
+            metadata: alert.metadata
+          });
         }
       } catch {}
     }
@@ -3526,7 +3583,13 @@ export function createRoutes(
         try {
           const ts = new Date(alert.timestamp);
           if (Number.isFinite(ts.getTime())) {
-            ensureInfo = await ensureAlertMediaRequested(id, String(alert.device_id), Number(alert.channel || 1), ts);
+            ensureInfo = await ensureAlertMediaRequested(
+              id,
+              String(alert.device_id),
+              Number(alert.channel || 1),
+              ts,
+              { metadata: alert.metadata }
+            );
           }
         } catch {}
       }
@@ -4418,16 +4481,19 @@ export function createRoutes(
             const metadata = parseAlertMetadata(alert?.metadata);
             const sourceMessageId = String(metadata?.sourceMessageId || '').toLowerCase();
             const sourceType = String(metadata?.sourceType || '').toLowerCase();
-            const resourceStart = parseLooseTimestamp(metadata?.resourceStartTime);
-            const resourceEnd = parseLooseTimestamp(metadata?.resourceEndTime);
             const alertTs = parseLooseTimestamp(alert?.timestamp);
-            const requestStart = resourceStart || start || alertTs;
-            const requestEnd = resourceEnd || end || alertTs;
+            const recoveryWindow = resolveAlertEvidenceWindow(metadata, alertTs || start);
+            const requestStart = recoveryWindow.start || start || alertTs;
+            const requestEnd = recoveryWindow.end || end || alertTs;
             const shouldRequestFromCamera =
               !!alert &&
               !!requestStart &&
               !!requestEnd &&
-              (sourceMessageId === '0x1205' || sourceType === 'resource_list');
+              (
+                sourceMessageId === '0x1205' ||
+                sourceType === 'resource_list' ||
+                isSafetyAttachmentAlert(metadata)
+              );
 
             if (shouldRequestFromCamera && requestEnd > requestStart) {
               const targetChannels = getVehicleChannels(id, ch);
