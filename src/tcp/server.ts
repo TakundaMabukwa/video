@@ -77,9 +77,10 @@ type PendingCameraRequest = {
 };
 
 type PendingScreenshotRequest = {
-  alertId: string;
+  alertId?: string;
   channel: number;
   createdAt: number;
+  requestedAt?: Date;
 };
 
 type VendorExtractionMethod =
@@ -2428,26 +2429,38 @@ export class JTT808Server {
     return true;
   }
 
-  private rememberPendingScreenshotRequest(vehicleId: string, channel: number, alertId?: string): void {
-    if (!alertId) return;
+  private rememberPendingScreenshotRequest(
+    vehicleId: string,
+    channel: number,
+    options?: { alertId?: string; requestedAt?: Date }
+  ): void {
     const key = vehicleId;
     const list = this.pendingScreenshotRequests.get(key) || [];
     const now = Date.now();
     const ttlMs = 2 * 60 * 1000;
+    const alertId = options?.alertId;
+    const requestedAt = options?.requestedAt && !Number.isNaN(options.requestedAt.getTime())
+      ? options.requestedAt
+      : undefined;
 
     const pruned = list.filter((item) => now - item.createdAt <= ttlMs);
-    const exists = pruned.some((item) => item.alertId === alertId && item.channel === channel);
+    const exists = pruned.some((item) =>
+      item.channel === channel &&
+      String(item.alertId || '') === String(alertId || '') &&
+      String(item.requestedAt?.toISOString() || '') === String(requestedAt?.toISOString() || '')
+    );
     if (!exists) {
       pruned.push({
         alertId,
         channel,
-        createdAt: now
+        createdAt: now,
+        requestedAt
       });
     }
     this.pendingScreenshotRequests.set(key, pruned);
   }
 
-  private consumePendingScreenshotAlertId(vehicleId: string, channel: number): string | undefined {
+  private consumePendingScreenshotRequest(vehicleId: string, channel: number): PendingScreenshotRequest | undefined {
     const key = vehicleId;
     const list = this.pendingScreenshotRequests.get(key);
     if (!list || list.length === 0) return undefined;
@@ -2466,7 +2479,57 @@ export class JTT808Server {
     const [matched] = filtered.splice(idx, 1);
     if (filtered.length > 0) this.pendingScreenshotRequests.set(key, filtered);
     else this.pendingScreenshotRequests.delete(key);
-    return matched?.alertId;
+    return matched;
+  }
+
+  requestScreenshotAt(
+    vehicleId: string,
+    channel: number = 1,
+    requestedAt: Date,
+    options?: { alertId?: string }
+  ): boolean {
+    const vehicle = this.vehicles.get(vehicleId);
+    const socket = this.connections.get(vehicleId);
+
+    if (!vehicle || !socket || !vehicle.connected || Number.isNaN(requestedAt.getTime())) {
+      return false;
+    }
+
+    this.rememberPendingScreenshotRequest(vehicleId, channel, {
+      alertId: options?.alertId,
+      requestedAt
+    });
+
+    const serverIp = socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+
+    const command = ScreenshotCommands.buildSingleFrameRequest(
+      vehicleId,
+      this.getNextSerial(),
+      serverIp,
+      this.port,
+      this.udpPort,
+      channel,
+      requestedAt
+    );
+
+    const legacyCommand = JTT1078Commands.buildPlaybackCommand(
+      vehicleId,
+      this.getNextSerial(),
+      serverIp,
+      this.port,
+      channel,
+      requestedAt,
+      requestedAt,
+      4
+    );
+
+    console.log(`Historical screenshot requested for vehicle ${vehicleId}, channel ${channel}, timestamp ${requestedAt.toISOString()} (spec + legacy fallback)`);
+    socket.write(command);
+    this.startVideo(vehicleId, channel);
+    setTimeout(() => {
+      if (socket.writable) socket.write(legacyCommand);
+    }, 400);
+    return true;
   }
 
   async requestScreenshotWithFallback(
@@ -2486,7 +2549,7 @@ export class JTT808Server {
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
     const preferFrameFirst = options?.preferFrameFirst === true;
-    this.rememberPendingScreenshotRequest(vehicleId, channel, options?.alertId);
+    this.rememberPendingScreenshotRequest(vehicleId, channel, { alertId: options?.alertId });
     const success = this.requestScreenshot(vehicleId, channel);
 
     if (!fallbackEnabled) {
@@ -3520,9 +3583,16 @@ export class JTT808Server {
 
       if (multimedia && multimedia.type === 'jpeg') {
         // Save image to Supabase and database (with error handling)
-        const pendingAlertId = this.consumePendingScreenshotAlertId(message.terminalPhone, multimedia.channel);
+        const pending = this.consumePendingScreenshotRequest(message.terminalPhone, multimedia.channel);
+        const pendingAlertId = pending?.alertId;
         const imageId = await this.imageStorage
-          .saveImage(message.terminalPhone, multimedia.channel, multimedia.data, pendingAlertId)
+          .saveImage(
+            message.terminalPhone,
+            multimedia.channel,
+            multimedia.data,
+            pendingAlertId,
+            pending?.requestedAt
+          )
           .catch((err) => {
             console.error(`Failed to save image: ${err.message}`);
             return null;

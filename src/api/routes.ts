@@ -135,11 +135,56 @@ export function createRoutes(
       collectEvidence: `/api/alerts/${id}/collect-evidence`
     };
   };
+  const parseLooseTimestamp = (value: any): Date | null => {
+    if (!value) return null;
+    if (value instanceof Date) {
+      return Number.isNaN(value.getTime()) ? null : value;
+    }
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const direct = new Date(raw);
+    if (!Number.isNaN(direct.getTime())) {
+      return direct;
+    }
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) {
+      const normalized = new Date(raw.replace(' ', 'T') + 'Z');
+      if (!Number.isNaN(normalized.getTime())) {
+        return normalized;
+      }
+    }
+    return null;
+  };
+  const normalizeAlertRow = (alert: any) => {
+    if (!alert) return null;
+    const metadata = parseAlertMetadata(alert.metadata);
+    const locationFix = metadata?.locationFix || alert.location || {};
+    return {
+      id: String(alert.id || ''),
+      device_id: String(alert.device_id || alert.vehicleId || metadata?.vehicle?.vehicleId || '').trim(),
+      channel: Number(alert.channel || metadata?.resourceChannel || 1) || 1,
+      alert_type: String(alert.alert_type || alert.type || metadata?.primaryAlertType || '').trim() || 'Unknown alert',
+      priority: String(alert.priority || 'medium'),
+      status: String(alert.status || 'new'),
+      resolved: Boolean(alert.resolved),
+      timestamp: alert.timestamp instanceof Date ? alert.timestamp.toISOString() : alert.timestamp,
+      latitude: alert.latitude ?? locationFix?.latitude ?? null,
+      longitude: alert.longitude ?? locationFix?.longitude ?? null,
+      metadata
+    };
+  };
   const withAlertMediaLinks = (alert: any) => ({
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
   const loadAlertRow = async (alertId: string): Promise<any | null> => {
+    const alertManager = tcpServer.getAlertManager();
+    const inMemory = alertManager.getAlertById(alertId);
+    if (inMemory) {
+      const normalized = normalizeAlertRow(inMemory);
+      if (normalized?.device_id) {
+        return normalized;
+      }
+    }
     const db = require('../storage/database');
     const result = await db.query(
       `SELECT id, device_id, channel, alert_type, priority, status, resolved, timestamp, latitude, longitude, metadata,
@@ -1501,6 +1546,39 @@ export function createRoutes(
     });
   });
 
+  router.post('/vehicles/:id/screenshot-at', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, timestamp, requestedAt } = req.body || {};
+    const rawTimestamp = timestamp ?? requestedAt;
+    const targetTime = parseLooseTimestamp(rawTimestamp);
+
+    if (!targetTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing or invalid timestamp'
+      });
+    }
+
+    const success = tcpServer.requestScreenshotAt(id, Number(channel), targetTime);
+    if (!success) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Historical screenshot requested for vehicle ${id}, channel ${channel}`,
+      data: {
+        vehicleId: id,
+        channel: Number(channel),
+        requestedAt: targetTime.toISOString(),
+        pollHint: `/api/vehicles/${encodeURIComponent(id)}/images`
+      }
+    });
+  });
+
   // Alias route used by external frontend proxy path
   router.post('/video-server/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
@@ -1521,6 +1599,39 @@ export function createRoutes(
       success: true,
       message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
       fallback: result.fallback || { ok: false, reason: 'disabled' }
+    });
+  });
+
+  router.post('/video-server/vehicles/:id/screenshot-at', async (req, res) => {
+    const { id } = req.params;
+    const { channel = 1, timestamp, requestedAt } = req.body || {};
+    const rawTimestamp = timestamp ?? requestedAt;
+    const targetTime = parseLooseTimestamp(rawTimestamp);
+
+    if (!targetTime) {
+      return res.status(400).json({
+        success: false,
+        message: 'Missing or invalid timestamp'
+      });
+    }
+
+    const success = tcpServer.requestScreenshotAt(id, Number(channel), targetTime);
+    if (!success) {
+      return res.status(404).json({
+        success: false,
+        message: `Vehicle ${id} not found or not connected`
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Historical screenshot requested for vehicle ${id}, channel ${channel}`,
+      data: {
+        vehicleId: id,
+        channel: Number(channel),
+        requestedAt: targetTime.toISOString(),
+        pollHint: `/api/vehicles/${encodeURIComponent(id)}/images`
+      }
     });
   });
 
@@ -3202,28 +3313,24 @@ export function createRoutes(
     }
 
     try {
-      const db = require('../storage/database');
-      const result = await db.query(
-        `SELECT id, device_id, channel, timestamp, metadata FROM alerts WHERE id = $1`,
-        [id]
-      );
+      const row = await loadAlertRow(id);
 
-      if (result.rows.length === 0) {
+      if (!row) {
         return res.status(404).json({
           success: false,
           message: `Alert ${id} not found`
         });
       }
 
-      const rawMeta = result.rows[0].metadata;
+      const rawMeta = row.metadata;
       const metadata = typeof rawMeta === 'string' ? JSON.parse(rawMeta || '{}') : (rawMeta || {});
       const videoClips = metadata?.videoClips || {};
       const source = resolveAlertClipSource(videoClips, type);
       const fpsHint = getAlertClipFpsHint(videoClips, type);
-      const rawVehicle = String(result.rows[0].device_id || '').trim();
-      const rawChannel = Number(result.rows[0].channel || 1);
+      const rawVehicle = String(row.device_id || '').trim();
+      const rawChannel = Number(row.channel || 1);
       const channel = Number.isFinite(rawChannel) && rawChannel > 0 ? rawChannel : 1;
-      const alertTs = new Date(result.rows[0]?.timestamp);
+      const alertTs = new Date(row?.timestamp);
       const fallbackStart = Number.isNaN(alertTs.getTime())
         ? new Date(Date.now() - 30 * 1000)
         : new Date(alertTs.getTime() - 30 * 1000);
@@ -3403,22 +3510,15 @@ export function createRoutes(
 
     try {
       const db = require('../storage/database');
+      const alert = await loadAlertRow(id);
 
-      // Get alert with metadata
-      const alertResult = await db.query(
-        `SELECT id, device_id, channel, alert_type, timestamp, metadata 
-         FROM alerts WHERE id = $1`,
-        [id]
-      );
-
-      if (alertResult.rows.length === 0) {
+      if (!alert) {
         return res.status(404).json({
           success: false,
           message: `Alert ${id} not found`
         });
       }
 
-      const alert = alertResult.rows[0];
       const linked = await backfillAlertMediaLinks(id, alert);
       const ensureMedia = String(req.query?.ensureMedia ?? 'false').toLowerCase() === 'true';
       let ensureInfo: any = null;
@@ -4312,6 +4412,81 @@ export function createRoutes(
       }
 
       if (rows.length === 0) {
+        if (alertId) {
+          try {
+            const alert = await loadAlertRow(String(alertId));
+            const metadata = parseAlertMetadata(alert?.metadata);
+            const sourceMessageId = String(metadata?.sourceMessageId || '').toLowerCase();
+            const sourceType = String(metadata?.sourceType || '').toLowerCase();
+            const resourceStart = parseLooseTimestamp(metadata?.resourceStartTime);
+            const resourceEnd = parseLooseTimestamp(metadata?.resourceEndTime);
+            const alertTs = parseLooseTimestamp(alert?.timestamp);
+            const requestStart = resourceStart || start || alertTs;
+            const requestEnd = resourceEnd || end || alertTs;
+            const shouldRequestFromCamera =
+              !!alert &&
+              !!requestStart &&
+              !!requestEnd &&
+              (sourceMessageId === '0x1205' || sourceType === 'resource_list');
+
+            if (shouldRequestFromCamera && requestEnd > requestStart) {
+              const targetChannels = getVehicleChannels(id, ch);
+              const perChannel = targetChannels.map((requestChannel) => {
+                const scheduled = tcpServer.scheduleCameraReportRequests(id, requestChannel, requestStart, requestEnd, {
+                  queryResources: true,
+                  requestDownload: false
+                });
+                const manualCaptureJob = scheduled.requested
+                  ? buildManualVideoJob(id, requestChannel, requestStart, requestEnd, {
+                      alertId: String(alertId)
+                    })
+                  : null;
+                return {
+                  channel: requestChannel,
+                  scheduled,
+                  manualCaptureJob
+                };
+              });
+              const queried = perChannel.some((entry) => entry.scheduled?.querySent);
+              const requested = perChannel.some((entry) => entry.scheduled?.requested);
+              const queued = perChannel.some((entry) => entry.scheduled?.queued);
+              const firstJob = perChannel.find((entry) => entry.manualCaptureJob)?.manualCaptureJob || null;
+              const fallbackChannel = Number(targetChannels?.[0]) || ch;
+              const liveStarted = tcpServer.getVehicle(id)?.connected
+                ? startLiveStreamForVehicle(id, fallbackChannel)
+                : false;
+
+              return res.status(202).json({
+                success: true,
+                message: requested || queued
+                  ? `Stored clip request started for alert ${alertId}`
+                  : `No local recording yet for alert ${alertId}; waiting for camera stored clip`,
+                data: {
+                  alertId: String(alertId),
+                  vehicleId: id,
+                  requestedChannel: ch,
+                  channel: fallbackChannel,
+                  startTime: start.toISOString(),
+                  endTime: end.toISOString(),
+                  resourceStartTime: requestStart.toISOString(),
+                  resourceEndTime: requestEnd.toISOString(),
+                  playbackSource: liveStarted ? 'camera_request_pending_with_live_fallback' : 'camera_request_pending',
+                  playbackJobId: firstJob?.id || null,
+                  playbackJobUrl: firstJob ? `/api/videos/jobs/${encodeURIComponent(firstJob.id)}/file` : null,
+                  requestQueued: queued,
+                  requestSent: requested,
+                  querySent: queried,
+                  streamStarted: liveStarted,
+                  streamUrl: liveStarted ? buildStreamUrl(id, fallbackChannel) : null,
+                  channelsRequested: targetChannels
+                }
+              });
+            }
+          } catch (alertFallbackError) {
+            console.error(`Failed alert-driven camera playback fallback for ${alertId}:`, alertFallbackError);
+          }
+        }
+
         const vehicle = tcpServer.getVehicle(id);
         const requestedChannel = Number(ch) || 1;
         if (vehicle && vehicle.connected) {

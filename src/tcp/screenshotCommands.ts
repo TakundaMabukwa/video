@@ -67,12 +67,13 @@ export class ScreenshotCommands {
   }
   
   private static dateToBcd(date: Date): Buffer {
-    const year = date.getFullYear() % 100;
-    const month = date.getMonth() + 1;
-    const day = date.getDate();
-    const hour = date.getHours();
-    const minute = date.getMinutes();
-    const second = date.getSeconds();
+    const local = this.toTerminalLocalDate(date);
+    const year = local.getUTCFullYear() % 100;
+    const month = local.getUTCMonth() + 1;
+    const day = local.getUTCDate();
+    const hour = local.getUTCHours();
+    const minute = local.getUTCMinutes();
+    const second = local.getUTCSeconds();
     
     const bcd = Buffer.alloc(6);
     bcd[0] = this.toBcd(year);
@@ -83,6 +84,15 @@ export class ScreenshotCommands {
     bcd[5] = this.toBcd(second);
     
     return bcd;
+  }
+
+  private static toTerminalLocalDate(date: Date): Date {
+    const raw = process.env.JTT808_TERMINAL_TZ_OFFSET_HOURS ?? process.env.TERMINAL_TZ_OFFSET_HOURS;
+    const offsetHours = raw === undefined || raw === null || String(raw).trim() === ''
+      ? 8
+      : Number(raw);
+    const safeOffsetHours = Number.isFinite(offsetHours) ? offsetHours : 8;
+    return new Date(date.getTime() + safeOffsetHours * 60 * 60 * 1000);
   }
   
   private static toBcd(value: number): number {
