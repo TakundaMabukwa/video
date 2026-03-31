@@ -1234,7 +1234,7 @@ export function createRoutes(
   const alertManager = tcpServer.getAlertManager();
   alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId, windowType }) => {
     if (!alertId || !vehicleId) return;
-    const dedupeKey = `${String(alertId)}:${String(windowType || 'generic')}`;
+    const dedupeKey = `${String(alertId)}:${Number(channel || 1)}:${String(windowType || 'generic')}`;
     if (queuedAlertWindows.has(dedupeKey)) return;
     queuedAlertWindows.add(dedupeKey);
     buildManualVideoJob(
