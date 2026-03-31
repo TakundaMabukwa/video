@@ -145,6 +145,8 @@ export class JTT808Server {
   private boundAlertManagerForCommands?: AlertManager;
   private boundRequestScreenshotHandler?: (payload: any) => void;
   private boundRequestCameraVideoHandler?: (payload: any) => void;
+  private boundAlertCreatedHandler?: (alert: any) => void;
+  private pendingAlertEvidenceChecks = new Map<string, NodeJS.Timeout[]>();
   private readonly vendorDecoderVersion = 'vendor-catalog-v1';
   private vendorAlertTelemetry = {
     emittedBySourceCode: new Map<string, number>(),
@@ -223,6 +225,7 @@ export class JTT808Server {
     this.boundRequestScreenshotHandler = ({ vehicleId, channel, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
+        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting screenshot from ${vehicleId} channel ${ch}`);
         void this.requestScreenshotWithFallback(vehicleId, ch, {
           fallback: true,
@@ -236,6 +239,7 @@ export class JTT808Server {
     this.boundRequestCameraVideoHandler = ({ vehicleId, channel, startTime, endTime, alertId }) => {
       const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
       for (const ch of channels) {
+        this.startVideo(vehicleId, ch);
         console.log(`Alert ${alertId}: Requesting camera SD card video from ${vehicleId} channel ${ch}`);
         this.scheduleCameraReportRequests(vehicleId, ch, startTime, endTime, {
           queryResources: true,
@@ -243,9 +247,15 @@ export class JTT808Server {
         });
       }
     };
+    this.boundAlertCreatedHandler = (alert: any) => {
+      if (!alert?.id || !alert?.vehicleId) return;
+      this.primeAlertEvidenceCapture(alert);
+      this.scheduleAlertEvidenceChecks(alert);
+    };
 
     alertManager.on('request-screenshot', this.boundRequestScreenshotHandler);
     alertManager.on('request-camera-video', this.boundRequestCameraVideoHandler);
+    alertManager.on('alert', this.boundAlertCreatedHandler);
   }
 
   private detachAlertCommandBridge(): void {
@@ -255,9 +265,121 @@ export class JTT808Server {
     if (this.boundAlertManagerForCommands && this.boundRequestCameraVideoHandler) {
       this.boundAlertManagerForCommands.off('request-camera-video', this.boundRequestCameraVideoHandler);
     }
+    if (this.boundAlertManagerForCommands && this.boundAlertCreatedHandler) {
+      this.boundAlertManagerForCommands.off('alert', this.boundAlertCreatedHandler);
+    }
     this.boundAlertManagerForCommands = undefined;
     this.boundRequestScreenshotHandler = undefined;
     this.boundRequestCameraVideoHandler = undefined;
+    this.boundAlertCreatedHandler = undefined;
+  }
+
+  private getAlertEvidenceCheckDelaysMs(): number[] {
+    const configured = String(process.env.ALERT_EVIDENCE_CHECK_DELAYS_MS || '6000,18000')
+      .split(',')
+      .map((value) => Number(String(value || '').trim()))
+      .filter((value) => Number.isFinite(value) && value >= 1000)
+      .map((value) => Math.min(value, 120000));
+    return configured.length > 0 ? configured : [6000, 18000];
+  }
+
+  private getAlertEvidenceVideoDurationSec(): number {
+    return Math.max(8, Math.min(30, Number(process.env.ALERT_EVIDENCE_VIDEO_DURATION_SEC || 15)));
+  }
+
+  private hasAlertScreenshotEvidence(alert: any): boolean {
+    const evidence = alert?.metadata?.evidence || {};
+    const screenshots = Array.isArray(evidence?.screenshots) ? evidence.screenshots : [];
+    const screenshotCount = Number(evidence?.screenshotCount || screenshots.length || 0);
+    return screenshotCount > 0 || screenshots.length > 0;
+  }
+
+  private hasAlertVideoEvidence(alert: any): boolean {
+    const evidence = alert?.metadata?.evidence || {};
+    const videos = Array.isArray(evidence?.videos) ? evidence.videos : [];
+    const videoCount = Number(evidence?.videoCount || videos.length || 0);
+    const clips = alert?.metadata?.videoClips || {};
+    return (
+      videoCount > 0 ||
+      videos.length > 0 ||
+      !!clips?.pre ||
+      !!clips?.post ||
+      !!clips?.cameraVideo ||
+      !!clips?.cameraPreVideo ||
+      !!clips?.cameraPostVideo
+    );
+  }
+
+  private clearPendingAlertEvidenceChecks(alertId: string): void {
+    const pending = this.pendingAlertEvidenceChecks.get(alertId) || [];
+    for (const timer of pending) {
+      clearTimeout(timer);
+    }
+    this.pendingAlertEvidenceChecks.delete(alertId);
+  }
+
+  private primeAlertEvidenceCapture(alert: any): void {
+    const vehicleId = String(alert?.vehicleId || '').trim();
+    if (!vehicleId) return;
+    const channel = Number(alert?.channel || 1);
+    const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
+    for (const ch of channels) {
+      this.startVideo(vehicleId, ch);
+    }
+  }
+
+  private scheduleAlertEvidenceChecks(alert: any): void {
+    const alertId = String(alert?.id || '').trim();
+    const vehicleId = String(alert?.vehicleId || '').trim();
+    if (!alertId || !vehicleId) return;
+
+    this.clearPendingAlertEvidenceChecks(alertId);
+
+    const channel = Number(alert?.channel || 1);
+    const timestamp = new Date(alert?.timestamp || Date.now());
+    const channels = this.resolveAlertCaptureChannels(vehicleId, channel);
+    const timers = this.getAlertEvidenceCheckDelaysMs().map((delayMs) => setTimeout(() => {
+      const currentAlert = this.alertManager.getAlertById(alertId);
+      if (!currentAlert || currentAlert.status === 'resolved') {
+        this.clearPendingAlertEvidenceChecks(alertId);
+        return;
+      }
+
+      const hasScreenshot = this.hasAlertScreenshotEvidence(currentAlert);
+      const hasVideo = this.hasAlertVideoEvidence(currentAlert);
+      if (hasScreenshot && hasVideo) {
+        this.clearPendingAlertEvidenceChecks(alertId);
+        return;
+      }
+
+      const windowStart = new Date(timestamp.getTime() - 60 * 1000);
+      const windowEnd = new Date(timestamp.getTime() + 60 * 1000);
+      const videoDurationSec = this.getAlertEvidenceVideoDurationSec();
+
+      for (const ch of channels) {
+        this.startVideo(vehicleId, ch);
+        if (!hasVideo) {
+          this.scheduleCameraReportRequests(vehicleId, ch, windowStart, windowEnd, {
+            queryResources: true,
+            requestDownload: false
+          });
+        }
+        if (!hasScreenshot || !hasVideo) {
+          void this.requestScreenshotWithFallback(vehicleId, ch, {
+            fallback: true,
+            fallbackDelayMs: 600,
+            alertId,
+            captureVideoEvidence: true,
+            videoDurationSec,
+            preferFrameFirst: hasVideo
+          }).catch((error) => {
+            console.warn(`Alert ${alertId}: retry evidence capture failed for ${vehicleId} ch${ch}:`, error?.message || error);
+          });
+        }
+      }
+    }, delayMs));
+
+    this.pendingAlertEvidenceChecks.set(alertId, timers);
   }
 
   private shouldLogNoisy(key: string, throttleMs: number = 10000): boolean {
