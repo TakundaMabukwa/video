@@ -123,8 +123,8 @@ export class AlertStorageDB {
        WHERE device_id = $1 
          AND channel = $2 
          AND alert_type = $3
-         AND timestamp > NOW() - INTERVAL '60 seconds'
-       ORDER BY timestamp DESC 
+         AND COALESCE(last_occurrence, timestamp) > NOW() - INTERVAL '60 seconds'
+       ORDER BY COALESCE(last_occurrence, timestamp) DESC 
        LIMIT 1`,
       [alert.vehicleId, alert.channel, alert.type]
     );
@@ -134,9 +134,8 @@ export class AlertStorageDB {
       await query(
         `UPDATE alerts 
          SET repeated_count = COALESCE(repeated_count, 0) + 1,
-             last_occurrence = NOW(),
-             metadata = $1,
-             timestamp = GREATEST(timestamp, $2)
+             last_occurrence = GREATEST(COALESCE(last_occurrence, timestamp), $2),
+             metadata = $1
          WHERE id = $3`,
         [
           JSON.stringify(alert.metadata),

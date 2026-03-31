@@ -221,6 +221,8 @@ export function createRoutes(
       status: String(alert.status || 'new'),
       resolved: Boolean(alert.resolved),
       timestamp: alert.timestamp instanceof Date ? alert.timestamp.toISOString() : alert.timestamp,
+      last_occurrence: alert.last_occurrence instanceof Date ? alert.last_occurrence.toISOString() : (alert.last_occurrence || null),
+      repeated_count: Number(alert.repeated_count || 1) || 1,
       latitude: alert.latitude ?? locationFix?.latitude ?? null,
       longitude: alert.longitude ?? locationFix?.longitude ?? null,
       metadata
@@ -1998,7 +2000,7 @@ export function createRoutes(
       const params: any[] = [];
       let p = 1;
       if (minutes !== null) {
-        where.push(`timestamp >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
+        where.push(`COALESCE(last_occurrence, timestamp) >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
         params.push(minutes);
       }
       if (status) {
@@ -2013,10 +2015,10 @@ export function createRoutes(
       let dbAlerts: any[] = [];
       try {
         const dbResult = await require('../storage/database').query(
-          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, last_occurrence, repeated_count, latitude, longitude, metadata
            FROM alerts
            ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-           ORDER BY timestamp DESC
+           ORDER BY COALESCE(last_occurrence, timestamp) DESC
            LIMIT $${p}`,
           params
         );
@@ -2393,13 +2395,13 @@ export function createRoutes(
     try {
       const { device_id, days = 7 } = req.query;
       const limit = toNumericLimit(req.query.limit, 100, 1, 1000);
-      let query = `SELECT * FROM alerts WHERE timestamp > NOW() - INTERVAL '${days} days'`;
+      let query = `SELECT * FROM alerts WHERE COALESCE(last_occurrence, timestamp) > NOW() - INTERVAL '${days} days'`;
       const params: any[] = [];
       if (device_id) {
         query += ' AND device_id = $1';
         params.push(device_id);
       }
-      query += ' ORDER BY timestamp DESC LIMIT $' + (params.length + 1);
+      query += ' ORDER BY COALESCE(last_occurrence, timestamp) DESC LIMIT $' + (params.length + 1);
       params.push(limit);
       const result = await require('../storage/database').query(query, params);
       res.json({ success: true, total: result.rows.length, data: result.rows });
