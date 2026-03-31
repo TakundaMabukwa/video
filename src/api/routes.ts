@@ -43,6 +43,7 @@ export function createRoutes(
     error?: string;
   }>();
   const queuedAlertWindows = new Set<string>();
+  const pendingStoredAlertPlaybackChecks = new Map<string, NodeJS.Timeout[]>();
   const alertEnsureState = new Map<string, number>();
   const ALERT_ENSURE_COOLDOWN_MS = Math.max(5000, Number(process.env.ALERT_MEDIA_ENSURE_COOLDOWN_MS || 10000));
   const getAlertAttachmentCount = (metadata: any): number => {
@@ -260,6 +261,31 @@ export function createRoutes(
     }
     return raw;
   };
+  const hasLinkedStoredAlertPlayback = async (alertId: string): Promise<boolean> => {
+    const direct = await dbQuery(
+      `SELECT id
+       FROM videos
+       WHERE alert_id = $1
+         AND video_type IN ('camera_sd', 'manual')
+         AND COALESCE(file_size, 0) > 0
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [alertId]
+    );
+    if ((direct.rows || []).length > 0) return true;
+
+    const row = await loadAlertRow(alertId);
+    const metadata = parseAlertMetadata(row?.metadata);
+    const clips = metadata?.videoClips || {};
+    return Boolean(
+      clips.cameraVideoVideoId ||
+      clips.cameraPreVideoVideoId ||
+      clips.cameraPostVideoVideoId ||
+      clips.cameraVideo ||
+      clips.cameraPreVideo ||
+      clips.cameraPostVideo
+    );
+  };
   const extractNativeSignalsFromParsedAlert = (parsedAlert: any): string[] => {
     if (!parsedAlert || typeof parsedAlert !== 'object') return [];
     const signals: string[] = [];
@@ -466,10 +492,12 @@ export function createRoutes(
   const queryStoredVideoSegments = async (vehicleId: string, channel: number, start: Date, end: Date) => {
     const db = require('../storage/database');
     const result = await db.query(
-      `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id
+      `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, file_size
        FROM videos
        WHERE device_id = $1
          AND channel = $2
+         AND COALESCE(file_size, 0) > 0
+         AND file_path NOT LIKE '%%.partial.%%'
          AND start_time <= $3
          AND COALESCE(end_time, start_time) >= $4
        ORDER BY start_time ASC`,
@@ -621,6 +649,21 @@ export function createRoutes(
         }
       } catch {}
     }
+  };
+  const getStoredAlertPlaybackDelaysMs = (): number[] => {
+    const configured = String(process.env.ALERT_STORED_PLAYBACK_DELAYS_MS || '8000,20000,45000')
+      .split(',')
+      .map((value) => Number(String(value || '').trim()))
+      .filter((value) => Number.isFinite(value) && value >= 1000)
+      .map((value) => Math.min(value, 180000));
+    return configured.length > 0 ? configured : [8000, 20000, 45000];
+  };
+  const clearPendingStoredAlertPlaybackChecks = (alertId: string) => {
+    const timers = pendingStoredAlertPlaybackChecks.get(alertId) || [];
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
+    pendingStoredAlertPlaybackChecks.delete(alertId);
   };
   const getFfmpegBinary = () => {
     if (process.env.FFMPEG_PATH) return process.env.FFMPEG_PATH;
@@ -1221,12 +1264,130 @@ export function createRoutes(
           metadata.videoClips.cameraVideoJobId = job.id;
           metadata.videoClips.cameraVideoVideoId = String(videoId);
         }
+        metadata.evidence = metadata.evidence || {};
+        const evidenceVideos = Array.isArray(metadata.evidence.videos) ? [...metadata.evidence.videos] : [];
+        if (!evidenceVideos.some((video: any) => String(video?.videoId || '') === String(videoId))) {
+          evidenceVideos.push({
+            videoId: String(videoId),
+            channel: Number(job.channel || 1) || 1,
+            source: 'stored_window',
+            durationSec: duration,
+            storageUrl: persistedUrl || null,
+            localPath: job.outputPath,
+            capturedAt: new Date().toISOString()
+          });
+        }
+        metadata.evidence.videos = evidenceVideos;
+        metadata.evidence.videoCount = evidenceVideos.length;
         await dbQuery(
           'UPDATE alerts SET metadata = $1 WHERE id = $2',
           [JSON.stringify(metadata), job.alertId]
         );
       }
     }
+  };
+  const queueStoredAlertPlaybackJob = async (alertId: string): Promise<{
+    queued: boolean;
+    vehicleId?: string;
+    channel?: number;
+    start?: string;
+    end?: string;
+    sourceSegments?: number;
+    reason?: string;
+  }> => {
+    const row = await loadAlertRow(alertId);
+    if (!row) {
+      return { queued: false, reason: 'alert-not-found' };
+    }
+    if (String(row.status || '').toLowerCase() === 'resolved') {
+      return { queued: false, reason: 'alert-resolved' };
+    }
+    if (await hasLinkedStoredAlertPlayback(alertId)) {
+      return { queued: false, reason: 'already-linked' };
+    }
+
+    const vehicleId = String(row.device_id || '').trim();
+    const preferredChannel = Number(row.channel || 1) || 1;
+    if (!vehicleId) {
+      return { queued: false, reason: 'missing-vehicle' };
+    }
+
+    const metadata = parseAlertMetadata(row.metadata);
+    const alertTimestamp = parseLooseTimestamp(row.timestamp) || new Date();
+    const recoveryWindow = resolveAlertEvidenceWindow(metadata, alertTimestamp);
+    const targetChannels = getVehicleChannels(vehicleId, preferredChannel).slice(0, 2);
+
+    for (const targetChannel of targetChannels) {
+      const segments = await queryStoredVideoSegments(vehicleId, targetChannel, recoveryWindow.start, recoveryWindow.end);
+      if (segments.length === 0) continue;
+
+      const dedupeKey = `stored:${alertId}:${targetChannel}:${recoveryWindow.start.toISOString()}:${recoveryWindow.end.toISOString()}`;
+      if (queuedAlertWindows.has(dedupeKey)) {
+        return {
+          queued: false,
+          reason: 'already-queued',
+          vehicleId,
+          channel: targetChannel,
+          start: recoveryWindow.start.toISOString(),
+          end: recoveryWindow.end.toISOString(),
+          sourceSegments: segments.length
+        };
+      }
+
+      queuedAlertWindows.add(dedupeKey);
+      buildStoredWindowVideoJob(vehicleId, targetChannel, recoveryWindow.start, recoveryWindow.end, segments, {
+        alertId
+      });
+      return {
+        queued: true,
+        vehicleId,
+        channel: targetChannel,
+        start: recoveryWindow.start.toISOString(),
+        end: recoveryWindow.end.toISOString(),
+        sourceSegments: segments.length
+      };
+    }
+
+    return {
+      queued: false,
+      vehicleId,
+      channel: preferredChannel,
+      start: recoveryWindow.start.toISOString(),
+      end: recoveryWindow.end.toISOString(),
+      reason: 'no-finalized-segments'
+    };
+  };
+  const scheduleStoredAlertPlaybackChecks = (alertLike: any) => {
+    const alertId = String(alertLike?.id || '').trim();
+    if (!alertId) return;
+
+    clearPendingStoredAlertPlaybackChecks(alertId);
+    const timers = getStoredAlertPlaybackDelaysMs().map((delayMs) => setTimeout(() => {
+      void (async () => {
+        try {
+          if (await hasLinkedStoredAlertPlayback(alertId)) {
+            clearPendingStoredAlertPlaybackChecks(alertId);
+            return;
+          }
+
+          const result = await queueStoredAlertPlaybackJob(alertId);
+          if (result.queued) {
+            console.log(
+              `Alert ${alertId}: queued stored playback job for ${result.vehicleId} ch${result.channel} ` +
+              `(${result.sourceSegments || 0} finalized segment(s))`
+            );
+            clearPendingStoredAlertPlaybackChecks(alertId);
+          } else if (result.reason && result.reason !== 'no-finalized-segments') {
+            console.log(`Alert ${alertId}: stored playback skipped (${result.reason})`);
+            clearPendingStoredAlertPlaybackChecks(alertId);
+          }
+        } catch (error: any) {
+          console.warn(`Alert ${alertId}: stored playback check failed:`, error?.message || error);
+        }
+      })();
+    }, delayMs));
+
+    pendingStoredAlertPlaybackChecks.set(alertId, timers);
   };
 
   // Auto-capture and persist an alert-linked playback file whenever alert workflow
@@ -1244,6 +1405,9 @@ export function createRoutes(
       new Date(endTime),
       { alertId: String(alertId), windowType: windowType === 'post' ? 'post' : 'pre' }
     );
+  });
+  alertManager.on('alert', (alert: any) => {
+    scheduleStoredAlertPlaybackChecks(alert);
   });
 
   // Get all connected vehicles with their channels
@@ -3605,6 +3769,8 @@ export function createRoutes(
                   duration_seconds, video_type, created_at, alert_id, device_id, channel
            FROM videos
            WHERE alert_id = $1
+             AND COALESCE(file_size, 0) > 0
+             AND file_path NOT LIKE '%%.partial.%%'
          ),
          fallback AS (
            SELECT id, file_path, storage_url, file_size, start_time, end_time,
@@ -3612,6 +3778,8 @@ export function createRoutes(
            FROM videos
            WHERE alert_id IS NULL
              AND device_id = $2
+             AND COALESCE(file_size, 0) > 0
+             AND file_path NOT LIKE '%%.partial.%%'
              AND start_time BETWEEN $3 AND $4
              AND channel BETWEEN GREATEST($5 - 1, 1) AND ($5 + 1)
          )
@@ -4253,6 +4421,8 @@ export function createRoutes(
         `SELECT id, device_id, channel, video_type, start_time, end_time, duration_seconds, file_size
          FROM videos
          WHERE device_id = $1
+           AND COALESCE(file_size, 0) > 0
+           AND file_path NOT LIKE '%%.partial.%%'
            AND start_time < $3
            AND COALESCE(end_time, start_time) >= $2
          ORDER BY channel ASC, start_time ASC`,
@@ -4331,6 +4501,8 @@ export function createRoutes(
                start_time, end_time, duration_seconds, created_at, alert_id
         FROM videos
         WHERE device_id = $1
+          AND COALESCE(file_size, 0) > 0
+          AND file_path NOT LIKE '%%.partial.%%'
           AND start_time <= $3
           AND COALESCE(end_time, start_time) >= $2`;
       if (ch > 0) {
@@ -4432,6 +4604,8 @@ export function createRoutes(
          FROM videos
          WHERE device_id = $1
            AND channel = $2
+           AND COALESCE(file_size, 0) > 0
+           AND file_path NOT LIKE '%%.partial.%%'
            AND start_time <= $3
            AND COALESCE(end_time, start_time) >= $4
          ORDER BY start_time ASC`,
@@ -4446,6 +4620,8 @@ export function createRoutes(
           `SELECT id, file_path, start_time, end_time, duration_seconds, frame_count, alert_id, channel
            FROM videos
            WHERE device_id = $1
+             AND COALESCE(file_size, 0) > 0
+             AND file_path NOT LIKE '%%.partial.%%'
              AND start_time <= $2
              AND COALESCE(end_time, start_time) >= $3
            ORDER BY channel ASC, start_time ASC`,
