@@ -1145,7 +1145,9 @@ export function createRoutes(
       type: alert?.type || alert?.alert_type,
       priority: alert?.priority || 'high',
       status: alert?.status || (alert?.resolved ? 'resolved' : 'new'),
-      timestamp: alert?.timestamp
+      timestamp: alert?.timestamp,
+      last_occurrence: alert?.last_occurrence || metadata?.last_occurrence || null,
+      repeated_count: Number(alert?.repeated_count || 1) || 1
     };
   };
   const inferAlertProtocol = (alert: any): string | null => {
@@ -1181,7 +1183,11 @@ export function createRoutes(
       seen.add(id);
       merged.push(a);
     });
-    merged.sort((a: any, b: any) => new Date(b?.timestamp || 0).getTime() - new Date(a?.timestamp || 0).getTime());
+    merged.sort((a: any, b: any) => {
+      const bTs = new Date(b?.last_occurrence || b?.timestamp || 0).getTime();
+      const aTs = new Date(a?.last_occurrence || a?.timestamp || 0).getTime();
+      return bTs - aTs;
+    });
     return merged.slice(0, limit);
   };
 
@@ -2187,15 +2193,15 @@ export function createRoutes(
         const dbParams: any[] = [];
         let px = 1;
         if (minutes !== null) {
-          dbWhere.push(`timestamp >= NOW() - ($${px++}::int * INTERVAL '1 minute')`);
+          dbWhere.push(`COALESCE(last_occurrence, timestamp) >= NOW() - ($${px++}::int * INTERVAL '1 minute')`);
           dbParams.push(minutes);
         }
         dbParams.push(Math.max(limit * 5, 50));
         const dbResult = await require('../storage/database').query(
-          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+          `SELECT id, device_id, channel, alert_type, priority, status, timestamp, last_occurrence, repeated_count, latitude, longitude, metadata
            FROM alerts
            WHERE ${dbWhere.join(' AND ')}
-           ORDER BY timestamp DESC
+           ORDER BY COALESCE(last_occurrence, timestamp) DESC
            LIMIT $${px}`,
           dbParams
         );
@@ -2325,7 +2331,7 @@ export function createRoutes(
       const params: any[] = [];
       let p = 1;
       if (minutes !== null) {
-        where.push(`timestamp >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
+        where.push(`COALESCE(last_occurrence, timestamp) >= NOW() - ($${p++}::int * INTERVAL '1 minute')`);
         params.push(minutes);
       }
       if (status) {
@@ -2357,10 +2363,10 @@ export function createRoutes(
 
       params.push(Math.max(limit * 5, 50));
       const dbResult = await require('../storage/database').query(
-        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, latitude, longitude, metadata
+        `SELECT id, device_id, channel, alert_type, priority, status, timestamp, last_occurrence, repeated_count, latitude, longitude, metadata
          FROM alerts
          ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY timestamp DESC
+         ORDER BY COALESCE(last_occurrence, timestamp) DESC
          LIMIT $${p}`,
         params
       );
