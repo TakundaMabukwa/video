@@ -297,6 +297,7 @@ async function startServer() {
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
+      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame);
       liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
       sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
     });
@@ -306,6 +307,7 @@ async function startServer() {
   if (VIDEO_PROCESSING_ENABLED) {
     tcpRTPHandler.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
       console.log(`🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`);
+      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame);
       liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
       sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
     });

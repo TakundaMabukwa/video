@@ -1764,6 +1764,14 @@ export function createRoutes(
       return;
     }
 
+    if (!result.fallback?.ok) {
+      return res.status(202).json({
+        success: false,
+        message: `Screenshot requested for vehicle ${id}, channel ${channel}, but no image was captured yet`,
+        fallback: result.fallback || { ok: false, reason: 'disabled' }
+      });
+    }
+
     res.json({
       success: true,
       message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
@@ -1817,6 +1825,14 @@ export function createRoutes(
       return res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
+      });
+    }
+
+    if (!result.fallback?.ok) {
+      return res.status(202).json({
+        success: false,
+        message: `Screenshot requested for vehicle ${id}, channel ${channel}, but no image was captured yet`,
+        fallback: result.fallback || { ok: false, reason: 'disabled' }
       });
     }
 

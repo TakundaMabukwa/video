@@ -83,6 +83,11 @@ type PendingScreenshotRequest = {
   requestedAt?: Date;
 };
 
+type LatestLiveFrame = {
+  frame: Buffer;
+  receivedAt: number;
+};
+
 type VendorExtractionMethod =
   | 'numeric_be'
   | 'numeric_le'
@@ -138,6 +143,7 @@ export class JTT808Server {
   private protocolMessageStorage = new ProtocolMessageStorage();
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
+  private latestLiveIFrames = new Map<string, LatestLiveFrame>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
   private lastStartVideoAt = new Map<string, number>();
   private lastRtpPacketAt = new Map<string, number>();
@@ -188,6 +194,10 @@ export class JTT808Server {
     1000,
     Number(process.env.ACTIVE_STREAM_FRESHNESS_MS || 15000)
   );
+  private readonly liveFrameScreenshotFreshnessMs = Math.max(
+    1000,
+    Number(process.env.LIVE_FRAME_SCREENSHOT_FRESHNESS_MS || 15000)
+  );
   private readonly suppressedResourceListSignals = new Set(
     String(
       process.env.RESOURCE_LIST_SUPPRESSED_SIGNALS ??
@@ -207,6 +217,15 @@ export class JTT808Server {
   constructor(private port: number, private udpPort: number) {
     this.server = net.createServer(this.handleConnection.bind(this));
     this.alertManager = new AlertManager();
+  }
+
+  cacheLiveFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean): void {
+    if (!isIFrame || !frame || frame.length === 0) return;
+    const key = `${vehicleId}_${channel}`;
+    this.latestLiveIFrames.set(key, {
+      frame: Buffer.from(frame),
+      receivedAt: Date.now()
+    });
   }
 
   getAlertManager(): AlertManager {
@@ -2674,7 +2693,6 @@ export class JTT808Server {
     const fallbackDelayMs = Math.max(0, Math.min(5000, Number(options?.fallbackDelayMs) || 1800));
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
-    const preferFrameFirst = options?.preferFrameFirst === true;
     this.rememberPendingScreenshotRequest(vehicleId, channel, { alertId: options?.alertId });
     const success = this.requestScreenshot(vehicleId, channel);
 
@@ -2693,6 +2711,19 @@ export class JTT808Server {
         normalized.includes('segments not ready')
       );
     };
+    const retryLiveFrameScreenshot = async (
+      attempts: number,
+      delayMs: number
+    ): Promise<ScreenshotFallbackResult> => {
+      let current: ScreenshotFallbackResult = { ok: false, reason: 'live frame not attempted' };
+      for (let attempt = 0; attempt < attempts && !current.ok; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        current = await this.captureScreenshotFromLiveFrame(vehicleId, channel, options?.alertId);
+      }
+      return current;
+    };
     const retryHlsScreenshot = async (
       attempts: number,
       delayMs: number
@@ -2709,12 +2740,13 @@ export class JTT808Server {
       }
       return current;
     };
-    if (preferFrameFirst) {
-      fallback = await retryHlsScreenshot(3, 700);
-    }
-
+    fallback = await retryLiveFrameScreenshot(2, 450);
     if (!fallback.ok) {
-      await new Promise((r) => setTimeout(r, fallbackDelayMs));
+      await new Promise((r) => setTimeout(r, Math.min(fallbackDelayMs, 1200)));
+      fallback = await retryLiveFrameScreenshot(3, 700);
+    }
+    if (!fallback.ok) {
+      await new Promise((r) => setTimeout(r, Math.max(0, fallbackDelayMs)));
       // HLS playlists/segments can appear several seconds after startVideo().
       fallback = await retryHlsScreenshot(6, 1500);
     }
@@ -2909,6 +2941,92 @@ export class JTT808Server {
       return { ok: true, imageId };
     } catch (error: any) {
       return { ok: false, reason: error?.message || 'video frame screenshot fallback error' };
+    }
+  }
+
+  private async captureScreenshotFromLiveFrame(
+    vehicleId: string,
+    channel: number,
+    alertId?: string
+  ): Promise<ScreenshotFallbackResult> {
+    try {
+      const key = `${vehicleId}_${channel}`;
+      const cachedFrame = this.latestLiveIFrames.get(key);
+      if (!cachedFrame) {
+        return { ok: false, reason: 'no live keyframe available yet' };
+      }
+
+      if (Date.now() - cachedFrame.receivedAt > this.liveFrameScreenshotFreshnessMs) {
+        return { ok: false, reason: 'live keyframe is stale' };
+      }
+
+      const imageData = await new Promise<Buffer | null>((resolve) => {
+        const ffmpeg = spawn('ffmpeg', [
+          '-hide_banner',
+          '-loglevel', 'error',
+          '-f', 'h264',
+          '-i', 'pipe:0',
+          '-frames:v', '1',
+          '-f', 'image2pipe',
+          '-vcodec', 'mjpeg',
+          'pipe:1'
+        ], {
+          stdio: ['pipe', 'pipe', 'pipe']
+        });
+
+        const chunks: Buffer[] = [];
+        let done = false;
+        const finish = (data: Buffer | null) => {
+          if (done) return;
+          done = true;
+          resolve(data);
+        };
+
+        const timeout = setTimeout(() => {
+          ffmpeg.kill('SIGKILL');
+          finish(null);
+        }, 5000);
+
+        ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+        ffmpeg.on('error', () => {
+          clearTimeout(timeout);
+          finish(null);
+        });
+        ffmpeg.on('close', (code) => {
+          clearTimeout(timeout);
+          if (code === 0 && chunks.length > 0) {
+            finish(Buffer.concat(chunks));
+          } else {
+            finish(null);
+          }
+        });
+
+        ffmpeg.stdin.on('error', () => {
+          clearTimeout(timeout);
+          finish(null);
+        });
+        ffmpeg.stdin.end(cachedFrame.frame);
+      });
+
+      if (!imageData || imageData.length < 4) {
+        return { ok: false, reason: 'empty frame from live keyframe' };
+      }
+
+      const imageId = await this.imageStorage.saveImage(vehicleId, channel, imageData, alertId);
+      if (alertId) {
+        await this.alertManager.registerAlertScreenshotEvidence({
+          alertId,
+          imageId: String(imageId),
+          channel,
+          source: 'live_frame_fallback'
+        }).catch((err: any) => {
+          console.warn(`Failed to register live-frame screenshot evidence for ${alertId}:`, err?.message || err);
+        });
+      }
+      console.log(`Alert ${alertId || 'manual'}: Live-frame screenshot saved for ${vehicleId} ch${channel}`);
+      return { ok: true, imageId };
+    } catch (error: any) {
+      return { ok: false, reason: error?.message || 'live frame screenshot fallback error' };
     }
   }
 
