@@ -358,6 +358,8 @@ export class AlertManager extends EventEmitter {
     const filtered = this.filterActionableSignals([baseSignalCode]);
     if (filtered.length === 0) return;
     const signalCode = filtered[0];
+    const alertSignalDetail = this.getSignalDetail(signalCode);
+    if (this.isSilencedAlertType(input.type || alertSignalDetail.label)) return;
     const signature = this.buildAlertSignature(
       input.vehicleId,
       channel,
@@ -372,14 +374,14 @@ export class AlertManager extends EventEmitter {
     const priority = input.priority || AlertPriority.MEDIUM;
     const alertId = `ALT-${Date.now()}-${++this.alertCounter}`;
     const location = input.location || { latitude: 0, longitude: 0 };
-    const alertSignalDetails = [this.getSignalDetail(signalCode)];
+    const alertSignalDetails = [alertSignalDetail];
 
     const alertEvent: AlertEvent = {
       id: alertId,
       vehicleId: input.vehicleId,
       channel,
       priority,
-      type: input.type || alertSignalDetails[0].label || 'External Alert',
+      type: normalizeOfficialAlertType(input.type || alertSignalDetails[0].label || 'External Alert'),
       timestamp,
       location,
       status: 'new',
@@ -981,7 +983,7 @@ export class AlertManager extends EventEmitter {
     const alwaysSuppressed = new Set(
       String(
         process.env.ALERT_SUPPRESSED_SIGNALS ||
-        'jtt1078_storage_failure,jtt1078_abnormal_driving,platform_video_alarm_0103,platform_video_alarm_0106'
+        'jtt1078_storage_failure,jtt1078_abnormal_driving,platform_video_alarm_0103,platform_video_alarm_0106,custom_keyword_storage_failure'
       )
         .split(',')
         .map((s) => s.trim())
@@ -1019,6 +1021,11 @@ export class AlertManager extends EventEmitter {
       if (s.startsWith('jtt1078_signal_blocking_channels_')) return false;
       return true;
     });
+  }
+
+  private isSilencedAlertType(value: string): boolean {
+    const normalized = String(value || '').trim().toLowerCase();
+    return normalized === 'storage unit failure' || normalized === 'storage failure';
   }
 
   private getSignalDetail(signal: string): { code: string; label: string; meaning: string; source: string } {

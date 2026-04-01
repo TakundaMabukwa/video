@@ -237,6 +237,22 @@ export function createRoutes(
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
+  const isSilencedAlert = (alert: any) => {
+    const metadata = alert?.metadata || {};
+    const type = String(alert?.alert_type || alert?.type || metadata?.primaryAlertType || '').trim().toLowerCase();
+    if (type === 'storage unit failure' || type === 'storage failure') return true;
+
+    const signals = [
+      ...(Array.isArray(metadata?.alertSignals) ? metadata.alertSignals : []),
+      ...(Array.isArray(metadata?.alertSignalDetails) ? metadata.alertSignalDetails.map((item: any) => item?.code) : [])
+    ]
+      .map((value: any) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+
+    return signals.includes('jtt1078_storage_failure') ||
+      signals.includes('platform_video_alarm_0103') ||
+      signals.includes('custom_keyword_storage_failure');
+  };
   const loadAlertRow = async (alertId: string): Promise<any | null> => {
     const alertManager = tcpServer.getAlertManager();
     const inMemory = alertManager.getAlertById(alertId);
@@ -2069,6 +2085,7 @@ export function createRoutes(
       let memAlerts = memAlertsRaw.map((a: any) => normalizeAlertRecord(a));
       if (status) memAlerts = memAlerts.filter((a: any) => String(a?.status || '').toLowerCase() === status.toLowerCase());
       if (priority) memAlerts = memAlerts.filter((a: any) => String(a?.priority || '').toLowerCase() === priority.toLowerCase());
+      memAlerts = memAlerts.filter((a: any) => !isSilencedAlert(a));
 
       const where: string[] = [];
       const params: any[] = [];
@@ -2096,12 +2113,12 @@ export function createRoutes(
            LIMIT $${p}`,
           params
         );
-        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r)).filter((a: any) => !isSilencedAlert(a));
       } catch (dbError: any) {
         console.error('alerts route DB query failed, falling back to memory alerts:', dbError?.message || dbError);
       }
 
-      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
+      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).filter((a: any) => !isSilencedAlert(a)).map(withAlertMediaLinks);
       res.json({
         success: true,
         alerts,
@@ -2250,7 +2267,8 @@ export function createRoutes(
       const memAlerts = alertManager
         .getActiveAlerts()
         .map((a: any) => normalizeAlertRecord(a))
-        .filter((a: any) => ['new', 'acknowledged', 'escalated'].includes(String(a?.status || '').toLowerCase()));
+        .filter((a: any) => ['new', 'acknowledged', 'escalated'].includes(String(a?.status || '').toLowerCase()))
+        .filter((a: any) => !isSilencedAlert(a));
 
       let dbAlerts: any[] = [];
       try {
@@ -2273,11 +2291,11 @@ export function createRoutes(
            LIMIT $${px}`,
           dbParams
         );
-        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r));
+        dbAlerts = dbResult.rows.map((r: any) => normalizeAlertRecord(r)).filter((a: any) => !isSilencedAlert(a));
       } catch (dbErr: any) {
         console.error('alerts/active DB query failed:', dbErr?.message || dbErr);
       }
-      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).map(withAlertMediaLinks);
+      const alerts = mergeRecentAlerts([memAlerts, dbAlerts], limit).filter((a: any) => !isSilencedAlert(a)).map(withAlertMediaLinks);
 
       res.json({
         success: true,
@@ -2294,6 +2312,7 @@ export function createRoutes(
         const memOnly = tcpServer.getAlertManager()
           .getActiveAlerts()
           .map((a: any) => normalizeAlertRecord(a))
+          .filter((a: any) => !isSilencedAlert(a))
           .slice(0, fallbackLimit)
           .map(withAlertMediaLinks);
         return res.json({
