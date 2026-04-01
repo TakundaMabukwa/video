@@ -1977,14 +1977,36 @@ export function createRoutes(
   router.get('/stream/:vehicleId/:channel/playlist.m3u8', (req, res) => {
     const { vehicleId, channel } = req.params;
     const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
-    res.sendFile(playlistPath);
+    try {
+      if (!fs.existsSync(playlistPath)) {
+        return res.status(404).type('text/plain').send('Playlist not found');
+      }
+      const stats = fs.statSync(playlistPath);
+      if (!stats.isFile() || stats.size <= 0) {
+        return res.status(404).type('text/plain').send('Playlist not ready');
+      }
+      return res.sendFile(playlistPath);
+    } catch (error) {
+      return res.status(404).type('text/plain').send('Playlist unavailable');
+    }
   });
 
   // Serve HLS segments
   router.get('/stream/:vehicleId/:channel/:segment', (req, res) => {
     const { vehicleId, channel, segment } = req.params;
     const segmentPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, segment);
-    res.sendFile(segmentPath);
+    try {
+      if (!fs.existsSync(segmentPath)) {
+        return res.status(404).type('text/plain').send('Segment not found');
+      }
+      const stats = fs.statSync(segmentPath);
+      if (!stats.isFile() || stats.size <= 0) {
+        return res.status(404).type('text/plain').send('Segment not ready');
+      }
+      return res.sendFile(segmentPath);
+    } catch (error) {
+      return res.status(404).type('text/plain').send('Segment unavailable');
+    }
   });
 
   // Get alerts

@@ -2682,10 +2682,6 @@ export class JTT808Server {
       return { success, fallback: { ok: false, reason: 'disabled' } };
     }
 
-    if (!this.videoProcessingEnabled) {
-      return { success, fallback: { ok: false, reason: 'video processing disabled on this server' } };
-    }
-
     let fallback: ScreenshotFallbackResult = { ok: false, reason: 'not attempted' };
     if (preferFrameFirst) {
       fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
@@ -2744,9 +2740,6 @@ export class JTT808Server {
     durationSec: number,
     alertId?: string
   ): Promise<{ ok: boolean; path?: string; reason?: string }> {
-    if (!this.videoProcessingEnabled) {
-      return { ok: false, reason: 'video processing disabled on this server' };
-    }
     try {
       const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
       if (!fs.existsSync(playlistPath)) {
@@ -2897,9 +2890,6 @@ export class JTT808Server {
   }
 
   private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<ScreenshotFallbackResult> {
-    if (!this.videoProcessingEnabled) {
-      return { ok: false, reason: 'video processing disabled on this server' };
-    }
     try {
       const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
       if (!fs.existsSync(playlistPath)) {
