@@ -5,7 +5,7 @@ import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
-import { getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent } from '../protocol/vendorAlarmCatalog';
+import { getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent, normalizeOfficialAlertType } from '../protocol/vendorAlarmCatalog';
 import * as fs from 'fs';
 
 export enum AlertPriority {
@@ -660,9 +660,9 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.illegalDoorOpenAlarm) return 'Illegal Door Open Alarm';
     if (alert.alarmFlags?.illegalIgnition) return 'Illegal Ignition Alarm';
     if (alert.alarmFlags?.illegalDisplacement) return 'Illegal Vehicle Displacement';
-    if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Driver Fatigue';
+    if (alert.drivingBehavior?.fatigue || alert.alarmFlags?.fatigue) return 'Fatigue Alert';
     if (alert.drivingBehavior?.phoneCall || alert.alarmFlags?.dangerousDriving) return 'Dangerous Driving Behavior';
-    if (alert.drivingBehavior?.smoking) return 'Smoking While Driving';
+    if (alert.drivingBehavior?.smoking) return 'Smoking';
     if (alert.alarmFlags?.overspeed || alert.alarmFlags?.overspeedWarning) return 'Overspeed Alarm';
     if (alert.alarmFlags?.terminalPowerFailure) return 'Terminal Power Failure';
     if (alert.alarmFlags?.terminalPowerUndervoltage) return 'Terminal Power Undervoltage';
@@ -672,9 +672,9 @@ export class AlertManager extends EventEmitter {
     if (alert.alarmFlags?.vehicleTheft) return 'Vehicle Theft Alarm';
     if (alert.videoAlarms?.storageFailure) return 'Storage Failure';
     if (alert.videoAlarms?.videoSignalLoss) return 'Video Signal Loss';
-    if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocked';
+    if (alert.videoAlarms?.videoSignalBlocking) return 'Video Signal Blocking';
     if (alert.videoAlarms?.busOvercrowding) return 'Bus Overcrowding';
-    if (alertSignals.length > 0) return this.getSignalDetail(alertSignals[0]).label;
+    if (alertSignals.length > 0) return normalizeOfficialAlertType(this.getSignalDetail(alertSignals[0]).label);
     return 'General Alert';
   }
 
@@ -688,9 +688,9 @@ export class AlertManager extends EventEmitter {
     if (signalCode === 'jt808_illegal_door_open_alarm') return 'Illegal Door Open Alarm';
     if (signalCode === 'jt808_illegal_ignition') return 'Illegal Ignition Alarm';
     if (signalCode === 'jt808_illegal_displacement') return 'Illegal Vehicle Displacement';
-    if (signalCode === 'jt808_fatigue' || signalCode === 'jtt1078_behavior_fatigue') return 'Driver Fatigue';
-    if (signalCode === 'jt808_dangerous_driving' || signalCode === 'jtt1078_behavior_phone_call') return 'Dangerous Driving Behavior';
-    if (signalCode === 'jtt1078_behavior_smoking') return 'Smoking While Driving';
+    if (signalCode === 'jt808_fatigue' || signalCode === 'jtt1078_behavior_fatigue') return 'Fatigue Alert';
+    if (signalCode === 'jt808_dangerous_driving' || signalCode === 'jtt1078_behavior_phone_call') return 'Phone Calling';
+    if (signalCode === 'jtt1078_behavior_smoking') return 'Smoking';
     if (signalCode === 'jt808_overspeed' || signalCode === 'jt808_overspeed_warning') return 'Overspeed Alarm';
     if (signalCode === 'jt808_terminal_power_failure') return 'Terminal Power Failure';
     if (signalCode === 'jt808_terminal_power_undervoltage') return 'Terminal Power Undervoltage';
@@ -700,15 +700,15 @@ export class AlertManager extends EventEmitter {
     if (signalCode === 'jt808_vehicle_theft') return 'Vehicle Theft Alarm';
     if (signalCode === 'jtt1078_storage_failure' || signalCode === 'platform_video_alarm_0103') return 'Storage Failure';
     if (signalCode === 'jtt1078_video_signal_loss' || signalCode === 'platform_video_alarm_0101') return 'Video Signal Loss';
-    if (signalCode === 'jtt1078_video_signal_blocking' || signalCode === 'platform_video_alarm_0102') return 'Video Signal Blocked';
+    if (signalCode === 'jtt1078_video_signal_blocking' || signalCode === 'platform_video_alarm_0102') return 'Video Signal Blocking';
     if (signalCode === 'jtt1078_bus_overcrowding' || signalCode === 'platform_video_alarm_0105') return 'Bus Overcrowding';
     if (signalCode === 'jtt1078_other_video_failure' || signalCode === 'platform_video_alarm_0104') return 'Other Video Equipment Failure';
     if (signalCode === 'jtt1078_abnormal_driving' || signalCode === 'platform_video_alarm_0106') return 'Abnormal Driving Behavior';
     if (signalCode === 'jtt1078_special_alarm_threshold' || signalCode === 'platform_video_alarm_0107') return 'Special Alarm Recording Threshold';
     if (signalCode.startsWith('adas_') || signalCode.startsWith('dms_') || signalCode.startsWith('behavior_')) {
-      return this.getSignalDetail(signalCode).label;
+      return normalizeOfficialAlertType(this.getSignalDetail(signalCode).label);
     }
-    return fallbackLabel || this.getPrimaryAlertType(alert, [signalCode]);
+    return normalizeOfficialAlertType(fallbackLabel || this.getPrimaryAlertType(alert, [signalCode]));
   }
 
   private lookupCatalogPriority(signalCode: string): AlertPriority | null {
@@ -1034,7 +1034,7 @@ export class AlertManager extends EventEmitter {
         source: 'JT/T 808 alarm flag (base DWORD)'
       },
       jt808_fatigue: {
-        label: 'Driver Fatigue',
+        label: 'Fatigue Alert',
         meaning: 'Terminal reports fatigue driving alarm.',
         source: 'JT/T 808 alarm flag (base DWORD)'
       },
@@ -1106,17 +1106,17 @@ export class AlertManager extends EventEmitter {
         source: 'JT/T 1078 Table 13 ID 0x17'
       },
       jtt1078_behavior_fatigue: {
-        label: 'Abnormal Driving: Fatigue',
+        label: 'Fatigue Alert',
         meaning: 'Abnormal driving detail indicates fatigue.',
         source: 'JT/T 1078 Table 15 bit0'
       },
       jtt1078_behavior_phone_call: {
-        label: 'Abnormal Driving: Phone Call',
+        label: 'Phone Calling',
         meaning: 'Abnormal driving detail indicates phone call.',
         source: 'JT/T 1078 Table 15 bit1'
       },
       jtt1078_behavior_smoking: {
-        label: 'Abnormal Driving: Smoking',
+        label: 'Smoking',
         meaning: 'Abnormal driving detail indicates smoking.',
         source: 'JT/T 1078 Table 15 bit2'
       },

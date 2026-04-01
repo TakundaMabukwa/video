@@ -1,7 +1,21 @@
 import express from 'express';
+import { resolveOfficialAlertType } from '../protocol/vendorAlarmCatalog';
 
 export function createAlertRoutes(): express.Router {
   const router = express.Router();
+  const normalizeAlertRow = (row: any) => {
+    const metadata = typeof row?.metadata === 'string'
+      ? (() => { try { return JSON.parse(row.metadata || '{}'); } catch { return {}; } })()
+      : (row?.metadata || {});
+    return {
+      ...row,
+      metadata,
+      alert_type: resolveOfficialAlertType({
+        alertType: row?.alert_type || row?.type,
+        metadata
+      })
+    };
+  };
 
   // Get all alerts with filtering
   router.get('/', async (req, res) => {
@@ -33,7 +47,7 @@ export function createAlertRoutes(): express.Router {
       res.json({
         success: true,
         total: result.rows.length,
-        data: result.rows
+        data: result.rows.map(normalizeAlertRow)
       });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to fetch alerts' });
@@ -93,7 +107,7 @@ export function createAlertRoutes(): express.Router {
       res.json({
         success: true,
         total: result.rows.length,
-        data: result.rows
+        data: result.rows.map(normalizeAlertRow)
       });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to fetch alert history' });
@@ -134,7 +148,18 @@ export function createAlertRoutes(): express.Router {
     try {
       const result = await require('../storage/database').query(
         `SELECT * FROM alerts 
-         WHERE alert_type IN ('Driver Fatigue', 'Phone Call While Driving', 'Smoking While Driving')
+         WHERE lower(alert_type) IN (
+           'driver fatigue',
+           'fatigue alert',
+           'fatigue driving alarm',
+           'dms: fatigue alert',
+           'phone call while driving',
+           'phone calling',
+           'dms: phone calling',
+           'smoking while driving',
+           'smoking',
+           'dms: smoking'
+         )
          ORDER BY timestamp DESC
          LIMIT 100`
       );
@@ -142,7 +167,7 @@ export function createAlertRoutes(): express.Router {
       res.json({
         success: true,
         total: result.rows.length,
-        data: result.rows
+        data: result.rows.map(normalizeAlertRow)
       });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to fetch driver behavior alerts' });
@@ -197,7 +222,7 @@ export function createAlertRoutes(): express.Router {
       
       res.json({
         success: true,
-        data: result.rows[0]
+        data: normalizeAlertRow(result.rows[0])
       });
     } catch (error) {
       res.status(500).json({ success: false, message: 'Failed to fetch alert' });

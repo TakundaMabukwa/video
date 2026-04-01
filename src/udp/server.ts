@@ -236,15 +236,15 @@ export class UDPRTPServer {
   ): { type: string; priority: AlertPriority; signalCode: string } | null {
     if (!text) return null;
     const patterns: Array<{ re: RegExp; type: string; priority: AlertPriority; signalCode: string }> = [
-      { re: /\bseat\s*belt\s*detected\b/i, type: 'Seatbelt Detection', priority: AlertPriority.MEDIUM, signalCode: 'vendor_seatbelt_detected' },
+      { re: /\bseat\s*belt\s*detected\b/i, type: 'Seat-Belt Detection', priority: AlertPriority.MEDIUM, signalCode: 'vendor_seatbelt_detected' },
       { re: /\bno\s+driver\s+detected\b/i, type: 'No Driver Detected', priority: AlertPriority.HIGH, signalCode: 'vendor_no_driver_detected' },
-      { re: /\bcamera\s+(obstructed|blocked|covered)\b/i, type: 'Camera Obstructed', priority: AlertPriority.HIGH, signalCode: 'vendor_camera_obstructed' },
+      { re: /\bcamera\s+(obstructed|blocked|covered)\b/i, type: 'Camera Blocked', priority: AlertPriority.HIGH, signalCode: 'vendor_camera_obstructed' },
       { re: /\bidle\s+alert\b/i, type: 'Idle Alert', priority: AlertPriority.MEDIUM, signalCode: 'vendor_idle_alert' },
-      { re: /\bfatigue\s+driving\s+alarm\b/i, type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
-      { re: /\bhandheld\s+phone\s+alarm\b/i, type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
-      { re: /\bsmoking\s+alarm\b/i, type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
-      { re: /\bforward\s+collision\s+warning\b/i, type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
-      { re: /\blane\s+departure\s+alarm\b/i, type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' }
+      { re: /\bfatigue\s+driving\s+alarm\b/i, type: 'DMS: Fatigue Alert', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
+      { re: /\bhandheld\s+phone\s+alarm\b/i, type: 'DMS: Phone Calling', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
+      { re: /\bsmoking\s+alarm\b/i, type: 'DMS: Smoking', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
+      { re: /\bforward\s+collision\s+warning\b/i, type: 'ADAS: Forward Collision', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
+      { re: /\blane\s+departure\s+alarm\b/i, type: 'ADAS: Lane Shift', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' }
     ];
     const hit = patterns.find((p) => p.re.test(text));
     return hit ? { type: hit.type, priority: hit.priority, signalCode: hit.signalCode } : null;
@@ -252,19 +252,19 @@ export class UDPRTPServer {
 
   private mapVendorCode(code: number): { type: string; priority: AlertPriority; signalCode: string } | null {
     const map: Record<number, { type: string; priority: AlertPriority; signalCode: string }> = {
-      10001: { type: 'ADAS: Forward collision warning', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
-      10002: { type: 'ADAS: Lane departure alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
-      10003: { type: 'ADAS: Following distance too close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
-      10004: { type: 'ADAS: Pedestrian collision alarm', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' },
-      10005: { type: 'ADAS: Frequent lane change alarm', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' },
-      10006: { type: 'ADAS: Road sign over-limit alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' },
-      10007: { type: 'ADAS: Obstruction alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' },
+      10001: { type: 'ADAS: Forward Collision', priority: AlertPriority.CRITICAL, signalCode: 'adas_10001_forward_collision_warning' },
+      10002: { type: 'ADAS: Lane Shift', priority: AlertPriority.HIGH, signalCode: 'adas_10002_lane_departure_alarm' },
+      10003: { type: 'ADAS: Too Close', priority: AlertPriority.HIGH, signalCode: 'adas_10003_following_distance_too_close' },
+      10004: { type: 'ADAS: Pedestrian Collision', priority: AlertPriority.CRITICAL, signalCode: 'adas_10004_pedestrian_collision_alarm' },
+      10005: { type: 'ADAS: Frequent Lane Change Alert', priority: AlertPriority.HIGH, signalCode: 'adas_10005_frequent_lane_change_alarm' },
+      10006: { type: 'ADAS: Road Sign Exceedance Alert', priority: AlertPriority.MEDIUM, signalCode: 'adas_10006_road_sign_over_limit_alarm' },
+      10007: { type: 'ADAS: Obstacle Alert', priority: AlertPriority.MEDIUM, signalCode: 'adas_10007_obstruction_alarm' },
       10008: { type: 'ADAS: Driver assistance function failure alarm', priority: AlertPriority.MEDIUM, signalCode: 'adas_10008_driver_assist_function_failure' },
       10016: { type: 'ADAS: Road sign identification event', priority: AlertPriority.LOW, signalCode: 'adas_10016_road_sign_identification_event' },
       10017: { type: 'ADAS: Active capture event', priority: AlertPriority.LOW, signalCode: 'adas_10017_active_capture_event' },
-      10101: { type: 'DMS: Fatigue driving alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
-      10102: { type: 'DMS: Handheld phone alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
-      10103: { type: 'DMS: Smoking alarm', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
+      10101: { type: 'DMS: Fatigue Alert', priority: AlertPriority.HIGH, signalCode: 'dms_10101_fatigue_driving_alarm' },
+      10102: { type: 'DMS: Phone Calling', priority: AlertPriority.HIGH, signalCode: 'dms_10102_handheld_phone_alarm' },
+      10103: { type: 'DMS: Smoking', priority: AlertPriority.HIGH, signalCode: 'dms_10103_smoking_alarm' },
       10104: { type: 'DMS: Forward camera invisible too long', priority: AlertPriority.HIGH, signalCode: 'dms_10104_forward_invisible_too_long' },
       10105: { type: 'DMS: Driver alarm not detected', priority: AlertPriority.MEDIUM, signalCode: 'dms_10105_driver_alarm_not_detected' },
       10106: { type: 'DMS: Both hands off steering wheel', priority: AlertPriority.HIGH, signalCode: 'dms_10106_hands_off_steering' },

@@ -77,7 +77,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10001,
-    type: 'ADAS: Forward collision warning',
+    type: 'ADAS: Forward Collision',
     signalCode: 'adas_10001_forward_collision_warning',
     domain: 'ADAS',
     defaultPriority: 'critical',
@@ -86,7 +86,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10002,
-    type: 'ADAS: Lane departure alarm',
+    type: 'ADAS: Lane Shift',
     signalCode: 'adas_10002_lane_departure_alarm',
     domain: 'ADAS',
     defaultPriority: 'high',
@@ -95,7 +95,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10003,
-    type: 'ADAS: Following distance too close',
+    type: 'ADAS: Too Close',
     signalCode: 'adas_10003_following_distance_too_close',
     domain: 'ADAS',
     defaultPriority: 'high',
@@ -104,7 +104,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10004,
-    type: 'ADAS: Pedestrian collision alarm',
+    type: 'ADAS: Pedestrian Collision',
     signalCode: 'adas_10004_pedestrian_collision_alarm',
     domain: 'ADAS',
     defaultPriority: 'critical',
@@ -113,7 +113,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10005,
-    type: 'ADAS: Frequent lane change alarm',
+    type: 'ADAS: Frequent Lane Change Alert',
     signalCode: 'adas_10005_frequent_lane_change_alarm',
     domain: 'ADAS',
     defaultPriority: 'high',
@@ -122,7 +122,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10006,
-    type: 'ADAS: Road sign over-limit alarm',
+    type: 'ADAS: Road Sign Exceedance Alert',
     signalCode: 'adas_10006_road_sign_over_limit_alarm',
     domain: 'ADAS',
     defaultPriority: 'medium',
@@ -131,7 +131,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10007,
-    type: 'ADAS: Obstruction alarm',
+    type: 'ADAS: Obstacle Alert',
     signalCode: 'adas_10007_obstruction_alarm',
     domain: 'ADAS',
     defaultPriority: 'medium',
@@ -149,7 +149,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10016,
-    type: 'ADAS: Road sign identification event',
+    type: 'ADAS: Road Sign Recognition Event',
     signalCode: 'adas_10016_road_sign_identification_event',
     domain: 'ADAS',
     defaultPriority: 'low',
@@ -158,7 +158,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10017,
-    type: 'ADAS: Active capture event',
+    type: 'ADAS: Active Snapshot Event',
     signalCode: 'adas_10017_active_capture_event',
     domain: 'ADAS',
     defaultPriority: 'low',
@@ -185,7 +185,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10101,
-    type: 'DMS: Fatigue driving alarm',
+    type: 'DMS: Fatigue Alert',
     signalCode: 'dms_10101_fatigue_driving_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -194,7 +194,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10102,
-    type: 'DMS: Handheld phone use alarm',
+    type: 'DMS: Phone Calling',
     signalCode: 'dms_10102_handheld_phone_use_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -203,7 +203,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10103,
-    type: 'DMS: Smoking alarm',
+    type: 'DMS: Smoking',
     signalCode: 'dms_10103_smoking_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -212,7 +212,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10104,
-    type: 'DMS: Not looking forward alarm',
+    type: 'DMS: Distracted Driving',
     signalCode: 'dms_10104_not_looking_forward_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
@@ -221,7 +221,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10105,
-    type: 'DMS: Driver abnormal alarm',
+    type: 'DMS: No Driver Detected',
     signalCode: 'dms_10105_driver_abnormal_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
@@ -230,7 +230,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10106,
-    type: 'DMS: Camera covered alarm',
+    type: 'DMS: Hand Off Detection (HOD)',
     signalCode: 'dms_10106_camera_covered_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -239,7 +239,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10107,
-    type: 'DMS: Driver behavior monitoring failure',
+    type: 'DMS: Infrared Blocking',
     signalCode: 'dms_10107_behavior_monitoring_failure',
     domain: 'DMS',
     defaultPriority: 'medium',
@@ -248,7 +248,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10108,
-    type: 'DMS: Overtime driving alarm',
+    type: 'DMS: Seat-Belt Detection',
     signalCode: 'dms_10108_overtime_driving_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -257,7 +257,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10110,
-    type: 'DMS: Seatbelt not fastened alarm',
+    type: 'DMS: Driver ID Detection',
     signalCode: 'dms_10110_seatbelt_not_fastened_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
@@ -284,7 +284,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10113,
-    type: 'DMS: Playing with phone alarm',
+    type: 'DMS: Play Phone',
     signalCode: 'dms_10113_playing_with_phone_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -293,7 +293,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10116,
-    type: 'DMS: Automatic capture event',
+    type: 'DMS: Automatic Snapshot Event',
     signalCode: 'dms_10116_automatic_capture_event',
     domain: 'DMS',
     defaultPriority: 'low',
@@ -389,6 +389,88 @@ export const getVendorAlarmByCode = (
 
 export const getVendorAlarmBySignalCode = (signalCode: string): VendorAlarmEntry | null => {
   return getVendorAlarmCatalog().find((item) => item.signalCode === signalCode) || null;
+};
+
+const OFFICIAL_ALERT_NAME_ALIASES: Record<string, string> = {
+  'driver fatigue': 'Fatigue Alert',
+  'fatigue driving alarm': 'Fatigue Alert',
+  'fatigue driving alert': 'Fatigue Alert',
+  'dms: fatigue driving alarm': 'DMS: Fatigue Alert',
+  'dms: fatigue alert': 'DMS: Fatigue Alert',
+  'phone call while driving': 'Phone Calling',
+  'dms: handheld phone use alarm': 'DMS: Phone Calling',
+  'dms: phone calling': 'DMS: Phone Calling',
+  'smoking while driving': 'Smoking',
+  'dms: smoking alarm': 'DMS: Smoking',
+  'dms: smoking': 'DMS: Smoking',
+  'adas: forward collision warning': 'ADAS: Forward Collision',
+  'adas: lane departure alarm': 'ADAS: Lane Shift',
+  'adas: following distance too close': 'ADAS: Too Close',
+  'adas: pedestrian collision alarm': 'ADAS: Pedestrian Collision',
+  'adas: frequent lane change alarm': 'ADAS: Frequent Lane Change Alert',
+  'adas: road sign over-limit alarm': 'ADAS: Road Sign Exceedance Alert',
+  'adas: obstruction alarm': 'ADAS: Obstacle Alert',
+  'adas: road sign identification event': 'ADAS: Road Sign Recognition Event',
+  'adas: active capture event': 'ADAS: Active Snapshot Event',
+  'dms: not looking forward alarm': 'DMS: Distracted Driving',
+  'dms: driver abnormal alarm': 'DMS: No Driver Detected',
+  'dms: camera covered alarm': 'DMS: Camera Blocked',
+  'dms: driver behavior monitoring failure': 'DMS: Infrared Blocking',
+  'dms: overtime driving alarm': 'DMS: Driving Overtime',
+  'dms: seatbelt not fastened alarm': 'DMS: Driver ID Detection',
+  'dms: automatic capture event': 'DMS: Automatic Snapshot Event',
+  'dms: playing with phone alarm': 'DMS: Play Phone',
+  'no seatbelt': 'Seat-Belt Detection',
+  'seatbelt detection': 'Seat-Belt Detection',
+  'seat-belt detection': 'Seat-Belt Detection',
+  'no driver detected': 'No Driver Detected',
+  'distracted driving': 'Distracted Driving',
+  'phone calling': 'Phone Calling',
+  'play phone': 'Play Phone',
+  'camera blocked': 'Camera Blocked',
+  'infrared blocking': 'Infrared Blocking',
+  'driver id detection': 'Driver ID Detection',
+  'hand off detection (hod)': 'Hand Off Detection (HOD)'
+};
+
+export const normalizeOfficialAlertType = (raw: string): string => {
+  const value = String(raw || '').trim();
+  if (!value) return 'Unknown alert';
+  return OFFICIAL_ALERT_NAME_ALIASES[value.toLowerCase()] || value;
+};
+
+export const resolveOfficialAlertType = (input: {
+  alertType?: string;
+  signalCode?: string;
+  metadata?: any;
+}): string => {
+  const metadata = input.metadata && typeof input.metadata === 'object' ? input.metadata : {};
+  const candidates = [
+    input.signalCode,
+    metadata?.alertSignalDetails?.[0]?.code,
+    metadata?.alertSignals?.[0]
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  for (const signalCode of candidates) {
+    const vendor = getVendorAlarmBySignalCode(signalCode);
+    if (vendor?.type) return vendor.type;
+  }
+
+  const typeCandidates = [
+    input.alertType,
+    metadata?.primaryAlertType
+  ]
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+
+  for (const candidate of typeCandidates) {
+    const normalized = normalizeOfficialAlertType(candidate);
+    if (normalized) return normalized;
+  }
+
+  return 'Unknown alert';
 };
 
 export const getKnownVendorCodes = (): Set<number> => {

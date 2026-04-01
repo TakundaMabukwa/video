@@ -13,6 +13,7 @@ import { isDatabaseEnabled } from '../storage/database';
 import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
 import { archiveToRawH264 } from '../video/frameArchive';
 import { ReplayService } from '../streaming/replay';
+import { resolveOfficialAlertType } from '../protocol/vendorAlarmCatalog';
 
 export function createRoutes(
   tcpServer: JTT808Server,
@@ -212,11 +213,15 @@ export function createRoutes(
     if (!alert) return null;
     const metadata = parseAlertMetadata(alert.metadata);
     const locationFix = metadata?.locationFix || alert.location || {};
+    const alertType = resolveOfficialAlertType({
+      alertType: String(alert.alert_type || alert.type || metadata?.primaryAlertType || '').trim(),
+      metadata
+    });
     return {
       id: String(alert.id || ''),
       device_id: String(alert.device_id || alert.vehicleId || metadata?.vehicle?.vehicleId || '').trim(),
       channel: Number(alert.channel || metadata?.resourceChannel || 1) || 1,
-      alert_type: String(alert.alert_type || alert.type || metadata?.primaryAlertType || '').trim() || 'Unknown alert',
+      alert_type: alertType,
       priority: String(alert.priority || 'medium'),
       status: String(alert.status || 'new'),
       resolved: Boolean(alert.resolved),
@@ -1142,7 +1147,10 @@ export function createRoutes(
         terminalModel: vehicle?.terminalModel || null,
         terminalId: vehicle?.terminalId || null
       },
-      type: alert?.type || alert?.alert_type,
+      type: resolveOfficialAlertType({
+        alertType: alert?.type || alert?.alert_type,
+        metadata
+      }),
       priority: alert?.priority || 'high',
       status: alert?.status || (alert?.resolved ? 'resolved' : 'new'),
       timestamp: alert?.timestamp,
@@ -2341,7 +2349,18 @@ export function createRoutes(
     try {
       const result = await require('../storage/database').query(
         `SELECT * FROM alerts 
-         WHERE alert_type IN ('Driver Fatigue', 'Phone Call While Driving', 'Smoking While Driving')
+         WHERE lower(alert_type) IN (
+           'driver fatigue',
+           'fatigue alert',
+           'fatigue driving alarm',
+           'dms: fatigue alert',
+           'phone call while driving',
+           'phone calling',
+           'dms: phone calling',
+           'smoking while driving',
+           'smoking',
+           'dms: smoking'
+         )
          ORDER BY timestamp DESC LIMIT 100`
       );
       res.json({ success: true, total: result.rows.length, data: result.rows });
