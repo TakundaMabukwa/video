@@ -2742,8 +2742,9 @@ export class JTT808Server {
   ): Promise<{ ok: boolean; path?: string; reason?: string }> {
     try {
       const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
-      if (!fs.existsSync(playlistPath)) {
-        return { ok: false, reason: 'HLS playlist not found' };
+      const readiness = this.getReadyHlsPlaylistState(playlistPath);
+      if (!readiness.ok) {
+        return { ok: false, reason: readiness.reason };
       }
 
       const evidenceDir = path.join(process.cwd(), 'recordings', vehicleId, 'evidence');
@@ -2892,9 +2893,10 @@ export class JTT808Server {
   private async captureScreenshotFromHLS(vehicleId: string, channel: number, alertId?: string): Promise<ScreenshotFallbackResult> {
     try {
       const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
-      if (!fs.existsSync(playlistPath)) {
-        console.log(`HLS fallback skipped: playlist not found for ${vehicleId} ch${channel}`);
-        return { ok: false, reason: 'HLS playlist not found' };
+      const readiness = this.getReadyHlsPlaylistState(playlistPath);
+      if (!readiness.ok) {
+        console.log(`HLS fallback skipped for ${vehicleId} ch${channel}: ${readiness.reason}`);
+        return { ok: false, reason: readiness.reason };
       }
 
       const imageData = await new Promise<Buffer | null>((resolve) => {
@@ -2960,6 +2962,53 @@ export class JTT808Server {
     } catch (error: any) {
       console.error(`HLS fallback screenshot error for ${vehicleId} ch${channel}:`, error?.message || error);
       return { ok: false, reason: error?.message || 'fallback error' };
+    }
+  }
+
+  private getReadyHlsPlaylistState(playlistPath: string): { ok: true } | { ok: false; reason: string } {
+    try {
+      if (!fs.existsSync(playlistPath)) {
+        return { ok: false, reason: 'HLS playlist not found' };
+      }
+
+      const stats = fs.statSync(playlistPath);
+      if (!stats.isFile() || stats.size <= 0) {
+        return { ok: false, reason: 'HLS playlist not ready' };
+      }
+
+      const manifest = fs.readFileSync(playlistPath, 'utf8');
+      if (!manifest.includes('#EXTM3U')) {
+        return { ok: false, reason: 'HLS manifest header missing' };
+      }
+
+      const segmentLines = manifest
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith('#'));
+
+      if (segmentLines.length === 0) {
+        return { ok: false, reason: 'HLS manifest has no segments yet' };
+      }
+
+      const playlistDir = path.dirname(playlistPath);
+      const hasReadySegment = segmentLines.some((segmentName) => {
+        try {
+          const segmentPath = path.join(playlistDir, segmentName);
+          if (!fs.existsSync(segmentPath)) return false;
+          const segmentStats = fs.statSync(segmentPath);
+          return segmentStats.isFile() && segmentStats.size > 0;
+        } catch {
+          return false;
+        }
+      });
+
+      if (!hasReadySegment) {
+        return { ok: false, reason: 'HLS segments not ready' };
+      }
+
+      return { ok: true };
+    } catch (error: any) {
+      return { ok: false, reason: error?.message || 'HLS readiness check failed' };
     }
   }
 
