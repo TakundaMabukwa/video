@@ -391,6 +391,34 @@ export const getVendorAlarmBySignalCode = (signalCode: string): VendorAlarmEntry
   return getVendorAlarmCatalog().find((item) => item.signalCode === signalCode) || null;
 };
 
+const OFFICIAL_STRUCTURED_ALERT_NAMES: Record<'ADAS' | 'DMS', Record<number, string>> = {
+  ADAS: {
+    1: 'ADAS: Forward Collision',
+    2: 'ADAS: Lane Shift',
+    3: 'ADAS: Too Close',
+    4: 'ADAS: Pedestrian Collision',
+    5: 'ADAS: Frequent Lane Change Alert',
+    6: 'ADAS: Road Sign Exceedance Alert',
+    7: 'ADAS: Obstacle Alert',
+    16: 'ADAS: Road Sign Recognition Event',
+    17: 'ADAS: Active Snapshot Event',
+  },
+  DMS: {
+    1: 'DMS: Fatigue Alert',
+    2: 'DMS: Phone Calling',
+    3: 'DMS: Smoking',
+    4: 'DMS: Distracted Driving',
+    5: 'DMS: Driver Abnormality Alert',
+    6: 'DMS: Steering Wheel Alert',
+    7: 'DMS: Infrared Blocking',
+    8: 'DMS: Seat Belt Alert',
+    10: 'DMS: Device Blocking',
+    13: 'DMS: Play Phone',
+    16: 'DMS: Automatic Snapshot Event',
+    17: 'DMS: Driver Change Event',
+  }
+};
+
 const OFFICIAL_ALERT_NAME_ALIASES: Record<string, string> = {
   'driver fatigue': 'Fatigue Alert',
   'fatigue driving alarm': 'Fatigue Alert',
@@ -439,6 +467,18 @@ export const normalizeOfficialAlertType = (raw: string): string => {
   return OFFICIAL_ALERT_NAME_ALIASES[value.toLowerCase()] || value;
 };
 
+export const getOfficialStructuredAlertType = (
+  domain: 'ADAS' | 'DMS',
+  eventType: number,
+  options?: { level?: number | null }
+): string | null => {
+  const base = OFFICIAL_STRUCTURED_ALERT_NAMES[domain]?.[eventType];
+  if (!base) return null;
+  const level = options?.level ?? null;
+  if (!Number.isFinite(level) || level === null) return base;
+  return `${base} (Level ${level})`;
+};
+
 export const resolveOfficialAlertType = (input: {
   alertType?: string;
   signalCode?: string;
@@ -454,6 +494,14 @@ export const resolveOfficialAlertType = (input: {
     .filter(Boolean);
 
   for (const signalCode of candidates) {
+    const structuredMatch = signalCode.match(/^(adas|dms)_event_type_(\d+)(?:_level_(\d+))?$/i);
+    if (structuredMatch) {
+      const domain = structuredMatch[1].toUpperCase() as 'ADAS' | 'DMS';
+      const eventType = Number(structuredMatch[2]);
+      const level = structuredMatch[3] ? Number(structuredMatch[3]) : null;
+      const resolved = getOfficialStructuredAlertType(domain, eventType, { level });
+      if (resolved) return resolved;
+    }
     const vendor = getVendorAlarmBySignalCode(signalCode);
     if (vendor?.type) return vendor.type;
   }

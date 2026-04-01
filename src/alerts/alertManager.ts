@@ -5,7 +5,7 @@ import { AlertEscalation } from './escalation';
 import { AlertNotifier } from './notifier';
 import { AlertStorageDB } from '../storage/alertStorageDB';
 import { VideoStorage } from '../storage/videoStorage';
-import { getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent, normalizeOfficialAlertType } from '../protocol/vendorAlarmCatalog';
+import { getOfficialStructuredAlertType, getVendorAlarmByCode, getVendorAlarmBySignalCode, getVendorAlarmByStructuredEvent, normalizeOfficialAlertType } from '../protocol/vendorAlarmCatalog';
 import * as fs from 'fs';
 
 export enum AlertPriority {
@@ -1369,9 +1369,10 @@ export class AlertManager extends EventEmitter {
       if (eventTypeMatch) {
         const eventType = Number(eventTypeMatch[1]);
         const level = eventTypeMatch[2] ? Number(eventTypeMatch[2]) : null;
+        const label = getOfficialStructuredAlertType('ADAS', eventType, { level });
         return {
           code: signal,
-          label: level === null ? `ADAS Alert Type ${eventType}` : `ADAS Alert Type ${eventType} (Level ${level})`,
+          label: label || (level === null ? `ADAS Alert Type ${eventType}` : `ADAS Alert Type ${eventType} (Level ${level})`),
           meaning: level === null
             ? `Structured 0x64 ADAS alert reported event type ${eventType}.`
             : `Structured 0x64 ADAS alert reported event type ${eventType} with level ${level}.`,
@@ -1392,9 +1393,10 @@ export class AlertManager extends EventEmitter {
       if (eventTypeMatch) {
         const eventType = Number(eventTypeMatch[1]);
         const level = eventTypeMatch[2] ? Number(eventTypeMatch[2]) : null;
+        const label = getOfficialStructuredAlertType('DMS', eventType, { level });
         return {
           code: signal,
-          label: level === null ? `DMS Alert Type ${eventType}` : `DMS Alert Type ${eventType} (Level ${level})`,
+          label: label || (level === null ? `DMS Alert Type ${eventType}` : `DMS Alert Type ${eventType} (Level ${level})`),
           meaning: level === null
             ? `Structured 0x65 DMS alert reported event type ${eventType}.`
             : `Structured 0x65 DMS alert reported event type ${eventType} with level ${level}.`,
