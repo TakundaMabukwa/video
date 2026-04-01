@@ -3,6 +3,7 @@ import * as path from 'path';
 import { isDatabaseEnabled, query } from './database';
 
 export class ImageStorage {
+  private static localImageIndex = new Map<string, string>();
   private readonly localRoot: string;
   private readonly dbEnabled: boolean;
 
@@ -16,6 +17,12 @@ export class ImageStorage {
 
   private buildLocalPath(relativeFilePath: string): string {
     return path.join(this.localRoot, relativeFilePath);
+  }
+
+  getLocalImagePath(id: string): string | null {
+    const key = String(id || "").trim();
+    if (!key) return null;
+    return ImageStorage.localImageIndex.get(key) || null;
   }
 
   async saveImage(
@@ -41,7 +48,9 @@ export class ImageStorage {
     // Screenshots are intentionally not uploaded to Supabase.
     // Persist local path + API-served URL only.
     if (!this.dbEnabled) {
-      return `local-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const id = `local-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      ImageStorage.localImageIndex.set(id, localPath);
+      return id;
     }
 
     const result = await query(
@@ -53,6 +62,7 @@ export class ImageStorage {
 
     const id = result.rows[0].id;
     await query(`UPDATE images SET storage_url = $1 WHERE id = $2`, [`/api/images/${id}/file`, id]);
+    ImageStorage.localImageIndex.set(String(id), localPath);
     return id;
   }
 

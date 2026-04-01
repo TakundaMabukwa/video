@@ -3380,6 +3380,14 @@ export function createRoutes(
   router.get('/images/:id/file', async (req, res) => {
     const { id } = req.params;
     try {
+      const localImagePath = imageStorage.getLocalImagePath(id);
+      if (localImagePath && fs.existsSync(localImagePath)) {
+        const ext = path.extname(localImagePath).toLowerCase();
+        if (ext === '.jpg' || ext === '.jpeg') res.setHeader('Content-Type', 'image/jpeg');
+        if (ext === '.png') res.setHeader('Content-Type', 'image/png');
+        return res.sendFile(path.resolve(localImagePath));
+      }
+
       const db = require('../storage/database');
       const result = await db.query(
         `SELECT id, file_path, storage_url FROM images WHERE id = $1 LIMIT 1`,
