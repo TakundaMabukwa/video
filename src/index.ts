@@ -550,7 +550,8 @@ async function startServer() {
       targets.map(t =>
         tcpServer.requestScreenshotWithFallback(t.vehicleId, t.channel, {
           fallback: true,
-          fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
+          fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS,
+          preferFrameFirst: true
         })
       )
     );

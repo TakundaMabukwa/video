@@ -1750,13 +1750,23 @@ export function createRoutes(
   // Request screenshot from vehicle
   router.post('/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
-    const { channel = 1, fallback = true, fallbackDelayMs = 600 } = req.body;
+    const { channel = 1, fallback = true, fallbackDelayMs = 600, preferFrameFirst = true } = req.body;
     const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
       fallback: !!fallback,
-      fallbackDelayMs: Number(fallbackDelayMs)
+      fallbackDelayMs: Number(fallbackDelayMs),
+      preferFrameFirst: !!preferFrameFirst
     });
 
-    if (!result.success) {
+    if (result.fallback?.ok) {
+      return res.json({
+        success: true,
+        message: `Screenshot captured for vehicle ${id}, channel ${channel}`,
+        commandAccepted: result.commandAccepted,
+        fallback: result.fallback
+      });
+    }
+
+    if (!result.commandAccepted) {
       res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
@@ -1775,6 +1785,7 @@ export function createRoutes(
     res.json({
       success: true,
       message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
+      commandAccepted: result.commandAccepted,
       fallback: result.fallback || { ok: false, reason: 'disabled' }
     });
   });
@@ -1815,13 +1826,23 @@ export function createRoutes(
   // Alias route used by external frontend proxy path
   router.post('/video-server/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
-    const { channel = 1, fallback = true, fallbackDelayMs = 600 } = req.body;
+    const { channel = 1, fallback = true, fallbackDelayMs = 600, preferFrameFirst = true } = req.body;
     const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
       fallback: !!fallback,
-      fallbackDelayMs: Number(fallbackDelayMs)
+      fallbackDelayMs: Number(fallbackDelayMs),
+      preferFrameFirst: !!preferFrameFirst
     });
 
-    if (!result.success) {
+    if (result.fallback?.ok) {
+      return res.json({
+        success: true,
+        message: `Screenshot captured for vehicle ${id}, channel ${channel}`,
+        commandAccepted: result.commandAccepted,
+        fallback: result.fallback
+      });
+    }
+
+    if (!result.commandAccepted) {
       return res.status(404).json({
         success: false,
         message: `Vehicle ${id} not found or not connected`
@@ -1839,6 +1860,7 @@ export function createRoutes(
     res.json({
       success: true,
       message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
+      commandAccepted: result.commandAccepted,
       fallback: result.fallback || { ok: false, reason: 'disabled' }
     });
   });

@@ -2688,16 +2688,21 @@ export class JTT808Server {
       videoDurationSec?: number;
       preferFrameFirst?: boolean;
     }
-  ): Promise<{ success: boolean; fallback: ScreenshotFallbackResult }> {
+  ): Promise<{ success: boolean; commandAccepted: boolean; fallback: ScreenshotFallbackResult }> {
     const fallbackEnabled = options?.fallback !== false;
     const fallbackDelayMs = Math.max(0, Math.min(5000, Number(options?.fallbackDelayMs) || 1800));
     const captureVideoEvidence = options?.captureVideoEvidence === true;
     const videoDurationSec = Math.max(3, Math.min(20, Number(options?.videoDurationSec) || 8));
-    this.rememberPendingScreenshotRequest(vehicleId, channel, { alertId: options?.alertId });
-    const success = this.requestScreenshot(vehicleId, channel);
+    const preferFrameFirst = options?.preferFrameFirst === true;
+    let commandAccepted = false;
+
+    if (!preferFrameFirst) {
+      this.rememberPendingScreenshotRequest(vehicleId, channel, { alertId: options?.alertId });
+      commandAccepted = this.requestScreenshot(vehicleId, channel);
+    }
 
     if (!fallbackEnabled) {
-      return { success, fallback: { ok: false, reason: 'disabled' } };
+      return { success: commandAccepted, commandAccepted, fallback: { ok: false, reason: 'disabled' } };
     }
 
     let fallback: ScreenshotFallbackResult = { ok: false, reason: 'not attempted' };
@@ -2750,6 +2755,11 @@ export class JTT808Server {
       // HLS playlists/segments can appear several seconds after startVideo().
       fallback = await retryHlsScreenshot(6, 1500);
     }
+    if (!fallback.ok && !commandAccepted && !preferFrameFirst) {
+      await new Promise((r) => setTimeout(r, Math.max(0, fallbackDelayMs)));
+      fallback = await retryLiveFrameScreenshot(2, 500);
+    }
+
     if (captureVideoEvidence) {
       let videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
       if (!videoBackup.ok && isWarmupReason(videoBackup.reason)) {
@@ -2782,10 +2792,14 @@ export class JTT808Server {
         fallback.videoEvidenceReason = videoBackup.reason;
       }
     }
-    if (!success && !fallback.ok) {
-      return { success: false, fallback: { ...fallback, reason: fallback.reason || 'vehicle not connected' } };
+    if (!commandAccepted && !fallback.ok) {
+      return {
+        success: false,
+        commandAccepted,
+        fallback: { ...fallback, reason: fallback.reason || 'vehicle not connected' }
+      };
     }
-    return { success, fallback };
+    return { success: commandAccepted || fallback.ok, commandAccepted, fallback };
   }
 
   private async captureVideoEvidenceFromHLS(
