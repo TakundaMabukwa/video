@@ -2683,29 +2683,51 @@ export class JTT808Server {
     }
 
     let fallback: ScreenshotFallbackResult = { ok: false, reason: 'not attempted' };
-    if (preferFrameFirst) {
-      fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
-      for (let attempt = 0; attempt < 2 && !fallback.ok; attempt++) {
-        await new Promise((r) => setTimeout(r, 700));
-        fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+    const isWarmupReason = (reason?: string) => {
+      const normalized = String(reason || '').trim().toLowerCase();
+      return (
+        normalized.includes('playlist not found') ||
+        normalized.includes('playlist not ready') ||
+        normalized.includes('manifest header missing') ||
+        normalized.includes('manifest has no segments') ||
+        normalized.includes('segments not ready')
+      );
+    };
+    const retryHlsScreenshot = async (
+      attempts: number,
+      delayMs: number
+    ): Promise<ScreenshotFallbackResult> => {
+      let current = fallback;
+      for (let attempt = 0; attempt < attempts && !current.ok; attempt++) {
+        if (attempt > 0) {
+          await new Promise((r) => setTimeout(r, delayMs));
+        }
+        current = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
+        if (!current.ok && !isWarmupReason(current.reason)) {
+          break;
+        }
       }
+      return current;
+    };
+    if (preferFrameFirst) {
+      fallback = await retryHlsScreenshot(3, 700);
     }
 
     if (!fallback.ok) {
       await new Promise((r) => setTimeout(r, fallbackDelayMs));
-      fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
-      // HLS playlists/segments can appear a few seconds after startVideo().
-      for (let attempt = 0; attempt < 3 && !fallback.ok; attempt++) {
-        await new Promise((r) => setTimeout(r, 1200));
-        fallback = await this.captureScreenshotFromHLS(vehicleId, channel, options?.alertId);
-      }
+      // HLS playlists/segments can appear several seconds after startVideo().
+      fallback = await retryHlsScreenshot(6, 1500);
     }
     if (captureVideoEvidence) {
       let videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
-      if (!videoBackup.ok) {
-        // Retry once after segments are more likely to exist.
-        await new Promise((r) => setTimeout(r, 1500));
-        videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+      if (!videoBackup.ok && isWarmupReason(videoBackup.reason)) {
+        for (let attempt = 0; attempt < 3 && !videoBackup.ok; attempt++) {
+          await new Promise((r) => setTimeout(r, 1500));
+          videoBackup = await this.captureVideoEvidenceFromHLS(vehicleId, channel, videoDurationSec, options?.alertId);
+          if (!videoBackup.ok && !isWarmupReason(videoBackup.reason)) {
+            break;
+          }
+        }
       }
       if (videoBackup.ok && videoBackup.path) {
         fallback.videoEvidencePath = videoBackup.path;
