@@ -1783,12 +1783,14 @@ export function createRoutes(
       };
     }
 
+    const before = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
     const result = await tcpServer.saveLiveFrameScreenshot(id, Number(channel), {
       retries: 8,
       retryDelayMs: Number(retryDelayMs) || 600,
       initialDelayMs: Math.max(800, Number(retryDelayMs) || 600),
       timeoutMs: 10000
     });
+    const after = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
 
     if (result.ok) {
       return {
@@ -1797,7 +1799,11 @@ export function createRoutes(
           success: true,
           message: `Live-frame screenshot captured for vehicle ${id}, channel ${channel}`,
           commandAccepted: true,
-          fallback: result
+          fallback: result,
+          debug: {
+            before,
+            after
+          }
         }
       };
     }
@@ -1808,10 +1814,26 @@ export function createRoutes(
         success: false,
         message: `Live frame not ready yet for vehicle ${id}, channel ${channel}`,
         commandAccepted: true,
-        fallback: result
+        fallback: result,
+        debug: {
+          before,
+          after
+        }
       }
     };
   };
+
+  router.get('/video-server/vehicles/:id/live-frame-status', async (req, res) => {
+    const { id } = req.params;
+    const channel = Math.max(1, Number(req.query.channel || 1));
+    const debug = tcpServer.getLiveFrameDebugStatus(id, channel);
+    return res.json({
+      success: true,
+      vehicleId: id,
+      channel,
+      debug
+    });
+  });
 
   // Request screenshot from vehicle
   router.post('/vehicles/:id/screenshot', async (req, res) => {

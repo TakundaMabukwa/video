@@ -3606,6 +3606,40 @@ export class JTT808Server {
     return Array.from(this.vehicles.values());
   }
 
+  getLiveFrameDebugStatus(vehicleId: string, channel: number = 1): {
+    vehicleFound: boolean;
+    connected: boolean;
+    channel: number;
+    activeStreamRequested: boolean;
+    hasFreshStreamActivity: boolean;
+    lastRtpPacketAt: string | null;
+    hasCachedKeyframe: boolean;
+    cachedKeyframeAt: string | null;
+    cachedKeyframeAgeMs: number | null;
+    cachedHasSps: boolean;
+    cachedHasPps: boolean;
+  } {
+    const vehicle = this.vehicles.get(vehicleId);
+    const streamKey = this.getVideoStreamKey(vehicleId, channel);
+    const lastPacketAtMs = this.lastRtpPacketAt.get(streamKey) || 0;
+    const cachedFrame = this.latestLiveIFrames.get(streamKey);
+    const cachedAgeMs = cachedFrame ? Date.now() - cachedFrame.receivedAt : null;
+
+    return {
+      vehicleFound: !!vehicle,
+      connected: !!vehicle?.connected,
+      channel,
+      activeStreamRequested: !!vehicle?.activeStreams?.has(channel),
+      hasFreshStreamActivity: this.hasFreshStreamActivity(vehicleId, channel),
+      lastRtpPacketAt: lastPacketAtMs ? new Date(lastPacketAtMs).toISOString() : null,
+      hasCachedKeyframe: !!cachedFrame,
+      cachedKeyframeAt: cachedFrame ? new Date(cachedFrame.receivedAt).toISOString() : null,
+      cachedKeyframeAgeMs: cachedAgeMs,
+      cachedHasSps: !!cachedFrame?.sps?.length,
+      cachedHasPps: !!cachedFrame?.pps?.length,
+    };
+  }
+
   resolveVehicleIdByIp(ipAddress: string): string {
     const ip = String(ipAddress || '').replace('::ffff:', '').trim();
     if (!ip) return '';
