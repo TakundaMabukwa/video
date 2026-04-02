@@ -49,7 +49,7 @@ export class TCPRTPHandler {
     if (!completeFrame) return;
 
     this.frameCount++;
-    const isIFrame = this.isIFrame(completeFrame);
+    const isIFrame = dataType === 0x00 || this.isIFrame(completeFrame);
 
     if (this.alertManager) {
       this.alertManager.addFrameToBuffer(
