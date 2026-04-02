@@ -86,6 +86,8 @@ type PendingScreenshotRequest = {
 type LatestLiveFrame = {
   frame: Buffer;
   receivedAt: number;
+  sps?: Buffer;
+  pps?: Buffer;
 };
 
 type VendorExtractionMethod =
@@ -219,12 +221,97 @@ export class JTT808Server {
     this.alertManager = new AlertManager();
   }
 
+  private splitAnnexBNalus(frame: Buffer): Buffer[] {
+    if (!frame || frame.length < 4) return [];
+    const nalus: Buffer[] = [];
+    let start = -1;
+    let startCodeLength = 0;
+
+    const pushNalu = (from: number, codeLen: number, to: number) => {
+      const sliceStart = from + codeLen;
+      if (sliceStart >= to) return;
+      const nalu = frame.slice(sliceStart, to);
+      if (nalu.length > 0) {
+        nalus.push(Buffer.from(nalu));
+      }
+    };
+
+    for (let i = 0; i < frame.length - 3; i++) {
+      const isFourByteStartCode =
+        frame[i] === 0x00 &&
+        frame[i + 1] === 0x00 &&
+        frame[i + 2] === 0x00 &&
+        frame[i + 3] === 0x01;
+      const isThreeByteStartCode =
+        frame[i] === 0x00 &&
+        frame[i + 1] === 0x00 &&
+        frame[i + 2] === 0x01;
+
+      if (!isFourByteStartCode && !isThreeByteStartCode) {
+        continue;
+      }
+
+      const currentCodeLength = isFourByteStartCode ? 4 : 3;
+      if (start >= 0) {
+        pushNalu(start, startCodeLength, i);
+      }
+      start = i;
+      startCodeLength = currentCodeLength;
+      i += currentCodeLength - 1;
+    }
+
+    if (start >= 0) {
+      pushNalu(start, startCodeLength, frame.length);
+    }
+
+    return nalus;
+  }
+
+  private findNaluOfType(frame: Buffer, type: number): Buffer | undefined {
+    return this.splitAnnexBNalus(frame).find((nalu) => ((nalu[0] || 0) & 0x1f) === type);
+  }
+
+  private ensureDecodableH264Frame(frame: Buffer, sps?: Buffer, pps?: Buffer): Buffer {
+    const hasSps = !!this.findNaluOfType(frame, 7);
+    const hasPps = !!this.findNaluOfType(frame, 8);
+    if ((hasSps || !sps) && (hasPps || !pps)) {
+      return frame;
+    }
+
+    const parts: Buffer[] = [];
+    if (!hasSps && sps?.length) {
+      parts.push(Buffer.from([0x00, 0x00, 0x00, 0x01]), sps);
+    }
+    if (!hasPps && pps?.length) {
+      parts.push(Buffer.from([0x00, 0x00, 0x00, 0x01]), pps);
+    }
+    parts.push(frame);
+    return Buffer.concat(parts);
+  }
+
   cacheLiveFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean): void {
-    if (!isIFrame || !frame || frame.length === 0) return;
+    if (!frame || frame.length === 0) return;
     const key = `${vehicleId}_${channel}`;
+    const existing = this.latestLiveIFrames.get(key);
+    const sps = this.findNaluOfType(frame, 7) || existing?.sps;
+    const pps = this.findNaluOfType(frame, 8) || existing?.pps;
+
+    if (!isIFrame) {
+      if (existing && (sps || pps)) {
+        this.latestLiveIFrames.set(key, {
+          ...existing,
+          sps,
+          pps
+        });
+      }
+      return;
+    }
+
     this.latestLiveIFrames.set(key, {
       frame: Buffer.from(frame),
-      receivedAt: Date.now()
+      receivedAt: Date.now(),
+      sps,
+      pps
     });
   }
 
@@ -3037,7 +3124,7 @@ export class JTT808Server {
           clearTimeout(timeout);
           finish(null);
         });
-        ffmpeg.stdin.end(cachedFrame.frame);
+        ffmpeg.stdin.end(this.ensureDecodableH264Frame(cachedFrame.frame, cachedFrame.sps, cachedFrame.pps));
       });
 
       if (!imageData || imageData.length < 4) {
