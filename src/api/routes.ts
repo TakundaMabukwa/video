@@ -23,6 +23,10 @@ export function createRoutes(
   tcpRTPHandler?: TCPRTPHandler
 ): express.Router {
   const router = express.Router();
+  const videoWorkerUrl = String(process.env.VIDEO_WORKER_URL || '').trim().replace(/\/+$/, '');
+  const videoProcessingEnabled = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
+  );
   const FTP_DOWNLOADS_ENABLED = false;
   const speedingManager = new SpeedingManager();
   const videoStorage = new VideoStorage();
@@ -1772,6 +1776,16 @@ export function createRoutes(
     }
   });
 
+  const proxyWorkerJson = async (pathname: string, init?: RequestInit) => {
+    if (!videoWorkerUrl) {
+      return null;
+    }
+
+    const response = await fetch(`${videoWorkerUrl}${pathname}`, init);
+    const body = await response.json().catch(() => null);
+    return { response, body };
+  };
+
   const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
     const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
     if (!vehicle) {
@@ -1780,6 +1794,37 @@ export function createRoutes(
         body: {
           success: false,
           message: `Vehicle ${id} not found or not connected`
+        }
+      };
+    }
+
+    if (!videoProcessingEnabled && videoWorkerUrl) {
+      tcpServer.startVideo(id, Number(channel));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(800, Number(retryDelayMs) || 600)));
+      const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel: Number(channel),
+          fallbackDelayMs: Number(retryDelayMs) || 600
+        })
+      });
+
+      if (!proxied) {
+        return {
+          status: 503 as const,
+          body: {
+            success: false,
+            message: 'Video worker URL is not configured'
+          }
+        };
+      }
+
+      return {
+        status: proxied.response.status as 200 | 202 | 404 | 500 | 503,
+        body: proxied.body || {
+          success: proxied.response.ok,
+          message: proxied.response.ok ? 'Worker screenshot completed' : 'Worker screenshot failed'
         }
       };
     }
@@ -1827,6 +1872,13 @@ export function createRoutes(
   router.get('/video-server/vehicles/:id/live-frame-status', async (req, res) => {
     const { id } = req.params;
     const channel = Math.max(1, Number(req.query.channel || 1));
+    if (!videoProcessingEnabled && videoWorkerUrl) {
+      tcpServer.startVideo(id, channel);
+      const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/live-frame-status?channel=${channel}`);
+      if (proxied) {
+        return res.status(proxied.response.status).json(proxied.body);
+      }
+    }
     const debug = {
       ...tcpServer.getLiveFrameDebugStatus(id, channel),
       tcpRtp: tcpRTPHandler?.getStreamDebug(id, channel) || null,
