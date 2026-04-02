@@ -11,6 +11,16 @@ export class TCPRTPHandler {
   private hlsStreamer = new HLSStreamer();
   private frameCount = 0;
   private activeStreams = new Set<string>();
+  private vehicleIngressStats = new Map<string, {
+    rawBuffersSeen: number;
+    parseFailures: number;
+    parseSuccesses: number;
+    lastBufferSize: number | null;
+    lastBufferPrefixHex: string | null;
+    lastParsedChannel: number | null;
+    lastParseFailureAt: number | null;
+    lastParseSuccessAt: number | null;
+  }>();
   private onFrameCallback?: (vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean) => void;
   private alertManager?: AlertManager;
 
@@ -22,14 +32,42 @@ export class TCPRTPHandler {
     this.alertManager = alertManager;
   }
 
+  private getOrCreateIngressStats(vehicleId: string) {
+    let stats = this.vehicleIngressStats.get(vehicleId);
+    if (!stats) {
+      stats = {
+        rawBuffersSeen: 0,
+        parseFailures: 0,
+        parseSuccesses: 0,
+        lastBufferSize: null,
+        lastBufferPrefixHex: null,
+        lastParsedChannel: null,
+        lastParseFailureAt: null,
+        lastParseSuccessAt: null
+      };
+      this.vehicleIngressStats.set(vehicleId, stats);
+    }
+    return stats;
+  }
+
   handleRTPPacket(buffer: Buffer, vehicleId: string): void {
+    const ingressStats = this.getOrCreateIngressStats(vehicleId);
+    ingressStats.rawBuffersSeen += 1;
+    ingressStats.lastBufferSize = buffer.length;
+    ingressStats.lastBufferPrefixHex = buffer.slice(0, Math.min(buffer.length, 16)).toString('hex');
+
     const parsed = JTT1078RTPParser.parseRTPPacket(buffer);
     if (!parsed) {
+      ingressStats.parseFailures += 1;
+      ingressStats.lastParseFailureAt = Date.now();
       console.log(`[RTP] Failed to parse packet from ${vehicleId}`);
       return;
     }
 
     const { header, payload, dataType } = parsed;
+    ingressStats.parseSuccesses += 1;
+    ingressStats.lastParsedChannel = header.channelNumber;
+    ingressStats.lastParseSuccessAt = Date.now();
     const streamKey = `${vehicleId}_${header.channelNumber}`;
 
     // JT/T 1078 transparent data stream can carry vendor alarms (ADAS/DMS).
@@ -224,8 +262,21 @@ export class TCPRTPHandler {
 
   getStreamDebug(vehicleId: string, channel: number) {
     const streamKey = `${vehicleId}_${channel}`;
+    const ingressStats = this.vehicleIngressStats.get(vehicleId);
     return {
       activeStream: this.activeStreams.has(streamKey),
+      rawBuffersSeen: ingressStats?.rawBuffersSeen || 0,
+      parseFailures: ingressStats?.parseFailures || 0,
+      parseSuccesses: ingressStats?.parseSuccesses || 0,
+      lastBufferSize: ingressStats?.lastBufferSize || null,
+      lastBufferPrefixHex: ingressStats?.lastBufferPrefixHex || null,
+      lastParsedChannel: ingressStats?.lastParsedChannel ?? null,
+      lastParseFailureAt: ingressStats?.lastParseFailureAt
+        ? new Date(ingressStats.lastParseFailureAt).toISOString()
+        : null,
+      lastParseSuccessAt: ingressStats?.lastParseSuccessAt
+        ? new Date(ingressStats.lastParseSuccessAt).toISOString()
+        : null,
       ...this.frameAssembler.getStreamDebug(streamKey)
     };
   }
