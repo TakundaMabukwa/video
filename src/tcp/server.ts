@@ -2910,21 +2910,38 @@ export class JTT808Server {
   async saveLiveFrameScreenshot(
     vehicleId: string,
     channel: number = 1,
-    options?: { retries?: number; retryDelayMs?: number }
+    options?: { retries?: number; retryDelayMs?: number; timeoutMs?: number; initialDelayMs?: number }
   ): Promise<ScreenshotFallbackResult> {
     const retries = Math.max(1, Math.min(5, Number(options?.retries) || 3));
     const retryDelayMs = Math.max(100, Math.min(2000, Number(options?.retryDelayMs) || 400));
+    const initialDelayMs = Math.max(0, Math.min(4000, Number(options?.initialDelayMs) || 1200));
+    const timeoutMs = Math.max(
+      initialDelayMs + retryDelayMs,
+      Math.min(15000, Number(options?.timeoutMs) || (initialDelayMs + retries * retryDelayMs + 4000))
+    );
 
     this.startVideo(vehicleId, channel);
+    if (initialDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
+    }
 
     let result: ScreenshotFallbackResult = { ok: false, reason: 'live frame not attempted' };
-    for (let attempt = 0; attempt < retries; attempt++) {
+    const deadline = Date.now() + timeoutMs;
+    let attempt = 0;
+    while (Date.now() <= deadline) {
       if (attempt > 0) {
         await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      if (attempt > 0 && !this.hasFreshStreamActivity(vehicleId, channel)) {
+        this.startVideo(vehicleId, channel);
       }
       result = await this.captureScreenshotFromLiveFrame(vehicleId, channel);
       if (result.ok) {
         return result;
+      }
+      attempt += 1;
+      if (attempt >= retries && Date.now() + retryDelayMs > deadline) {
+        break;
       }
     }
 

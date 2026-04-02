@@ -1784,8 +1784,10 @@ export function createRoutes(
     }
 
     const result = await tcpServer.saveLiveFrameScreenshot(id, Number(channel), {
-      retries: 4,
-      retryDelayMs: Number(retryDelayMs) || 600
+      retries: 8,
+      retryDelayMs: Number(retryDelayMs) || 600,
+      initialDelayMs: Math.max(800, Number(retryDelayMs) || 600),
+      timeoutMs: 10000
     });
 
     if (result.ok) {
