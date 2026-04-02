@@ -554,6 +554,8 @@ async function startServer() {
     if (!AUTO_SCREENSHOT_FANOUT_ENABLED) {
       return;
     }
+    ensureBackgroundStreams();
+    ensureFreshBackgroundStreams();
     const connected = tcpServer.getVehicles().filter(v => v.connected);
     if (connected.length === 0) {
       return;
@@ -571,17 +573,18 @@ async function startServer() {
       return;
     }
 
+    console.log(`Auto screenshot fanout: starting ${targets.length} channel snapshots across ${connected.length} vehicles`);
+
     const results = await Promise.allSettled(
       targets.map(t =>
-        tcpServer.requestScreenshotWithFallback(t.vehicleId, t.channel, {
-          fallback: true,
-          fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS,
-          preferFrameFirst: true
+        tcpServer.saveLiveFrameScreenshot(t.vehicleId, t.channel, {
+          retries: 3,
+          retryDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
         })
       )
     );
 
-    const ok = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+    const ok = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
     const fail = results.length - ok;
     console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
   };

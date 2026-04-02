@@ -2907,6 +2907,30 @@ export class JTT808Server {
     return { success: commandAccepted || fallback.ok, commandAccepted, fallback };
   }
 
+  async saveLiveFrameScreenshot(
+    vehicleId: string,
+    channel: number = 1,
+    options?: { retries?: number; retryDelayMs?: number }
+  ): Promise<ScreenshotFallbackResult> {
+    const retries = Math.max(1, Math.min(5, Number(options?.retries) || 3));
+    const retryDelayMs = Math.max(100, Math.min(2000, Number(options?.retryDelayMs) || 400));
+
+    this.startVideo(vehicleId, channel);
+
+    let result: ScreenshotFallbackResult = { ok: false, reason: 'live frame not attempted' };
+    for (let attempt = 0; attempt < retries; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      result = await this.captureScreenshotFromLiveFrame(vehicleId, channel);
+      if (result.ok) {
+        return result;
+      }
+    }
+
+    return result;
+  }
+
   private async captureVideoEvidenceFromHLS(
     vehicleId: string,
     channel: number,
