@@ -1784,11 +1784,11 @@ export function createRoutes(
     }
 
     const before = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
-    const result = await tcpServer.saveLiveFrameScreenshot(id, Number(channel), {
+    const result = await tcpServer.saveActiveStreamScreenshot(id, Number(channel), {
       retries: 8,
       retryDelayMs: Number(retryDelayMs) || 600,
       initialDelayMs: Math.max(800, Number(retryDelayMs) || 600),
-      timeoutMs: 10000
+      timeoutMs: 12000
     });
     const after = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
 
@@ -1797,7 +1797,7 @@ export function createRoutes(
         status: 200 as const,
         body: {
           success: true,
-          message: `Live-frame screenshot captured for vehicle ${id}, channel ${channel}`,
+          message: `Stream screenshot captured for vehicle ${id}, channel ${channel}`,
           commandAccepted: true,
           fallback: result,
           debug: {
@@ -1812,7 +1812,7 @@ export function createRoutes(
       status: 202 as const,
       body: {
         success: false,
-        message: `Live frame not ready yet for vehicle ${id}, channel ${channel}`,
+        message: `Stream output not ready yet for vehicle ${id}, channel ${channel}`,
         commandAccepted: true,
         fallback: result,
         debug: {

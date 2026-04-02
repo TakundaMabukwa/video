@@ -2948,6 +2948,48 @@ export class JTT808Server {
     return result;
   }
 
+  async saveActiveStreamScreenshot(
+    vehicleId: string,
+    channel: number = 1,
+    options?: { retries?: number; retryDelayMs?: number; timeoutMs?: number; initialDelayMs?: number }
+  ): Promise<ScreenshotFallbackResult> {
+    const retries = Math.max(1, Math.min(12, Number(options?.retries) || 8));
+    const retryDelayMs = Math.max(100, Math.min(2000, Number(options?.retryDelayMs) || 600));
+    const initialDelayMs = Math.max(0, Math.min(5000, Number(options?.initialDelayMs) || 1000));
+    const timeoutMs = Math.max(
+      initialDelayMs + retryDelayMs,
+      Math.min(20000, Number(options?.timeoutMs) || (initialDelayMs + retries * retryDelayMs + 4000))
+    );
+
+    this.startVideo(vehicleId, channel);
+    if (initialDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
+    }
+
+    const deadline = Date.now() + timeoutMs;
+    let result: ScreenshotFallbackResult = { ok: false, reason: 'stream output not attempted' };
+    let attempt = 0;
+
+    while (Date.now() <= deadline) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+      if (attempt > 0 && !this.hasFreshStreamActivity(vehicleId, channel)) {
+        this.startVideo(vehicleId, channel);
+      }
+      result = await this.captureScreenshotFromHLS(vehicleId, channel);
+      if (result.ok) {
+        return result;
+      }
+      attempt += 1;
+      if (attempt >= retries && Date.now() + retryDelayMs > deadline) {
+        break;
+      }
+    }
+
+    return result;
+  }
+
   private async captureVideoEvidenceFromHLS(
     vehicleId: string,
     channel: number,
@@ -3618,12 +3660,16 @@ export class JTT808Server {
     cachedKeyframeAgeMs: number | null;
     cachedHasSps: boolean;
     cachedHasPps: boolean;
+    hlsPlaylistReady: boolean;
+    hlsPlaylistReason: string | null;
   } {
     const vehicle = this.vehicles.get(vehicleId);
     const streamKey = this.getVideoStreamKey(vehicleId, channel);
     const lastPacketAtMs = this.lastRtpPacketAt.get(streamKey) || 0;
     const cachedFrame = this.latestLiveIFrames.get(streamKey);
     const cachedAgeMs = cachedFrame ? Date.now() - cachedFrame.receivedAt : null;
+    const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+    const hlsState = this.getReadyHlsPlaylistState(playlistPath);
 
     return {
       vehicleFound: !!vehicle,
@@ -3637,6 +3683,8 @@ export class JTT808Server {
       cachedKeyframeAgeMs: cachedAgeMs,
       cachedHasSps: !!cachedFrame?.sps?.length,
       cachedHasPps: !!cachedFrame?.pps?.length,
+      hlsPlaylistReady: hlsState.ok,
+      hlsPlaylistReason: hlsState.ok ? null : hlsState.reason,
     };
   }
 
