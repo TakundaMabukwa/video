@@ -27,6 +27,15 @@ interface FrameAssemblerStats {
   ignoredPackets: number;
 }
 
+interface StreamAssemblyStats {
+  packetsSeen: number;
+  completedFrames: number;
+  lastPacketAt: number | null;
+  lastCompletedFrameAt: number | null;
+  lastCompletedFrameSize: number | null;
+  lastDataType: number | null;
+}
+
 export class FrameAssembler {
   private frameBuffers = new Map<string, Map<string, FrameBuffer>>();
   private readonly FRAME_TIMEOUT = Math.max(1000, Number(process.env.FRAME_ASSEMBLER_TIMEOUT_MS || 10000));
@@ -37,6 +46,7 @@ export class FrameAssembler {
   private lastCleanup = Date.now();
   private spsCache = new Map<string, Buffer>();
   private ppsCache = new Map<string, Buffer>();
+  private streamStats = new Map<string, StreamAssemblyStats>();
   private stats = {
     completedFrames: 0,
     droppedFrames: 0,
@@ -56,12 +66,18 @@ export class FrameAssembler {
     }
 
     const streamKey = `${header.simCard}_${header.channelNumber}`;
+    const streamStats = this.getOrCreateStreamStats(streamKey);
+    streamStats.packetsSeen += 1;
+    streamStats.lastPacketAt = now;
+    streamStats.lastDataType = dataType;
     const normalized = this.normalizeAnnexB(payload);
     this.extractParameterSets(normalized, streamKey);
 
     if (header.subpackageFlag === JTT1078SubpackageFlag.ATOMIC) {
       this.stats.completedFrames += 1;
-      return this.prependParameterSets(normalized, streamKey);
+      const completed = this.prependParameterSets(normalized, streamKey);
+      this.recordCompletedFrame(streamKey, completed.length, now);
+      return completed;
     }
 
     const streamFrames = this.getOrCreateStreamFrames(streamKey);
@@ -106,6 +122,7 @@ export class FrameAssembler {
     const completeFrame = this.tryAssembleFrame(streamKey, streamFrames, frameBuffer);
     if (completeFrame) {
       this.stats.completedFrames += 1;
+      this.recordCompletedFrame(streamKey, completeFrame.length, now);
       return completeFrame;
     }
 
@@ -370,6 +387,29 @@ export class FrameAssembler {
     }
   }
 
+  private getOrCreateStreamStats(streamKey: string): StreamAssemblyStats {
+    let existing = this.streamStats.get(streamKey);
+    if (!existing) {
+      existing = {
+        packetsSeen: 0,
+        completedFrames: 0,
+        lastPacketAt: null,
+        lastCompletedFrameAt: null,
+        lastCompletedFrameSize: null,
+        lastDataType: null
+      };
+      this.streamStats.set(streamKey, existing);
+    }
+    return existing;
+  }
+
+  private recordCompletedFrame(streamKey: string, frameSize: number, now: number): void {
+    const streamStats = this.getOrCreateStreamStats(streamKey);
+    streamStats.completedFrames += 1;
+    streamStats.lastCompletedFrameAt = now;
+    streamStats.lastCompletedFrameSize = frameSize;
+  }
+
   private normalizeAnnexB(payload: Buffer): Buffer {
     if (!payload || payload.length < 4) return payload;
 
@@ -494,6 +534,58 @@ export class FrameAssembler {
       recoveredOutOfOrderFrames: this.stats.recoveredOutOfOrderFrames,
       orphanPacketsBuffered: this.stats.orphanPacketsBuffered,
       ignoredPackets: this.stats.ignoredPackets
+    };
+  }
+
+  getStreamDebug(streamKey: string): {
+    streamKey: string;
+    packetsSeen: number;
+    completedFrames: number;
+    lastPacketAt: string | null;
+    lastCompletedFrameAt: string | null;
+    lastCompletedFrameSize: number | null;
+    lastDataType: number | null;
+    pendingFrames: number;
+    bufferedPackets: number;
+    oldestPendingFrameAgeMs: number | null;
+    newestPendingFrameAgeMs: number | null;
+    hasSps: boolean;
+    hasPps: boolean;
+  } {
+    const now = Date.now();
+    const streamFrames = this.frameBuffers.get(streamKey);
+    const streamStats = this.streamStats.get(streamKey);
+    let bufferedPackets = 0;
+    let oldestPendingFrameAgeMs: number | null = null;
+    let newestPendingFrameAgeMs: number | null = null;
+
+    for (const frameBuffer of streamFrames?.values() || []) {
+      bufferedPackets += frameBuffer.packets.size;
+      const ageMs = now - frameBuffer.lastUpdatedAt;
+      if (oldestPendingFrameAgeMs === null || ageMs > oldestPendingFrameAgeMs) {
+        oldestPendingFrameAgeMs = ageMs;
+      }
+      if (newestPendingFrameAgeMs === null || ageMs < newestPendingFrameAgeMs) {
+        newestPendingFrameAgeMs = ageMs;
+      }
+    }
+
+    return {
+      streamKey,
+      packetsSeen: streamStats?.packetsSeen || 0,
+      completedFrames: streamStats?.completedFrames || 0,
+      lastPacketAt: streamStats?.lastPacketAt ? new Date(streamStats.lastPacketAt).toISOString() : null,
+      lastCompletedFrameAt: streamStats?.lastCompletedFrameAt
+        ? new Date(streamStats.lastCompletedFrameAt).toISOString()
+        : null,
+      lastCompletedFrameSize: streamStats?.lastCompletedFrameSize || null,
+      lastDataType: streamStats?.lastDataType ?? null,
+      pendingFrames: streamFrames?.size || 0,
+      bufferedPackets,
+      oldestPendingFrameAgeMs,
+      newestPendingFrameAgeMs,
+      hasSps: this.spsCache.has(streamKey),
+      hasPps: this.ppsCache.has(streamKey)
     };
   }
 }

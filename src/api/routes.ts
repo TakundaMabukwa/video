@@ -14,11 +14,13 @@ import { ProtocolMessageStorage } from '../storage/protocolMessageStorage';
 import { archiveToRawH264 } from '../video/frameArchive';
 import { ReplayService } from '../streaming/replay';
 import { resolveOfficialAlertType } from '../protocol/vendorAlarmCatalog';
+import { TCPRTPHandler } from '../tcp/rtpHandler';
 
 export function createRoutes(
   tcpServer: JTT808Server,
   udpServer: UDPRTPServer,
-  replayService?: ReplayService
+  replayService?: ReplayService,
+  tcpRTPHandler?: TCPRTPHandler
 ): express.Router {
   const router = express.Router();
   const FTP_DOWNLOADS_ENABLED = false;
@@ -1753,7 +1755,6 @@ export function createRoutes(
     udpServer.stopStream(id, channel);
 
     // Also stop TCP RTP handler stream
-    const tcpRTPHandler = (tcpServer as any).rtpHandler;
     if (tcpRTPHandler?.stopStream) {
       tcpRTPHandler.stopStream(id, channel);
     }
@@ -1826,7 +1827,11 @@ export function createRoutes(
   router.get('/video-server/vehicles/:id/live-frame-status', async (req, res) => {
     const { id } = req.params;
     const channel = Math.max(1, Number(req.query.channel || 1));
-    const debug = tcpServer.getLiveFrameDebugStatus(id, channel);
+    const debug = {
+      ...tcpServer.getLiveFrameDebugStatus(id, channel),
+      tcpRtp: tcpRTPHandler?.getStreamDebug(id, channel) || null,
+      udpRtp: udpServer.getStreamDebug(id, channel)
+    };
     return res.json({
       success: true,
       vehicleId: id,
