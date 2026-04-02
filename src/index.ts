@@ -153,7 +153,7 @@ const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
 const SHOULD_USE_DB = DB_ENABLED;
 const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED;
 const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED;
-const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', false);
+const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', VIDEO_PROCESSING_ENABLED);
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000');
 const BACKGROUND_STREAM_STALE_MS = parseInt(process.env.BACKGROUND_STREAM_STALE_MS || '30000');
 const BACKGROUND_STREAM_DEFAULT_CHANNELS = String(
@@ -432,12 +432,52 @@ async function startServer() {
     res.json({ message: 'Test frame broadcasted', clients: sseVideoStream.getStats() });
   });
   
+  const getVehicleChannelsFromCapabilities = (vehicle: any): any[] => (
+    Array.isArray(vehicle?.channels)
+      ? vehicle.channels.filter((ch: any) => ch && (ch.type === 'video' || ch.type === 'audio_video'))
+      : []
+  );
+
+  const getVehicleChannelNumbers = (
+    vehicle: any,
+    options?: { includeDefaults?: boolean }
+  ): number[] => {
+    const fromCapabilities = getVehicleChannelsFromCapabilities(vehicle)
+      .map((ch: any) => Number(ch.logicalChannel ?? ch.channel ?? ch.physicalChannel))
+      .filter((ch: number) => Number.isFinite(ch) && ch > 0);
+    const fromActiveStreams = Array.from(vehicle?.activeStreams || [])
+      .map((ch) => Number(ch))
+      .filter((ch) => Number.isFinite(ch) && ch > 0);
+    const defaults = options?.includeDefaults ? BACKGROUND_STREAM_DEFAULT_CHANNELS : [];
+    return Array.from(new Set<number>([
+      ...(fromCapabilities.length ? fromCapabilities : []),
+      ...fromActiveStreams,
+      ...defaults
+    ]));
+  };
+
+  const getConnectedVehicleChannels = (vehicle: any): any[] => {
+    const discovered = getVehicleChannelsFromCapabilities(vehicle);
+    if (discovered.length > 0) {
+      return discovered;
+    }
+
+    return getVehicleChannelNumbers(vehicle)
+      .sort((a, b) => a - b)
+      .map((channel) => ({
+        physicalChannel: channel,
+        logicalChannel: channel,
+        type: 'video',
+        hasGimbal: false,
+      }));
+  };
+
   app.get('/api/vehicles/connected', (req, res) => {
     const vehicles = tcpServer.getVehicles().filter(v => v.connected);
     res.json(vehicles.map(v => ({
       id: v.id,
       phone: v.phone,
-      channels: v.channels || [],
+      channels: getConnectedVehicleChannels(v),
       activeStreams: Array.from(v.activeStreams)
     })));
   });
@@ -477,14 +517,8 @@ async function startServer() {
   });
 
   // Keep camera streams alive in backend mode (independent of UI subscribers).
-  const getBackgroundChannels = (vehicle: any): number[] => {
-    const fromCapabilities = (vehicle.channels || [])
-      .filter((ch: any) => ch.type === 'video' || ch.type === 'audio_video')
-      .map((ch: any) => Number(ch.logicalChannel))
-      .filter((ch: number) => Number.isFinite(ch) && ch > 0);
-
-    return Array.from(new Set<number>(fromCapabilities.length ? fromCapabilities : BACKGROUND_STREAM_DEFAULT_CHANNELS));
-  };
+  const getBackgroundChannels = (vehicle: any): number[] =>
+    getVehicleChannelNumbers(vehicle, { includeDefaults: true }).sort((a, b) => a - b);
 
   const ensureBackgroundStreams = () => {
     if (!BACKGROUND_STREAMS_ENABLED) return;
@@ -527,16 +561,7 @@ async function startServer() {
 
     const targets: Array<{ vehicleId: string; channel: number }> = [];
     for (const v of connected) {
-      const fromCapabilities = (v.channels || [])
-        .filter(ch => ch.type === 'video' || ch.type === 'audio_video')
-        .map(ch => Number(ch.logicalChannel))
-        .filter(ch => Number.isFinite(ch) && ch > 0);
-
-      const fromActiveStreams = Array.from(v.activeStreams)
-        .map(ch => Number(ch))
-        .filter(ch => Number.isFinite(ch) && ch > 0);
-
-      const channels = [...new Set(fromCapabilities.length ? fromCapabilities : (fromActiveStreams.length ? fromActiveStreams : [1, 2]))];
+      const channels = getBackgroundChannels(v);
       for (const channel of channels) {
         targets.push({ vehicleId: String(v.id), channel });
       }

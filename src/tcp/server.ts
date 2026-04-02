@@ -994,12 +994,13 @@ export class JTT808Server {
 
   private handleTerminalAuth(message: any, socket: net.Socket): void {
     const ipAddress = socket.remoteAddress?.replace('::ffff:', '') || 'unknown';
+    let vehicle = this.vehicles.get(message.terminalPhone);
     
     // If vehicle doesn't exist, create it (camera skipped registration)
-    if (!this.vehicles.has(message.terminalPhone)) {
+    if (!vehicle) {
       this.deviceStorage.upsertDevice(message.terminalPhone, ipAddress);
       
-      const vehicle: Vehicle = {
+      vehicle = {
         id: message.terminalPhone,
         phone: message.terminalPhone,
         connected: true,
@@ -1030,6 +1031,23 @@ export class JTT808Server {
             console.log(`Set video alarm mask (0x007A)=0x${configuredMask.toString(16).padStart(8, '0')} for ${message.terminalPhone}`);
           }
         }, 1500);
+      }
+    }
+
+    vehicle = this.vehicles.get(message.terminalPhone);
+    if (vehicle) {
+      vehicle.connected = true;
+      vehicle.lastHeartbeat = new Date();
+      this.connections.set(message.terminalPhone, socket);
+      this.socketToVehicle.set(socket, message.terminalPhone);
+      this.ipToVehicle.set(ipAddress, message.terminalPhone); // Map IP to vehicle
+
+      const hasDiscoveredChannels = Array.isArray(vehicle.channels) && vehicle.channels.length > 0;
+      if (this.videoProcessingEnabled && !hasDiscoveredChannels) {
+        setTimeout(() => {
+          console.log(`Querying capabilities for ${message.terminalPhone} after auth...`);
+          this.queryCapabilities(message.terminalPhone);
+        }, 1000);
       }
     }
     
