@@ -1771,47 +1771,52 @@ export function createRoutes(
     }
   });
 
+  const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
+    const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
+    if (!vehicle) {
+      return {
+        status: 404 as const,
+        body: {
+          success: false,
+          message: `Vehicle ${id} not found or not connected`
+        }
+      };
+    }
+
+    const result = await tcpServer.saveLiveFrameScreenshot(id, Number(channel), {
+      retries: 4,
+      retryDelayMs: Number(retryDelayMs) || 600
+    });
+
+    if (result.ok) {
+      return {
+        status: 200 as const,
+        body: {
+          success: true,
+          message: `Live-frame screenshot captured for vehicle ${id}, channel ${channel}`,
+          commandAccepted: true,
+          fallback: result
+        }
+      };
+    }
+
+    return {
+      status: 202 as const,
+      body: {
+        success: false,
+        message: `Live frame not ready yet for vehicle ${id}, channel ${channel}`,
+        commandAccepted: true,
+        fallback: result
+      }
+    };
+  };
+
   // Request screenshot from vehicle
   router.post('/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
-    const { channel = 1, fallback = true, fallbackDelayMs = 600, preferFrameFirst = true } = req.body;
-    const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
-      fallback: !!fallback,
-      fallbackDelayMs: Number(fallbackDelayMs),
-      preferFrameFirst: !!preferFrameFirst
-    });
-
-    if (result.fallback?.ok) {
-      return res.json({
-        success: true,
-        message: `Screenshot captured for vehicle ${id}, channel ${channel}`,
-        commandAccepted: result.commandAccepted,
-        fallback: result.fallback
-      });
-    }
-
-    if (!result.commandAccepted) {
-      res.status(404).json({
-        success: false,
-        message: `Vehicle ${id} not found or not connected`
-      });
-      return;
-    }
-
-    if (!result.fallback?.ok) {
-      return res.status(202).json({
-        success: false,
-        message: `Screenshot requested for vehicle ${id}, channel ${channel}, but no image was captured yet`,
-        fallback: result.fallback || { ok: false, reason: 'disabled' }
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
-      commandAccepted: result.commandAccepted,
-      fallback: result.fallback || { ok: false, reason: 'disabled' }
-    });
+    const { channel = 1, fallbackDelayMs = 600 } = req.body || {};
+    const result = await handleLiveFrameScreenshotRequest(id, Number(channel), Number(fallbackDelayMs));
+    return res.status(result.status).json(result.body);
   });
 
   router.post('/vehicles/:id/screenshot-at', async (req, res) => {
@@ -1850,43 +1855,9 @@ export function createRoutes(
   // Alias route used by external frontend proxy path
   router.post('/video-server/vehicles/:id/screenshot', async (req, res) => {
     const { id } = req.params;
-    const { channel = 1, fallback = true, fallbackDelayMs = 600, preferFrameFirst = true } = req.body;
-    const result = await tcpServer.requestScreenshotWithFallback(id, Number(channel), {
-      fallback: !!fallback,
-      fallbackDelayMs: Number(fallbackDelayMs),
-      preferFrameFirst: !!preferFrameFirst
-    });
-
-    if (result.fallback?.ok) {
-      return res.json({
-        success: true,
-        message: `Screenshot captured for vehicle ${id}, channel ${channel}`,
-        commandAccepted: result.commandAccepted,
-        fallback: result.fallback
-      });
-    }
-
-    if (!result.commandAccepted) {
-      return res.status(404).json({
-        success: false,
-        message: `Vehicle ${id} not found or not connected`
-      });
-    }
-
-    if (!result.fallback?.ok) {
-      return res.status(202).json({
-        success: false,
-        message: `Screenshot requested for vehicle ${id}, channel ${channel}, but no image was captured yet`,
-        fallback: result.fallback || { ok: false, reason: 'disabled' }
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `Screenshot requested for vehicle ${id}, channel ${channel}`,
-      commandAccepted: result.commandAccepted,
-      fallback: result.fallback || { ok: false, reason: 'disabled' }
-    });
+    const { channel = 1, fallbackDelayMs = 600 } = req.body || {};
+    const result = await handleLiveFrameScreenshotRequest(id, Number(channel), Number(fallbackDelayMs));
+    return res.status(result.status).json(result.body);
   });
 
   router.post('/video-server/vehicles/:id/screenshot-at', async (req, res) => {
