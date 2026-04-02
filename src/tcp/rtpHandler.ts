@@ -225,7 +225,6 @@ export class TCPRTPHandler {
   getStreamDebug(vehicleId: string, channel: number) {
     const streamKey = `${vehicleId}_${channel}`;
     return {
-      streamKey,
       activeStream: this.activeStreams.has(streamKey),
       ...this.frameAssembler.getStreamDebug(streamKey)
     };

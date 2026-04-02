@@ -313,7 +313,6 @@ export class UDPRTPServer {
   getStreamDebug(vehicleId: string, channel: number) {
     const streamKey = `${vehicleId}_${channel}`;
     return {
-      streamKey,
       streamKnown: this.streams.has(streamKey),
       streamActive: !!this.streams.get(streamKey)?.active,
       ...this.frameAssembler.getStreamDebug(streamKey)
