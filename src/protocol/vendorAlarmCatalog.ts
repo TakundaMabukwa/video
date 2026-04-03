@@ -14,7 +14,7 @@ export type VendorAlarmEntry = {
 const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   {
     code: 0x0101,
-    type: 'Video Signal Loss',
+    type: 'Video Signal Lost',
     signalCode: 'platform_video_alarm_0101',
     domain: 'PLATFORM_VIDEO',
     defaultPriority: 'medium',
@@ -23,7 +23,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 0x0102,
-    type: 'Video Signal Blocking',
+    type: 'Video Signal Occlusion',
     signalCode: 'platform_video_alarm_0102',
     domain: 'PLATFORM_VIDEO',
     defaultPriority: 'medium',
@@ -32,7 +32,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 0x0103,
-    type: 'Storage Unit Failure',
+    type: 'Storage Failure',
     signalCode: 'platform_video_alarm_0103',
     domain: 'PLATFORM_VIDEO',
     defaultPriority: 'medium',
@@ -50,7 +50,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 0x0105,
-    type: 'Bus Overcrowding',
+    type: 'Passenger Overload',
     signalCode: 'platform_video_alarm_0105',
     domain: 'PLATFORM_VIDEO',
     defaultPriority: 'medium',
@@ -77,7 +77,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10001,
-    type: 'ADAS: Forward Collision',
+    type: 'ADAS: Forward Collision Alert',
     signalCode: 'adas_10001_forward_collision_warning',
     domain: 'ADAS',
     defaultPriority: 'critical',
@@ -86,7 +86,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10002,
-    type: 'ADAS: Lane Shift',
+    type: 'ADAS: Lane Departure Alert',
     signalCode: 'adas_10002_lane_departure_alarm',
     domain: 'ADAS',
     defaultPriority: 'high',
@@ -95,7 +95,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10003,
-    type: 'ADAS: Too Close',
+    type: 'ADAS: Too Close Distance Alert',
     signalCode: 'adas_10003_following_distance_too_close',
     domain: 'ADAS',
     defaultPriority: 'high',
@@ -104,7 +104,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10004,
-    type: 'ADAS: Pedestrian Collision',
+    type: 'ADAS: Pedestrian Collision Alert',
     signalCode: 'adas_10004_pedestrian_collision_alarm',
     domain: 'ADAS',
     defaultPriority: 'critical',
@@ -185,7 +185,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10101,
-    type: 'DMS: Fatigue Alert',
+    type: 'DMS: Fatigue Driving Alert',
     signalCode: 'dms_10101_fatigue_driving_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -194,7 +194,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10102,
-    type: 'DMS: Phone Calling',
+    type: 'DMS: Calling Alert',
     signalCode: 'dms_10102_handheld_phone_use_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -203,7 +203,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10103,
-    type: 'DMS: Smoking',
+    type: 'DMS: Smoking Alert',
     signalCode: 'dms_10103_smoking_alarm',
     domain: 'DMS',
     defaultPriority: 'high',
@@ -212,7 +212,7 @@ const BASE_VENDOR_ALARM_CATALOG: VendorAlarmEntry[] = [
   },
   {
     code: 10104,
-    type: 'DMS: Distracted Driving',
+    type: 'DMS: Distracted Driving Alert',
     signalCode: 'dms_10104_not_looking_forward_alarm',
     domain: 'DMS',
     defaultPriority: 'medium',
@@ -393,10 +393,10 @@ export const getVendorAlarmBySignalCode = (signalCode: string): VendorAlarmEntry
 
 const OFFICIAL_STRUCTURED_ALERT_NAMES: Record<'ADAS' | 'DMS', Record<number, string>> = {
   ADAS: {
-    1: 'ADAS: Forward Collision',
-    2: 'ADAS: Lane Shift',
-    3: 'ADAS: Too Close',
-    4: 'ADAS: Pedestrian Collision',
+    1: 'ADAS: Forward Collision Alert',
+    2: 'ADAS: Lane Departure Alert',
+    3: 'ADAS: Too Close Distance Alert',
+    4: 'ADAS: Pedestrian Collision Alert',
     5: 'ADAS: Frequent Lane Change Alert',
     6: 'ADAS: Road Sign Exceedance Alert',
     7: 'ADAS: Obstacle Alert',
@@ -404,10 +404,10 @@ const OFFICIAL_STRUCTURED_ALERT_NAMES: Record<'ADAS' | 'DMS', Record<number, str
     17: 'ADAS: Active Snapshot Event',
   },
   DMS: {
-    1: 'DMS: Fatigue Alert',
-    2: 'DMS: Phone Calling',
-    3: 'DMS: Smoking',
-    4: 'DMS: Distracted Driving',
+    1: 'DMS: Fatigue Driving Alert',
+    2: 'DMS: Calling Alert',
+    3: 'DMS: Smoking Alert',
+    4: 'DMS: Distracted Driving Alert',
     5: 'DMS: Driver Abnormality Alert',
     6: 'DMS: Steering Wheel Alert',
     7: 'DMS: Infrared Blocking',
@@ -420,45 +420,44 @@ const OFFICIAL_STRUCTURED_ALERT_NAMES: Record<'ADAS' | 'DMS', Record<number, str
 };
 
 const OFFICIAL_ALERT_NAME_ALIASES: Record<string, string> = {
-  'driver fatigue': 'Fatigue Alert',
-  'fatigue driving alarm': 'Fatigue Alert',
-  'fatigue driving alert': 'Fatigue Alert',
-  'dms: fatigue driving alarm': 'DMS: Fatigue Alert',
-  'dms: fatigue alert': 'DMS: Fatigue Alert',
-  'phone call while driving': 'Phone Calling',
-  'dms: handheld phone use alarm': 'DMS: Phone Calling',
-  'dms: phone calling': 'DMS: Phone Calling',
-  'smoking while driving': 'Smoking',
-  'dms: smoking alarm': 'DMS: Smoking',
-  'dms: smoking': 'DMS: Smoking',
-  'adas: forward collision warning': 'ADAS: Forward Collision',
-  'adas: lane departure alarm': 'ADAS: Lane Shift',
-  'adas: following distance too close': 'ADAS: Too Close',
-  'adas: pedestrian collision alarm': 'ADAS: Pedestrian Collision',
+  'driver fatigue': 'Fatigue Driving Alert',
+  'fatigue driving alarm': 'Fatigue Driving Alert',
+  'fatigue driving alert': 'Fatigue Driving Alert',
+  'dms: fatigue driving alarm': 'DMS: Fatigue Driving Alert',
+  'dms: fatigue alert': 'DMS: Fatigue Driving Alert',
+  'phone call while driving': 'Calling Alert',
+  'dms: handheld phone use alarm': 'DMS: Calling Alert',
+  'dms: handheld phone alarm': 'DMS: Calling Alert',
+  'dms: phone calling': 'DMS: Calling Alert',
+  'smoking while driving': 'Smoking Alert',
+  'dms: smoking alarm': 'DMS: Smoking Alert',
+  'dms: smoking': 'DMS: Smoking Alert',
+  'adas: forward collision warning': 'ADAS: Forward Collision Alert',
+  'adas: lane departure alarm': 'ADAS: Lane Departure Alert',
+  'adas: following distance too close': 'ADAS: Too Close Distance Alert',
+  'adas: pedestrian collision alarm': 'ADAS: Pedestrian Collision Alert',
   'adas: frequent lane change alarm': 'ADAS: Frequent Lane Change Alert',
   'adas: road sign over-limit alarm': 'ADAS: Road Sign Exceedance Alert',
   'adas: obstruction alarm': 'ADAS: Obstacle Alert',
   'adas: road sign identification event': 'ADAS: Road Sign Recognition Event',
   'adas: active capture event': 'ADAS: Active Snapshot Event',
-  'dms: not looking forward alarm': 'DMS: Distracted Driving',
-  'dms: driver abnormal alarm': 'DMS: No Driver Detected',
-  'dms: camera covered alarm': 'DMS: Camera Blocked',
+  'dms: not looking forward alarm': 'DMS: Distracted Driving Alert',
+  'dms: distracted driving': 'DMS: Distracted Driving Alert',
+  'dms: distracted driving alert': 'DMS: Distracted Driving Alert',
+  'dms: driver abnormal alarm': 'DMS: Driver Abnormality Alert',
   'dms: driver behavior monitoring failure': 'DMS: Infrared Blocking',
-  'dms: overtime driving alarm': 'DMS: Driving Overtime',
-  'dms: seatbelt not fastened alarm': 'DMS: Driver ID Detection',
+  'dms: seatbelt not fastened alarm': 'DMS: Seat Belt Alert',
   'dms: automatic capture event': 'DMS: Automatic Snapshot Event',
   'dms: playing with phone alarm': 'DMS: Play Phone',
-  'no seatbelt': 'Seat-Belt Detection',
-  'seatbelt detection': 'Seat-Belt Detection',
-  'seat-belt detection': 'Seat-Belt Detection',
-  'no driver detected': 'No Driver Detected',
-  'distracted driving': 'Distracted Driving',
-  'phone calling': 'Phone Calling',
+  'phone calling': 'Calling Alert',
   'play phone': 'Play Phone',
-  'camera blocked': 'Camera Blocked',
   'infrared blocking': 'Infrared Blocking',
-  'driver id detection': 'Driver ID Detection',
-  'hand off detection (hod)': 'Hand Off Detection (HOD)'
+  'video signal loss': 'Video Signal Lost',
+  'video signal lost': 'Video Signal Lost',
+  'video signal blocking': 'Video Signal Occlusion',
+  'video signal occlusion': 'Video Signal Occlusion',
+  'storage unit failure': 'Storage Failure',
+  'bus overcrowding': 'Passenger Overload'
 };
 
 export const normalizeOfficialAlertType = (raw: string): string => {
@@ -503,7 +502,7 @@ export const resolveOfficialAlertType = (input: {
       if (resolved) return resolved;
     }
     const vendor = getVendorAlarmBySignalCode(signalCode);
-    if (vendor?.type) return vendor.type;
+    if (vendor?.type) return normalizeOfficialAlertType(vendor.type);
   }
 
   const typeCandidates = [
