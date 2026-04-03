@@ -983,7 +983,7 @@ export class AlertManager extends EventEmitter {
     const alwaysSuppressed = new Set(
       String(
         process.env.ALERT_SUPPRESSED_SIGNALS ||
-        'jtt1078_storage_failure,jtt1078_abnormal_driving,platform_video_alarm_0103,platform_video_alarm_0106,custom_keyword_storage_failure'
+        'jtt1078_video_signal_loss,jtt1078_video_signal_blocking,jtt1078_storage_failure,jtt1078_abnormal_driving,platform_video_alarm_0101,platform_video_alarm_0102,platform_video_alarm_0103,platform_video_alarm_0106,custom_keyword_storage_failure'
       )
         .split(',')
         .map((s) => s.trim())
@@ -1025,7 +1025,13 @@ export class AlertManager extends EventEmitter {
 
   private isSilencedAlertType(value: string): boolean {
     const normalized = String(value || '').trim().toLowerCase();
-    return normalized === 'storage unit failure' || normalized === 'storage failure';
+    return normalized === 'storage unit failure'
+      || normalized === 'storage failure'
+      || normalized === 'video signal loss'
+      || normalized === 'video signal lost'
+      || normalized === 'video signal blocking'
+      || normalized === 'video signal blocked'
+      || normalized === 'video signal occlusion';
   }
 
   private getSignalDetail(signal: string): { code: string; label: string; meaning: string; source: string } {
