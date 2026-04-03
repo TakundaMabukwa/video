@@ -3491,8 +3491,7 @@ export function createRoutes(
     }
   });
 
-  // Serve screenshot by image row id (local fallback when storage URL is missing/failed)
-  router.get('/images/:id/file', async (req, res) => {
+  const serveImageFileById = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     try {
       const localImagePath = imageStorage.getLocalImagePath(id);
@@ -3541,7 +3540,11 @@ export function createRoutes(
         error: error?.message || String(error)
       });
     }
-  });
+  };
+
+  // Serve screenshot by image row id (local fallback when storage URL is missing/failed)
+  router.get('/images/:id/file', serveImageFileById);
+  router.get('/video-server/images/:id/file', serveImageFileById);
 
   // Serve stored video row by id. Local raw clips are transcoded to playable MP4 on demand.
   router.get('/videos/:id/file', async (req, res) => {
