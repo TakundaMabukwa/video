@@ -3494,6 +3494,20 @@ export function createRoutes(
   const serveImageFileById = async (req: express.Request, res: express.Response) => {
     const { id } = req.params;
     try {
+      if (!videoProcessingEnabled && videoWorkerUrl) {
+        const proxied = await fetch(`${videoWorkerUrl}/api/images/${encodeURIComponent(id)}/file`);
+        if (proxied.ok) {
+          const contentType = proxied.headers.get('content-type');
+          if (contentType) {
+            res.setHeader('Content-Type', contentType);
+          }
+          const arrayBuffer = await proxied.arrayBuffer();
+          return res.send(Buffer.from(arrayBuffer));
+        }
+        const text = await proxied.text().catch(() => '');
+        return res.status(proxied.status).send(text || 'Image unavailable');
+      }
+
       const localImagePath = imageStorage.getLocalImagePath(id);
       if (localImagePath && fs.existsSync(localImagePath)) {
         const ext = path.extname(localImagePath).toLowerCase();
