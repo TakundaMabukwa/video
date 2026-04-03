@@ -506,6 +506,8 @@ export function createRoutes(
 
   const buildStreamUrl = (vehicleId: string, channel: number) =>
     `/api/stream/${encodeURIComponent(String(vehicleId))}/${encodeURIComponent(String(channel))}/playlist.m3u8`;
+  const buildWorkerStreamUrl = (vehicleId: string, channel: number) =>
+    `${videoWorkerUrl}/api/stream/${encodeURIComponent(String(vehicleId))}/${encodeURIComponent(String(channel))}/playlist.m3u8`;
 
   const startLiveStreamForVehicle = (vehicleId: string, channel: number): boolean => {
     try {
@@ -893,7 +895,11 @@ export function createRoutes(
     };
     manualVideoJobs.set(id, job);
 
-    const playlistPath = path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+    const inputSource = !videoProcessingEnabled && videoWorkerUrl
+      ? buildWorkerStreamUrl(vehicleId, channel)
+      : path.join(process.cwd(), 'hls', vehicleId, `channel_${channel}`, 'playlist.m3u8');
+    const startDelayMs = !videoProcessingEnabled && videoWorkerUrl ? 3500 : 1200;
+
     setTimeout(() => {
       const current = manualVideoJobs.get(id);
       if (!current) return;
@@ -912,7 +918,7 @@ export function createRoutes(
           'error',
           '-y',
           '-i',
-          playlistPath,
+          inputSource,
           '-t',
           String(durationSec),
           '-c:v',
@@ -932,7 +938,7 @@ export function createRoutes(
           'error',
           '-y',
           '-i',
-          playlistPath,
+          inputSource,
           '-t',
           String(durationSec),
           '-c',
@@ -962,7 +968,7 @@ export function createRoutes(
         failed.updatedAt = new Date().toISOString();
         manualVideoJobs.set(id, failed);
       });
-    }, 1200);
+    }, startDelayMs);
 
     return { id, outputUrl };
   };
@@ -1784,6 +1790,16 @@ export function createRoutes(
     const response = await fetch(`${videoWorkerUrl}${pathname}`, init);
     const body = await response.json().catch(() => null);
     return { response, body };
+  };
+  const clearWorkerReplayChannel = async (vehicleId: string, channel: number) => {
+    if (!videoWorkerUrl) return;
+    try {
+      await fetch(`${videoWorkerUrl}/api/vehicles/${encodeURIComponent(String(vehicleId))}/stop-live`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: Number(channel) || 1 })
+      });
+    } catch {}
   };
 
   const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
@@ -4350,7 +4366,7 @@ export function createRoutes(
   });
 
   // Request arbitrary video range from camera for a vehicle/channel
-  router.post('/vehicles/:id/request-video', (req, res) => {
+  router.post('/vehicles/:id/request-video', async (req, res) => {
     const { id } = req.params;
     const {
       channel = 1,
@@ -4407,6 +4423,16 @@ export function createRoutes(
         success: false,
         message: 'mode must be one of: stream, download, both'
       });
+    }
+
+    if (wantStream) {
+      udpServer.stopStream(id, ch);
+      if (tcpRTPHandler?.stopStream) {
+        tcpRTPHandler.stopStream(id, ch);
+      }
+      if (!videoProcessingEnabled && videoWorkerUrl) {
+        await clearWorkerReplayChannel(id, ch);
+      }
     }
 
     const scheduled = (wantStream || wantDownload)
