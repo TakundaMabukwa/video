@@ -1787,19 +1787,11 @@ export function createRoutes(
   };
 
   const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
-    const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
-    if (!vehicle) {
-      return {
-        status: 404 as const,
-        body: {
-          success: false,
-          message: `Vehicle ${id} not found or not connected`
-        }
-      };
-    }
-
     if (!videoProcessingEnabled && videoWorkerUrl) {
-      tcpServer.startVideo(id, Number(channel));
+      const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
+      if (vehicle) {
+        tcpServer.startVideo(id, Number(channel));
+      }
       await new Promise((resolve) => setTimeout(resolve, Math.max(800, Number(retryDelayMs) || 600)));
       const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/screenshot`, {
         method: 'POST',
@@ -1825,6 +1817,17 @@ export function createRoutes(
         body: proxied.body || {
           success: proxied.response.ok,
           message: proxied.response.ok ? 'Worker screenshot completed' : 'Worker screenshot failed'
+        }
+      };
+    }
+
+    const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
+    if (!vehicle) {
+      return {
+        status: 404 as const,
+        body: {
+          success: false,
+          message: `Vehicle ${id} not found or not connected`
         }
       };
     }
