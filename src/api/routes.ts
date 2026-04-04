@@ -1643,15 +1643,26 @@ export function createRoutes(
   router.post('/vehicles/:id/start-live', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.body;
+    const targetChannels = getVehicleChannels(id, Number(channel));
 
-    console.log(`📡 API: start-live called for vehicle ${id}, channel ${channel}`);
+    console.log(`API: start-live called for vehicle ${id}, requested channel ${channel}, targets ${targetChannels.join(',')}`);
 
-    const success = tcpServer.startVideo(id, channel);
-    if (success) {
-      udpServer.startHLSStream(id, channel);
+    const results = targetChannels.map((targetChannel) => {
+      const success = tcpServer.startVideo(id, targetChannel);
+      if (success) {
+        udpServer.startHLSStream(id, targetChannel);
+      }
+      return { channel: targetChannel, success };
+    });
+
+    if (results.some((result) => result.success)) {
       res.json({
         success: true,
-        message: `Video stream started for vehicle ${id}, channel ${channel}`
+        message: `Video stream started for vehicle ${id} on ${results.filter((result) => result.success).length}/${results.length} channel(s)`,
+        data: {
+          requestedChannel: Number(channel) || 1,
+          channels: results
+        }
       });
     } else {
       res.status(404).json({

@@ -527,6 +527,7 @@ async function startServer() {
       const channels = getBackgroundChannels(v);
       for (const channel of channels) {
         tcpServer.startVideo(String(v.id), channel);
+        udpServer.startHLSStream(String(v.id), channel);
       }
     }
   };
@@ -544,6 +545,7 @@ async function startServer() {
         const hasFreshFrames = !!lastFrameAt && Number.isFinite(lastFrameAt) && now - lastFrameAt <= BACKGROUND_STREAM_STALE_MS;
         if (!streamInfo?.active || !hasFreshFrames) {
           tcpServer.startVideo(String(v.id), channel);
+          udpServer.startHLSStream(String(v.id), channel);
         }
       }
     }
