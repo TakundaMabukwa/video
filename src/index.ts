@@ -576,12 +576,34 @@ async function startServer() {
     console.log(`Auto screenshot fanout: starting ${targets.length} channel snapshots across ${connected.length} vehicles`);
 
     const results = await Promise.allSettled(
-      targets.map(t =>
-        tcpServer.saveLiveFrameScreenshot(t.vehicleId, t.channel, {
+      targets.map(async (t) => {
+        if (!VIDEO_PROCESSING_ENABLED && VIDEO_WORKER_URL) {
+          const response = await fetch(
+            VIDEO_WORKER_URL + '/api/video-server/vehicles/' + encodeURIComponent(String(t.vehicleId)) + '/screenshot',
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                channel: t.channel,
+                fallback: true,
+                fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
+              })
+            }
+          );
+          const payload = await response.json().catch(() => null);
+          const ok = response.ok && payload?.success !== false && payload?.fallback?.ok !== false;
+          return {
+            ok,
+            imageId: payload?.fallback?.imageId || payload?.imageId || undefined,
+            reason: payload?.fallback?.reason || payload?.message || undefined
+          };
+        }
+
+        return tcpServer.saveLiveFrameScreenshot(t.vehicleId, t.channel, {
           retries: 3,
           retryDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
-        })
-      )
+        });
+      })
     );
 
     const ok = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
