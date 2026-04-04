@@ -5520,6 +5520,26 @@ export function createRoutes(
     const alertsOnly = req.query.alertsOnly === 'true';
 
     try {
+      if (!videoProcessingEnabled && videoWorkerUrl) {
+        const qs = new URLSearchParams();
+        qs.set('limit', String(limit));
+        qs.set('minutes', String(minutes));
+        if (alertsOnly) qs.set('alertsOnly', 'true');
+        const proxied = await proxyWorkerJson(`/api/screenshots/recent?${qs.toString()}`);
+        if (!proxied) {
+          return res.status(503).json({
+            success: false,
+            message: 'Video worker URL is not configured'
+          });
+        }
+        return res.status(proxied.response.status).json(
+          proxied.body || {
+            success: proxied.response.ok,
+            message: proxied.response.ok ? 'Worker screenshots fetched' : 'Failed to fetch screenshots'
+          }
+        );
+      }
+
       const query = alertsOnly
         ? `SELECT * FROM images WHERE alert_id IS NOT NULL AND timestamp >= NOW() - ($2 || ' minutes')::interval ORDER BY timestamp DESC LIMIT $1`
         : `SELECT * FROM images WHERE timestamp >= NOW() - ($2 || ' minutes')::interval ORDER BY timestamp DESC LIMIT $1`;
