@@ -29,8 +29,10 @@ export class AlertParser {
     // Basic location data (first 28 bytes)
     const alarmFlag = body.readUInt32BE(0);
     const statusFlag = body.readUInt32BE(4);
-    const latitude = body.readUInt32BE(8) / 1000000;
-    const longitude = body.readUInt32BE(12) / 1000000;
+    const rawLatitude = body.readUInt32BE(8) / 1000000;
+    const rawLongitude = body.readUInt32BE(12) / 1000000;
+    const latitude = (statusFlag & (1 << 2)) ? -rawLatitude : rawLatitude;
+    const longitude = (statusFlag & (1 << 3)) ? -rawLongitude : rawLongitude;
     const altitude = body.readUInt16BE(16);
     const speed = body.readUInt16BE(18) / 10; // Convert from 0.1 km/h to km/h
     const direction = body.readUInt16BE(20);
@@ -516,3 +518,4 @@ export class AlertParser {
     return new Date(utcMs);
   }
 }
+
