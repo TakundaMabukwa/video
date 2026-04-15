@@ -90,6 +90,11 @@ type LatestLiveFrame = {
   pps?: Buffer;
 };
 
+type RecentNativeScreenshot = {
+  imageId: string;
+  receivedAt: number;
+};
+
 type VendorExtractionMethod =
   | 'numeric_be'
   | 'numeric_le'
@@ -146,6 +151,7 @@ export class JTT808Server {
   private pendingCameraRequests = new Map<string, PendingCameraRequest[]>();
   private pendingScreenshotRequests = new Map<string, PendingScreenshotRequest[]>();
   private latestLiveIFrames = new Map<string, LatestLiveFrame>();
+  private recentNativeScreenshots = new Map<string, RecentNativeScreenshot>();
   private vehicleIdentityById = new Map<string, VehicleIdentity>();
   private lastStartVideoAt = new Map<string, number>();
   private lastRtpPacketAt = new Map<string, number>();
@@ -2731,6 +2737,44 @@ export class JTT808Server {
     this.pendingScreenshotRequests.set(key, pruned);
   }
 
+  private buildScreenshotKey(vehicleId: string, channel: number): string {
+    return `${vehicleId}_${channel}`;
+  }
+
+  private rememberRecentNativeScreenshot(vehicleId: string, channel: number, imageId: string): void {
+    this.recentNativeScreenshots.set(this.buildScreenshotKey(vehicleId, channel), {
+      imageId,
+      receivedAt: Date.now()
+    });
+  }
+
+  private getRecentNativeScreenshot(vehicleId: string, channel: number, maxAgeMs: number = 6000): RecentNativeScreenshot | null {
+    const entry = this.recentNativeScreenshots.get(this.buildScreenshotKey(vehicleId, channel));
+    if (!entry) return null;
+    if (Date.now() - entry.receivedAt > maxAgeMs) {
+      this.recentNativeScreenshots.delete(this.buildScreenshotKey(vehicleId, channel));
+      return null;
+    }
+    return entry;
+  }
+
+  private async waitForRecentNativeScreenshot(vehicleId: string, channel: number, timeoutMs: number): Promise<RecentNativeScreenshot | null> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    while (Date.now() <= deadline) {
+      const entry = this.getRecentNativeScreenshot(vehicleId, channel, timeoutMs + 1000);
+      if (entry) return entry;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    return this.getRecentNativeScreenshot(vehicleId, channel, timeoutMs + 1000);
+  }
+
+  private isAcceptableNativeScreenshot(data: Buffer): boolean {
+    if (!data || data.length < 6000) return false;
+    const soi = data[0] === 0xff && data[1] === 0xd8;
+    const eoi = data[data.length - 2] === 0xff && data[data.length - 1] === 0xd9;
+    return soi && eoi;
+  }
+
   private consumePendingScreenshotRequest(vehicleId: string, channel: number): PendingScreenshotRequest | undefined {
     const key = vehicleId;
     const list = this.pendingScreenshotRequests.get(key);
@@ -2825,6 +2869,20 @@ export class JTT808Server {
     if (!preferFrameFirst) {
       this.rememberPendingScreenshotRequest(vehicleId, channel, { alertId: options?.alertId });
       commandAccepted = this.requestScreenshot(vehicleId, channel);
+      if (commandAccepted) {
+        const nativeShot = await this.waitForRecentNativeScreenshot(
+          vehicleId,
+          channel,
+          Math.min(2200, Math.max(1200, fallbackDelayMs))
+        );
+        if (nativeShot) {
+          return {
+            success: true,
+            commandAccepted,
+            fallback: { ok: true, imageId: nativeShot.imageId }
+          };
+        }
+      }
     }
 
     if (!fallbackEnabled) {
@@ -2878,7 +2936,6 @@ export class JTT808Server {
     }
     if (!fallback.ok) {
       await new Promise((r) => setTimeout(r, Math.max(0, fallbackDelayMs)));
-      // HLS playlists/segments can appear several seconds after startVideo().
       fallback = await retryHlsScreenshot(6, 1500);
     }
     if (!fallback.ok && !commandAccepted && !preferFrameFirst) {
@@ -2925,7 +2982,12 @@ export class JTT808Server {
         fallback: { ...fallback, reason: fallback.reason || 'vehicle not connected' }
       };
     }
-    return { success: commandAccepted || fallback.ok, commandAccepted, fallback };
+
+    return {
+      success: commandAccepted || fallback.ok,
+      commandAccepted,
+      fallback
+    };
   }
 
   async saveLiveFrameScreenshot(
@@ -4197,34 +4259,44 @@ export class JTT808Server {
       const multimedia = MultimediaParser.parseMultimediaData(message.body, message.terminalPhone);
 
       if (multimedia && multimedia.type === 'jpeg') {
-        // Save image to Supabase and database (with error handling)
         const pending = this.consumePendingScreenshotRequest(message.terminalPhone, multimedia.channel);
         const pendingAlertId = pending?.alertId;
-        const imageId = await this.imageStorage
-          .saveImage(
-            message.terminalPhone,
-            multimedia.channel,
-            multimedia.data,
-            pendingAlertId,
-            pending?.requestedAt
-          )
-          .catch((err) => {
-            console.error(`Failed to save image: ${err.message}`);
-            return null;
-          });
 
-        if (pendingAlertId && imageId) {
-          await this.alertManager.registerAlertScreenshotEvidence({
-            alertId: pendingAlertId,
-            imageId: String(imageId),
-            channel: multimedia.channel,
-            source: 'multimedia_0801'
-          }).catch((err: any) => {
-            console.warn(`Failed to register multimedia screenshot evidence for ${pendingAlertId}:`, err?.message || err);
-          });
+        if (!this.isAcceptableNativeScreenshot(multimedia.data)) {
+          console.warn(`Rejected low-quality native screenshot from ${message.terminalPhone} channel ${multimedia.channel} (${multimedia.data.length} bytes)`);
+        } else {
+          const imageId = await this.imageStorage
+            .saveImage(
+              message.terminalPhone,
+              multimedia.channel,
+              multimedia.data,
+              pendingAlertId,
+              pending?.requestedAt
+            )
+            .catch((err) => {
+              console.error(`Failed to save image: ${err.message}`);
+              return null;
+            });
+
+          if (imageId) {
+            this.rememberRecentNativeScreenshot(message.terminalPhone, multimedia.channel, String(imageId));
+          }
+
+          if (pendingAlertId && imageId) {
+            await this.alertManager.registerAlertScreenshotEvidence({
+              alertId: pendingAlertId,
+              imageId: String(imageId),
+              channel: multimedia.channel,
+              source: 'multimedia_0801'
+            }).catch((err: any) => {
+              console.warn(`Failed to register multimedia screenshot evidence for ${pendingAlertId}:`, err?.message || err);
+            });
+          }
+
+          if (imageId) {
+            console.log(`Saved native image from ${message.terminalPhone} channel ${multimedia.channel}`);
+          }
         }
-
-        console.log(`Saved image from ${message.terminalPhone} channel ${multimedia.channel}`);
       }
     } catch (error) {
       console.error('Error handling multimedia data:', error);
@@ -4240,6 +4312,7 @@ export class JTT808Server {
     socket.write(response);
   }
 }
+
 
 
 
