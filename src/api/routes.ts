@@ -1817,15 +1817,15 @@ export function createRoutes(
     if (!videoProcessingEnabled && videoWorkerUrl) {
       const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
       if (vehicle) {
-        tcpServer.startVideo(id, Number(channel));
+        startLiveStreamForVehicle(id, Number(channel));
       }
-      await new Promise((resolve) => setTimeout(resolve, Math.max(800, Number(retryDelayMs) || 600)));
+      await new Promise((resolve) => setTimeout(resolve, Math.max(1800, Number(retryDelayMs) || 1200)));
       const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/screenshot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channel: Number(channel),
-          fallbackDelayMs: Number(retryDelayMs) || 600
+          fallbackDelayMs: Math.max(1200, Number(retryDelayMs) || 1200)
         })
       });
 
