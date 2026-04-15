@@ -2961,6 +2961,20 @@ export class JTT808Server {
       Math.min(32000, Number(options?.timeoutMs) || (initialDelayMs + retries * retryDelayMs + 4000))
     );
 
+    const isWarmupReason = (reason?: string): boolean => {
+      const normalized = String(reason || '').toLowerCase();
+      return (
+        !normalized ||
+        normalized.includes('not ready') ||
+        normalized.includes('not found') ||
+        normalized.includes('no live keyframe') ||
+        normalized.includes('live keyframe is stale') ||
+        normalized.includes('empty frame') ||
+        normalized.includes('playlist') ||
+        normalized.includes('segments')
+      );
+    };
+
     this.startVideo(vehicleId, channel);
     if (initialDelayMs > 0) {
       await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
@@ -2977,13 +2991,36 @@ export class JTT808Server {
       if (attempt > 0 && !this.hasFreshStreamActivity(vehicleId, channel)) {
         this.startVideo(vehicleId, channel);
       }
-      result = await this.captureScreenshotFromHLS(vehicleId, channel);
+
+      result = await this.captureScreenshotFromLiveFrame(vehicleId, channel);
       if (result.ok) {
         return result;
       }
+
+      const shouldTryHls = attempt > 0 || !isWarmupReason(result.reason);
+      if (shouldTryHls) {
+        const hlsResult = await this.captureScreenshotFromHLS(vehicleId, channel);
+        if (hlsResult.ok) {
+          return hlsResult;
+        }
+        if (!result.ok && (!result.reason || !isWarmupReason(result.reason))) {
+          result = hlsResult;
+        }
+      }
+
       attempt += 1;
       if (attempt >= retries && Date.now() + retryDelayMs > deadline) {
         break;
+      }
+    }
+
+    if (!result.ok) {
+      const hlsResult = await this.captureScreenshotFromHLS(vehicleId, channel);
+      if (hlsResult.ok) {
+        return hlsResult;
+      }
+      if (!result.reason) {
+        result = hlsResult;
       }
     }
 
