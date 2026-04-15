@@ -2,8 +2,20 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { isDatabaseEnabled, query } from './database';
 
+type LocalImageRecord = {
+  id: string;
+  device_id: string;
+  channel: number;
+  file_path: string;
+  storage_url: string;
+  file_size: number;
+  timestamp: string;
+  alert_id: string | null;
+};
+
 export class ImageStorage {
   private static localImageIndex = new Map<string, string>();
+  private static localRecentImages: LocalImageRecord[] = [];
   private readonly localRoot: string;
   private readonly dbEnabled: boolean;
 
@@ -20,9 +32,22 @@ export class ImageStorage {
   }
 
   getLocalImagePath(id: string): string | null {
-    const key = String(id || "").trim();
+    const key = String(id || '').trim();
     if (!key) return null;
     return ImageStorage.localImageIndex.get(key) || null;
+  }
+
+  getRecentImages(limit: number = 50, minutes: number = 30, alertsOnly: boolean = false): LocalImageRecord[] {
+    const cutoff = Date.now() - Math.max(1, minutes) * 60 * 1000;
+    return ImageStorage.localRecentImages
+      .filter((img) => {
+        const ts = Date.parse(img.timestamp);
+        if (Number.isNaN(ts) || ts < cutoff) return false;
+        if (alertsOnly && !img.alert_id) return false;
+        return true;
+      })
+      .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+      .slice(0, Math.max(1, limit));
   }
 
   async saveImage(
@@ -37,7 +62,6 @@ export class ImageStorage {
     const relativeFilePath = `${deviceId}/ch${channel}/${timestamp}.jpg`;
     const localPath = this.buildLocalPath(relativeFilePath);
 
-    // Always persist a local copy for reliable fallback serving.
     try {
       fs.mkdirSync(path.dirname(localPath), { recursive: true });
       fs.writeFileSync(localPath, imageData);
@@ -45,11 +69,20 @@ export class ImageStorage {
       console.error(`Failed to persist local screenshot ${localPath}:`, err?.message || err);
     }
 
-    // Screenshots are intentionally not uploaded to Supabase.
-    // Persist local path + API-served URL only.
     if (!this.dbEnabled) {
       const id = `local-image-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       ImageStorage.localImageIndex.set(id, localPath);
+      ImageStorage.localRecentImages.unshift({
+        id,
+        device_id: deviceId,
+        channel,
+        file_path: relativeFilePath,
+        storage_url: `/api/images/${id}/file`,
+        file_size: imageData.length,
+        timestamp: captureTime.toISOString(),
+        alert_id: alertId || null,
+      });
+      ImageStorage.localRecentImages = ImageStorage.localRecentImages.slice(0, 2000);
       return id;
     }
 

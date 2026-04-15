@@ -1814,40 +1814,8 @@ export function createRoutes(
   };
 
   const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
-    if (!videoProcessingEnabled && videoWorkerUrl) {
-      const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
-      if (vehicle) {
-        startLiveStreamForVehicle(id, Number(channel));
-      }
-      await new Promise((resolve) => setTimeout(resolve, Math.max(1800, Number(retryDelayMs) || 1200)));
-      const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/screenshot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channel: Number(channel),
-          fallbackDelayMs: Math.max(1200, Number(retryDelayMs) || 1200)
-        })
-      });
-
-      if (!proxied) {
-        return {
-          status: 503 as const,
-          body: {
-            success: false,
-            message: 'Video worker URL is not configured'
-          }
-        };
-      }
-
-      return {
-        status: proxied.response.status as 200 | 202 | 404 | 500 | 503,
-        body: proxied.body || {
-          success: proxied.response.ok,
-          message: proxied.response.ok ? 'Worker screenshot completed' : 'Worker screenshot failed'
-        }
-      };
-    }
-
+    const numericChannel = Number(channel);
+    const effectiveRetryDelayMs = Math.max(800, Number(retryDelayMs) || 600);
     const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
     if (!vehicle) {
       return {
@@ -1859,14 +1827,83 @@ export function createRoutes(
       };
     }
 
-    const before = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
-    const result = await tcpServer.saveActiveStreamScreenshot(id, Number(channel), {
+    if (!videoProcessingEnabled && videoWorkerUrl) {
+      startLiveStreamForVehicle(id, numericChannel);
+      const before = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
+      const localResult = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, {
+        retries: 12,
+        retryDelayMs: effectiveRetryDelayMs,
+        initialDelayMs: Math.max(1200, effectiveRetryDelayMs),
+        timeoutMs: 18000
+      });
+      const after = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
+
+      if (localResult.ok) {
+        return {
+          status: 200 as const,
+          body: {
+            success: true,
+            message: `Stream screenshot captured for vehicle ${id}, channel ${channel}`,
+            commandAccepted: true,
+            fallback: localResult,
+            debug: {
+              before,
+              after,
+              source: 'listener-local'
+            }
+          }
+        };
+      }
+
+      const proxied = await proxyWorkerJson(`/api/video-server/vehicles/${encodeURIComponent(id)}/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel: numericChannel,
+          fallbackDelayMs: Math.max(1600, effectiveRetryDelayMs)
+        })
+      });
+
+      if (!proxied) {
+        return {
+          status: 503 as const,
+          body: {
+            success: false,
+            message: 'Video worker URL is not configured',
+            fallback: localResult,
+            debug: {
+              before,
+              after,
+              source: 'listener-local'
+            }
+          }
+        };
+      }
+
+      return {
+        status: proxied.response.status as 200 | 202 | 404 | 500 | 503,
+        body: {
+          ...(proxied.body && typeof proxied.body === 'object' ? proxied.body : {}),
+          success: proxied.response.ok,
+          message: proxied.response.ok ? (proxied.body?.message || 'Worker screenshot completed') : (proxied.body?.message || 'Worker screenshot failed'),
+          fallback: localResult,
+          debug: {
+            before,
+            after,
+            source: 'listener-local'
+          }
+        }
+      };
+    }
+
+    const before = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
+    const result = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, {
       retries: 8,
-      retryDelayMs: Number(retryDelayMs) || 600,
-      initialDelayMs: Math.max(800, Number(retryDelayMs) || 600),
+      retryDelayMs: effectiveRetryDelayMs,
+      initialDelayMs: Math.max(800, effectiveRetryDelayMs),
       timeoutMs: 12000
     });
-    const after = tcpServer.getLiveFrameDebugStatus(id, Number(channel));
+    const after = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
 
     if (result.ok) {
       return {
@@ -5543,12 +5580,23 @@ export function createRoutes(
             message: 'Video worker URL is not configured'
           });
         }
-        return res.status(proxied.response.status).json(
-          proxied.body || {
-            success: proxied.response.ok,
-            message: proxied.response.ok ? 'Worker screenshots fetched' : 'Failed to fetch screenshots'
-          }
-        );
+        const workerRows = Array.isArray(proxied.body?.screenshots) ? proxied.body.screenshots : [];
+        const localRows = imageStorage.getRecentImages(limit, minutes, alertsOnly).map((img: any) => ({
+          ...img,
+          url: normalizePublicImageUrl(img),
+          storage_url: normalizePublicImageUrl(img)
+        }));
+        const merged = [...workerRows, ...localRows]
+          .sort((a: any, b: any) => Date.parse(String(b.timestamp || b.created_at || 0)) - Date.parse(String(a.timestamp || a.created_at || 0)))
+          .slice(0, limit);
+        return res.status(proxied.response.status).json({
+          ...(proxied.body && typeof proxied.body === 'object' ? proxied.body : {}),
+          success: proxied.response.ok,
+          screenshots: merged,
+          total: merged.length,
+          count: merged.length,
+          lastUpdate: new Date()
+        });
       }
 
       const query = alertsOnly
