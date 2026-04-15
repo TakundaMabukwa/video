@@ -2953,12 +2953,12 @@ export class JTT808Server {
     channel: number = 1,
     options?: { retries?: number; retryDelayMs?: number; timeoutMs?: number; initialDelayMs?: number }
   ): Promise<ScreenshotFallbackResult> {
-    const retries = Math.max(1, Math.min(12, Number(options?.retries) || 8));
-    const retryDelayMs = Math.max(100, Math.min(2000, Number(options?.retryDelayMs) || 600));
-    const initialDelayMs = Math.max(0, Math.min(5000, Number(options?.initialDelayMs) || 1000));
+    const retries = Math.max(1, Math.min(16, Number(options?.retries) || 8));
+    const retryDelayMs = Math.max(100, Math.min(3000, Number(options?.retryDelayMs) || 600));
+    const initialDelayMs = Math.max(0, Math.min(8000, Number(options?.initialDelayMs) || 1000));
     const timeoutMs = Math.max(
       initialDelayMs + retryDelayMs,
-      Math.min(20000, Number(options?.timeoutMs) || (initialDelayMs + retries * retryDelayMs + 4000))
+      Math.min(32000, Number(options?.timeoutMs) || (initialDelayMs + retries * retryDelayMs + 4000))
     );
 
     this.startVideo(vehicleId, channel);

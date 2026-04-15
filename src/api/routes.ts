@@ -1816,6 +1816,19 @@ export function createRoutes(
   const handleLiveFrameScreenshotRequest = async (id: string, channel: number, retryDelayMs: number) => {
     const numericChannel = Number(channel);
     const effectiveRetryDelayMs = Math.max(800, Number(retryDelayMs) || 600);
+    const localCaptureOptions = numericChannel === 2
+      ? {
+          retries: 16,
+          retryDelayMs: Math.max(1000, effectiveRetryDelayMs),
+          initialDelayMs: Math.max(2000, effectiveRetryDelayMs * 2),
+          timeoutMs: 30000
+        }
+      : {
+          retries: 12,
+          retryDelayMs: effectiveRetryDelayMs,
+          initialDelayMs: Math.max(1200, effectiveRetryDelayMs),
+          timeoutMs: 18000
+        };
     const vehicle = tcpServer.getVehicles().find((entry) => String(entry.id) === String(id) && entry.connected);
     if (!vehicle) {
       return {
@@ -1830,12 +1843,7 @@ export function createRoutes(
     if (!videoProcessingEnabled && videoWorkerUrl) {
       startLiveStreamForVehicle(id, numericChannel);
       const before = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
-      const localResult = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, {
-        retries: 12,
-        retryDelayMs: effectiveRetryDelayMs,
-        initialDelayMs: Math.max(1200, effectiveRetryDelayMs),
-        timeoutMs: 18000
-      });
+      const localResult = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, localCaptureOptions);
       const after = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
 
       if (localResult.ok) {
@@ -1860,7 +1868,7 @@ export function createRoutes(
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           channel: numericChannel,
-          fallbackDelayMs: Math.max(1600, effectiveRetryDelayMs)
+          fallbackDelayMs: Math.max(1800, localCaptureOptions.retryDelayMs)
         })
       });
 
@@ -1897,12 +1905,19 @@ export function createRoutes(
     }
 
     const before = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
-    const result = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, {
-      retries: 8,
-      retryDelayMs: effectiveRetryDelayMs,
-      initialDelayMs: Math.max(800, effectiveRetryDelayMs),
-      timeoutMs: 12000
-    });
+    const result = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, numericChannel === 2
+      ? {
+          retries: 14,
+          retryDelayMs: Math.max(900, effectiveRetryDelayMs),
+          initialDelayMs: Math.max(1600, effectiveRetryDelayMs * 2),
+          timeoutMs: 26000
+        }
+      : {
+          retries: 8,
+          retryDelayMs: effectiveRetryDelayMs,
+          initialDelayMs: Math.max(800, effectiveRetryDelayMs),
+          timeoutMs: 12000
+        });
     const after = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
 
     if (result.ok) {

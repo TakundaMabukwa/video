@@ -146,6 +146,9 @@ const API_PORT = parseInt(process.env.API_PORT || '3000');
 const SERVER_IP = process.env.SERVER_IP || 'localhost';
 const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
 const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
+const AUTO_SCREENSHOT_WARMUP_MS = parseInt(process.env.AUTO_SCREENSHOT_WARMUP_MS || '1500');
+const AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS = parseInt(process.env.AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS || '1500');
+const AUTO_SCREENSHOT_RETRY_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_RETRY_DELAY_MS || '5000');
 const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true);
 const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
 const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
@@ -551,6 +554,88 @@ async function startServer() {
     }
   };
 
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const getAutoScreenshotCaptureOptions = (channel: number) =>
+    channel === 2
+      ? {
+          retries: 16,
+          retryDelayMs: Math.max(1000, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
+          initialDelayMs: Math.max(2000, AUTO_SCREENSHOT_FALLBACK_DELAY_MS * 2),
+          timeoutMs: 30000
+        }
+      : {
+          retries: 10,
+          retryDelayMs: Math.max(700, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
+          initialDelayMs: Math.max(1200, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
+          timeoutMs: 18000
+        };
+
+  const warmBackgroundScreenshotTargets = async (targets: Array<{ vehicleId: string; channel: number }>) => {
+    for (const target of targets) {
+      tcpServer.startVideo(target.vehicleId, target.channel);
+      udpServer.startHLSStream(target.vehicleId, target.channel);
+    }
+    const hasChannelTwo = targets.some((target) => target.channel === 2);
+    await wait(AUTO_SCREENSHOT_WARMUP_MS + (hasChannelTwo ? AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS : 0));
+  };
+
+  const captureAutoScreenshotTarget = async (target: { vehicleId: string; channel: number }) => {
+    const localResult = await tcpServer.saveActiveStreamScreenshot(
+      target.vehicleId,
+      target.channel,
+      getAutoScreenshotCaptureOptions(target.channel)
+    );
+
+    if (localResult.ok) {
+      return { ...localResult, source: 'listener-local' as const };
+    }
+
+    if (!VIDEO_PROCESSING_ENABLED && VIDEO_WORKER_URL) {
+      const fallbackOptions = getAutoScreenshotCaptureOptions(target.channel);
+      const response = await fetch(
+        VIDEO_WORKER_URL + '/api/video-server/vehicles/' + encodeURIComponent(String(target.vehicleId)) + '/screenshot',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            channel: target.channel,
+            fallback: true,
+            fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs)
+          })
+        }
+      );
+      const payload = await response.json().catch(() => null);
+      const ok = response.ok && payload?.success !== false && payload?.fallback?.ok !== false;
+      return {
+        ok,
+        imageId: payload?.fallback?.imageId || payload?.imageId || undefined,
+        reason: payload?.fallback?.reason || payload?.message || localResult.reason || undefined,
+        source: 'worker-fallback' as const
+      };
+    }
+
+    return { ...localResult, source: 'listener-local' as const };
+  };
+
+  const retryAutoScreenshotTargets = (targets: Array<{ vehicleId: string; channel: number }>) => {
+    if (targets.length === 0) return;
+    setTimeout(() => {
+      void (async () => {
+        try {
+          console.log(`Auto screenshot fanout retry: retrying ${targets.length} channel snapshots`);
+          await warmBackgroundScreenshotTargets(targets);
+          const retryResults = await Promise.allSettled(targets.map((target) => captureAutoScreenshotTarget(target)));
+          const ok = retryResults.filter((result) => result.status === 'fulfilled' && result.value.ok).length;
+          const fail = retryResults.length - ok;
+          console.log(`Auto screenshot fanout retry: ${ok} success, ${fail} failed`);
+        } catch (error) {
+          console.warn('Auto screenshot fanout retry failed:', error);
+        }
+      })();
+    }, AUTO_SCREENSHOT_RETRY_DELAY_MS);
+  };
+
   // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected vehicles/channels.
   const runAutoScreenshotFanout = async () => {
     if (!AUTO_SCREENSHOT_FANOUT_ENABLED) {
@@ -576,43 +661,20 @@ async function startServer() {
     }
 
     console.log(`Auto screenshot fanout: starting ${targets.length} channel snapshots across ${connected.length} vehicles`);
+    await warmBackgroundScreenshotTargets(targets);
 
-    const results = await Promise.allSettled(
-      targets.map(async (t) => {
-        if (!VIDEO_PROCESSING_ENABLED && VIDEO_WORKER_URL) {
-          const response = await fetch(
-            VIDEO_WORKER_URL + '/api/video-server/vehicles/' + encodeURIComponent(String(t.vehicleId)) + '/screenshot',
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                channel: t.channel,
-                fallback: true,
-                fallbackDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
-              })
-            }
-          );
-          const payload = await response.json().catch(() => null);
-          const ok = response.ok && payload?.success !== false && payload?.fallback?.ok !== false;
-          return {
-            ok,
-            imageId: payload?.fallback?.imageId || payload?.imageId || undefined,
-            reason: payload?.fallback?.reason || payload?.message || undefined
-          };
-        }
-
-        return tcpServer.saveLiveFrameScreenshot(t.vehicleId, t.channel, {
-          retries: 3,
-          retryDelayMs: AUTO_SCREENSHOT_FALLBACK_DELAY_MS
-        });
-      })
-    );
+    const results = await Promise.allSettled(targets.map((target) => captureAutoScreenshotTarget(target)));
 
     const ok = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
     const fail = results.length - ok;
-    console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
-  };
+    const failedTargets = results
+      .map((result, index) => ({ result, target: targets[index] }))
+      .filter(({ result }) => result.status !== 'fulfilled' || !result.value.ok)
+      .map(({ target }) => target);
 
+    console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
+    retryAutoScreenshotTargets(failedTargets);
+  };
   if (BACKGROUND_STREAMS_ENABLED || AUTO_SCREENSHOT_FANOUT_ENABLED) {
     setTimeout(() => {
       ensureBackgroundStreams();
