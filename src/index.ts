@@ -581,18 +581,23 @@ async function startServer() {
   };
 
   const captureAutoScreenshotTarget = async (target: { vehicleId: string; channel: number }) => {
-    const localResult = await tcpServer.saveActiveStreamScreenshot(
-      target.vehicleId,
-      target.channel,
-      getAutoScreenshotCaptureOptions(target.channel)
-    );
+    const fallbackOptions = getAutoScreenshotCaptureOptions(target.channel);
+    const localCapture = await tcpServer.requestScreenshotWithFallback(target.vehicleId, target.channel, {
+      fallback: true,
+      fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs),
+      preferFrameFirst: false
+    });
 
-    if (localResult.ok) {
-      return { ...localResult, source: 'listener-local' as const };
+    if (localCapture.success || localCapture.fallback?.ok) {
+      return {
+        ok: true,
+        imageId: localCapture.fallback?.imageId,
+        reason: undefined,
+        source: localCapture.commandAccepted ? 'listener-native' as const : 'listener-fallback' as const
+      };
     }
 
     if (!VIDEO_PROCESSING_ENABLED && VIDEO_WORKER_URL) {
-      const fallbackOptions = getAutoScreenshotCaptureOptions(target.channel);
       const response = await fetch(
         VIDEO_WORKER_URL + '/api/video-server/vehicles/' + encodeURIComponent(String(target.vehicleId)) + '/screenshot',
         {
@@ -610,12 +615,17 @@ async function startServer() {
       return {
         ok,
         imageId: payload?.fallback?.imageId || payload?.imageId || undefined,
-        reason: payload?.fallback?.reason || payload?.message || localResult.reason || undefined,
+        reason: payload?.fallback?.reason || payload?.message || localCapture.fallback?.reason || undefined,
         source: 'worker-fallback' as const
       };
     }
 
-    return { ...localResult, source: 'listener-local' as const };
+    return {
+      ok: false,
+      imageId: localCapture.fallback?.imageId,
+      reason: localCapture.fallback?.reason || 'screenshot failed',
+      source: 'listener-native' as const
+    };
   };
 
   const retryAutoScreenshotTargets = (targets: Array<{ vehicleId: string; channel: number }>) => {

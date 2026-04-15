@@ -1843,21 +1843,25 @@ export function createRoutes(
     if (!videoProcessingEnabled && videoWorkerUrl) {
       startLiveStreamForVehicle(id, numericChannel);
       const before = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
-      const localResult = await tcpServer.saveActiveStreamScreenshot(id, numericChannel, localCaptureOptions);
+      const localCapture = await tcpServer.requestScreenshotWithFallback(id, numericChannel, {
+        fallback: true,
+        fallbackDelayMs: Math.max(1800, localCaptureOptions.retryDelayMs),
+        preferFrameFirst: false
+      });
       const after = tcpServer.getLiveFrameDebugStatus(id, numericChannel);
 
-      if (localResult.ok) {
+      if (localCapture.success || localCapture.fallback?.ok) {
         return {
           status: 200 as const,
           body: {
             success: true,
-            message: `Stream screenshot captured for vehicle ${id}, channel ${channel}`,
-            commandAccepted: true,
-            fallback: localResult,
+            message: `Screenshot captured for vehicle ${id}, channel ${channel}`,
+            commandAccepted: localCapture.commandAccepted,
+            fallback: localCapture.fallback,
             debug: {
               before,
               after,
-              source: 'listener-local'
+              source: 'listener-native'
             }
           }
         };
@@ -1878,11 +1882,11 @@ export function createRoutes(
           body: {
             success: false,
             message: 'Video worker URL is not configured',
-            fallback: localResult,
+            fallback: localCapture.fallback,
             debug: {
               before,
               after,
-              source: 'listener-local'
+              source: 'listener-native'
             }
           }
         };
@@ -1894,11 +1898,11 @@ export function createRoutes(
           ...(proxied.body && typeof proxied.body === 'object' ? proxied.body : {}),
           success: proxied.response.ok,
           message: proxied.response.ok ? (proxied.body?.message || 'Worker screenshot completed') : (proxied.body?.message || 'Worker screenshot failed'),
-          fallback: localResult,
+          fallback: localCapture.fallback,
           debug: {
             before,
             after,
-            source: 'listener-local'
+            source: 'listener-native'
           }
         }
       };
