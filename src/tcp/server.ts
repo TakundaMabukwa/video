@@ -289,6 +289,27 @@ export class JTT808Server {
     return Buffer.concat(parts);
   }
 
+  private isStructurallyUsableLiveFrame(cachedFrame: LatestLiveFrame): { ok: true; frame: Buffer } | { ok: false; reason: string } {
+    const preparedFrame = this.ensureDecodableH264Frame(cachedFrame.frame, cachedFrame.sps, cachedFrame.pps);
+    const hasSps = !!this.findNaluOfType(preparedFrame, 7);
+    const hasPps = !!this.findNaluOfType(preparedFrame, 8);
+    const hasIdr = !!this.findNaluOfType(preparedFrame, 5);
+
+    if (!hasSps || !hasPps) {
+      return { ok: false, reason: 'live keyframe missing codec headers' };
+    }
+
+    if (!hasIdr) {
+      return { ok: false, reason: 'live keyframe missing IDR frame' };
+    }
+
+    if (preparedFrame.length < 4096) {
+      return { ok: false, reason: 'live keyframe payload too small' };
+    }
+
+    return { ok: true, frame: preparedFrame };
+  }
+
   cacheLiveFrame(vehicleId: string, channel: number, frame: Buffer, isIFrame: boolean): void {
     if (!frame || frame.length === 0) return;
     const key = `${vehicleId}_${channel}`;
@@ -3199,13 +3220,21 @@ export class JTT808Server {
         return { ok: false, reason: 'live keyframe is stale' };
       }
 
+      const usableFrame = this.isStructurallyUsableLiveFrame(cachedFrame);
+      if (!usableFrame.ok) {
+        return { ok: false, reason: usableFrame.reason };
+      }
+
       const imageData = await new Promise<Buffer | null>((resolve) => {
         const ffmpeg = spawn('ffmpeg', [
           '-hide_banner',
           '-loglevel', 'error',
+          '-fflags', '+discardcorrupt',
+          '-err_detect', 'explode',
           '-f', 'h264',
           '-i', 'pipe:0',
           '-frames:v', '1',
+          '-q:v', '2',
           '-f', 'image2pipe',
           '-vcodec', 'mjpeg',
           'pipe:1'
@@ -3214,6 +3243,7 @@ export class JTT808Server {
         });
 
         const chunks: Buffer[] = [];
+        let stderr = '';
         let done = false;
         const finish = (data: Buffer | null) => {
           if (done) return;
@@ -3227,13 +3257,14 @@ export class JTT808Server {
         }, 5000);
 
         ffmpeg.stdout.on('data', (d) => chunks.push(Buffer.from(d)));
+        ffmpeg.stderr.on('data', (d) => { stderr += d.toString(); });
         ffmpeg.on('error', () => {
           clearTimeout(timeout);
           finish(null);
         });
         ffmpeg.on('close', (code) => {
           clearTimeout(timeout);
-          if (code === 0 && chunks.length > 0) {
+          if (code === 0 && chunks.length > 0 && !/corrupt|error|invalid/i.test(stderr)) {
             finish(Buffer.concat(chunks));
           } else {
             finish(null);
@@ -3244,7 +3275,7 @@ export class JTT808Server {
           clearTimeout(timeout);
           finish(null);
         });
-        ffmpeg.stdin.end(this.ensureDecodableH264Frame(cachedFrame.frame, cachedFrame.sps, cachedFrame.pps));
+        ffmpeg.stdin.end(usableFrame.frame);
       });
 
       if (!imageData || imageData.length < 4) {
