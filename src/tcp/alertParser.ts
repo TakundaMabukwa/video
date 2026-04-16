@@ -10,19 +10,9 @@ import {
   AdditionalInfoItem
 } from '../types/jtt';
 import { getKnownVendorCodes } from '../protocol/vendorAlarmCatalog';
+import { resolveTerminalTimezoneOffsetHours } from '../services/terminalTimezone';
 
 export class AlertParser {
-  private static resolveTerminalTimezoneOffsetHours(): number {
-    const raw = process.env.JTT808_TERMINAL_TZ_OFFSET_HOURS ?? process.env.TERMINAL_TZ_OFFSET_HOURS;
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      // Keep protocol-default behavior unless deployment overrides it.
-      return 8;
-    }
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return 8;
-    return parsed;
-  }
-
   static parseLocationReport(body: Buffer, vehicleId: string): LocationAlert | null {
     if (body.length < 28) return null;
 
@@ -512,10 +502,11 @@ export class AlertParser {
     const hour = this.bcdToDec(data[3]);
     const minute = this.bcdToDec(data[4]);
     const second = this.bcdToDec(data[5]);
-    const offsetHours = this.resolveTerminalTimezoneOffsetHours();
+    const offsetHours = resolveTerminalTimezoneOffsetHours();
     const utcMs = Date.UTC(year, month - 1, day, hour, minute, second) - (offsetHours * 60 * 60 * 1000);
 
     return new Date(utcMs);
   }
 }
+
 

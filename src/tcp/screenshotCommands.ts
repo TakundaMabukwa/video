@@ -1,4 +1,5 @@
 import { JTT808Parser } from './parser';
+import { resolveTerminalTimezoneOffsetHours } from '../services/terminalTimezone';
 
 export class ScreenshotCommands {
   static buildSingleFrameRequest(
@@ -87,15 +88,11 @@ export class ScreenshotCommands {
   }
 
   private static toTerminalLocalDate(date: Date): Date {
-    const raw = process.env.JTT808_TERMINAL_TZ_OFFSET_HOURS ?? process.env.TERMINAL_TZ_OFFSET_HOURS;
-    const offsetHours = raw === undefined || raw === null || String(raw).trim() === ''
-      ? 8
-      : Number(raw);
-    const safeOffsetHours = Number.isFinite(offsetHours) ? offsetHours : 8;
-    return new Date(date.getTime() + safeOffsetHours * 60 * 60 * 1000);
+    return new Date(date.getTime() + resolveTerminalTimezoneOffsetHours() * 60 * 60 * 1000);
   }
   
   private static toBcd(value: number): number {
     return ((Math.floor(value / 10) & 0x0F) << 4) | (value % 10 & 0x0F);
   }
 }
+
