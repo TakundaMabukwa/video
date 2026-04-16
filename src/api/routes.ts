@@ -1642,7 +1642,7 @@ export function createRoutes(
   // Start live video for a vehicle
   router.post('/vehicles/:id/start-live', (req, res) => {
     const { id } = req.params;
-    const { channel = 1 } = req.body;
+    const { channel = 2 } = req.body;
     const targetChannels = getVehicleChannels(id, Number(channel));
 
     console.log(`API: start-live called for vehicle ${id}, requested channel ${channel}, targets ${targetChannels.join(',')}`);
@@ -1675,7 +1675,7 @@ export function createRoutes(
   // Optimize camera video parameters
   router.post('/vehicles/:id/optimize-video', (req, res) => {
     const { id } = req.params;
-    const { channel = 1 } = req.body;
+    const { channel = 2 } = req.body;
 
     const success = tcpServer.optimizeVideoParameters(id, channel);
 
@@ -1770,7 +1770,7 @@ export function createRoutes(
   // Stop live video for a vehicle
   router.post('/vehicles/:id/stop-live', (req, res) => {
     const { id } = req.params;
-    const { channel = 1 } = req.body;
+    const { channel = 2 } = req.body;
 
     const success = tcpServer.stopVideo(id, channel);
     udpServer.stopStream(id, channel);
@@ -2063,7 +2063,7 @@ export function createRoutes(
   // Get stream info for a vehicle
   router.get('/vehicles/:id/stream-info', (req, res) => {
     const { id } = req.params;
-    const { channel = 1 } = req.query;
+    const { channel = 2 } = req.query;
 
     const vehicle = tcpServer.getVehicle(id);
     const streamInfo = udpServer.getStreamInfo(id, Number(channel));
@@ -5797,3 +5797,4 @@ export function createRoutes(
 
   return router;
 }
+
