@@ -23,7 +23,9 @@ export function createRoutes(
   tcpRTPHandler?: TCPRTPHandler
 ): express.Router {
   const router = express.Router();
+  const alertWorkerUrl = String(process.env.ALERT_WORKER_URL || '').trim().replace(/\/+$/, '');
   const videoWorkerUrl = String(process.env.VIDEO_WORKER_URL || '').trim().replace(/\/+$/, '');
+  const internalWorkerToken = String(process.env.INTERNAL_WORKER_TOKEN || '').trim();
   const videoProcessingEnabled = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VIDEO_PROCESSING_ENABLED ?? 'true').trim().toLowerCase()
   );
@@ -1799,6 +1801,23 @@ export function createRoutes(
     }
 
     const response = await fetch(`${videoWorkerUrl}${pathname}`, init);
+    const body = await response.json().catch(() => null);
+    return { response, body };
+  };
+  const proxyAlertWorkerJson = async (pathname: string, init?: RequestInit) => {
+    if (!alertWorkerUrl) {
+      return null;
+    }
+
+    const headers = new Headers(init?.headers || {});
+    if (internalWorkerToken && !headers.has('X-Internal-Token')) {
+      headers.set('X-Internal-Token', internalWorkerToken);
+    }
+
+    const response = await fetch(`${alertWorkerUrl}${pathname}`, {
+      ...init,
+      headers,
+    });
     const body = await response.json().catch(() => null);
     return { response, body };
   };
@@ -5485,10 +5504,7 @@ export function createRoutes(
     }
 
     try {
-      const alertStorage = require('../storage/alertStorageDB');
-      const storage = new alertStorage.AlertStorageDB();
-      const success = await storage.closeAlertWithDetails({
-        alertId: id,
+      const closePayload = {
         closureType: normalizedClosureType,
         notes: String(notes).trim(),
         actor: actor || null,
@@ -5498,18 +5514,41 @@ export function createRoutes(
         documentName: documentName || null,
         documentType: documentType || null,
         payload: payload || {}
-      });
+      };
 
-      // Best effort: resolve in-memory alert state too.
+      let dbClosed = false;
+      let memoryClosed = false;
+      let workerClosed = false;
+      let workerError: string | null = null;
+
+      if (isDatabaseEnabled()) {
+        const alertStorage = require('../storage/alertStorageDB');
+        const storage = new alertStorage.AlertStorageDB();
+        dbClosed = await storage.closeAlertWithDetails({
+          alertId: id,
+          ...closePayload
+        });
+      }
+
       try {
         const alertManager = tcpServer.getAlertManager();
-        await alertManager.resolveAlert(id, String(notes).trim(), actor || undefined);
+        memoryClosed = await alertManager.resolveAlert(id, String(notes).trim(), actor || undefined);
       } catch {}
 
-      if (!success) {
+      if (!dbClosed && !memoryClosed && alertWorkerUrl) {
+        const proxied = await proxyAlertWorkerJson(`/api/alerts/${encodeURIComponent(String(id))}/close`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(closePayload),
+        });
+        workerClosed = Boolean(proxied?.response?.ok && proxied?.body?.success);
+        workerError = proxied?.body?.message || proxied?.body?.error || null;
+      }
+
+      if (!dbClosed && !memoryClosed && !workerClosed) {
         return res.status(404).json({
           success: false,
-          message: `Alert ${id} not found`
+          message: workerError || `Alert ${id} not found`
         });
       }
 
