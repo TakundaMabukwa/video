@@ -241,6 +241,28 @@ export function createRoutes(
       metadata
     };
   };
+  const resolveAlertMediaContext = (alert: any) => {
+    if (!alert) return null;
+    const metadata = parseAlertMetadata(alert?.metadata);
+    const vehicleId = String(
+      alert?.device_id ||
+      alert?.vehicleId ||
+      metadata?.vehicle?.vehicleId ||
+      metadata?.vehicle?.terminalPhone ||
+      ''
+    ).trim();
+    const channel = Number(alert?.channel || metadata?.resourceChannel || 1) || 1;
+    const baseTimestamp = parseLooseTimestamp(alert?.timestamp) || new Date();
+    const { timestamp, start, end } = resolveAlertEvidenceWindow(metadata, baseTimestamp);
+    return {
+      vehicleId,
+      channel,
+      metadata,
+      timestamp,
+      start,
+      end
+    };
+  };
   const withAlertMediaLinks = (alert: any) => ({
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
@@ -2839,9 +2861,10 @@ export function createRoutes(
         });
       }
 
-      const vehicleId = String(row.device_id || '');
-      const channel = Number(row.channel || 1);
-      const ts = new Date(row.timestamp);
+      const context = resolveAlertMediaContext(row);
+      const vehicleId = String(context?.vehicleId || '');
+      const channel = Number(context?.channel || 1);
+      const ts = context?.timestamp || new Date(NaN);
       if (!vehicleId || Number.isNaN(ts.getTime())) {
         return res.status(400).json({
           success: false,
@@ -2852,7 +2875,7 @@ export function createRoutes(
       const ensure = await ensureAlertMediaRequested(id, vehicleId, channel, ts, {
         ensureScreenshots,
         ensureVideo,
-        metadata: row.metadata
+        metadata: context?.metadata ?? row.metadata
       });
 
       return res.json({
@@ -4077,28 +4100,29 @@ export function createRoutes(
       }
 
       const linked = await backfillAlertMediaLinks(id, alert);
+      const context = resolveAlertMediaContext(alert);
       const ensureMedia = String(req.query?.ensureMedia ?? 'false').toLowerCase() === 'true';
       let ensureInfo: any = null;
       if (ensureMedia) {
         try {
-          const ts = new Date(alert.timestamp);
+          const ts = context?.timestamp || new Date(NaN);
           if (Number.isFinite(ts.getTime())) {
             ensureInfo = await ensureAlertMediaRequested(
               id,
-              String(alert.device_id),
-              Number(alert.channel || 1),
+              String(context?.vehicleId || alert.device_id),
+              Number(context?.channel || alert.channel || 1),
               ts,
-              { metadata: alert.metadata }
+              { metadata: context?.metadata ?? alert.metadata }
             );
           }
         } catch {}
       }
 
       // Get linked videos from videos table; include fallback near alert time for same vehicle/channels.
-      const alertTs = new Date(alert.timestamp);
-      const fallbackFrom = new Date(alertTs.getTime() - 120 * 1000);
-      const fallbackTo = new Date(alertTs.getTime() + 120 * 1000);
-      const alertChannel = Number(alert.channel || 1);
+      const alertTs = context?.timestamp || new Date(alert.timestamp);
+      const fallbackFrom = new Date((context?.start || new Date(alertTs.getTime() - 120 * 1000)).getTime() - 60 * 1000);
+      const fallbackTo = new Date((context?.end || new Date(alertTs.getTime() + 120 * 1000)).getTime() + 60 * 1000);
+      const alertChannel = Number(context?.channel || alert.channel || 1);
       const videosResult = await db.query(
         `WITH direct AS (
            SELECT id, file_path, storage_url, file_size, start_time, end_time,
@@ -4128,7 +4152,7 @@ export function createRoutes(
            SELECT * FROM fallback
          ) q
          ORDER BY id, start_time ASC`,
-        [id, alert.device_id, fallbackFrom, fallbackTo, alertChannel]
+        [id, String(context?.vehicleId || alert.device_id || ''), fallbackFrom, fallbackTo, alertChannel]
       );
 
       // Extract video paths from metadata
@@ -4249,11 +4273,13 @@ export function createRoutes(
       let vehicleId: string | undefined = inMemoryAlert?.vehicleId;
       let channel: number = Number(inMemoryAlert?.channel ?? 1);
       let alertTimestamp: Date | undefined = inMemoryAlert?.timestamp ? new Date(inMemoryAlert.timestamp) : undefined;
+      let metadata: any = inMemoryAlert?.metadata || null;
+      let resourceWindow: { start?: Date; end?: Date } = {};
 
       if (!vehicleId || Number.isNaN(alertTimestamp?.getTime())) {
         const db = require('../storage/database');
         const dbResult = await db.query(
-          `SELECT id, device_id, channel, timestamp
+          `SELECT id, device_id, channel, timestamp, metadata
            FROM alerts
            WHERE id = $1`,
           [id]
@@ -4267,9 +4293,30 @@ export function createRoutes(
         }
 
         const row = dbResult.rows[0];
-        vehicleId = String(row.device_id);
-        channel = Number(row.channel || 1);
-        alertTimestamp = new Date(row.timestamp);
+        const context = resolveAlertMediaContext(row);
+        vehicleId = String(context?.vehicleId || row.device_id);
+        channel = Number(context?.channel || row.channel || 1);
+        alertTimestamp = context?.timestamp || new Date(row.timestamp);
+        metadata = context?.metadata ?? row.metadata ?? null;
+        resourceWindow = {
+          start: context?.start,
+          end: context?.end
+        };
+      } else if (inMemoryAlert) {
+        const context = resolveAlertMediaContext({
+          device_id: vehicleId,
+          channel,
+          timestamp: alertTimestamp,
+          metadata
+        });
+        vehicleId = String(context?.vehicleId || vehicleId);
+        channel = Number(context?.channel || channel || 1);
+        alertTimestamp = context?.timestamp || alertTimestamp;
+        metadata = context?.metadata ?? metadata;
+        resourceWindow = {
+          start: context?.start,
+          end: context?.end
+        };
       }
 
       if (!vehicleId || Number.isNaN(alertTimestamp!.getTime())) {
@@ -4279,8 +4326,8 @@ export function createRoutes(
         });
       }
 
-      const startTime = new Date(alertTimestamp!.getTime() - lookbackSeconds * 1000);
-      const endTime = new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
+      const startTime = resourceWindow.start || new Date(alertTimestamp!.getTime() - lookbackSeconds * 1000);
+      const endTime = resourceWindow.end || new Date(alertTimestamp!.getTime() + forwardSeconds * 1000);
 
       const targetChannels = getVehicleChannels(vehicleId, channel);
       const storedWindowSeconds = Math.max(30, lookbackSeconds + forwardSeconds + 2);
