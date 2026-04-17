@@ -1644,7 +1644,7 @@ export function createRoutes(
   // Start live video for a vehicle
   router.post('/vehicles/:id/start-live', (req, res) => {
     const { id } = req.params;
-    const { channel = 2 } = req.body;
+    const { channel = 1 } = req.body;
     const targetChannels = getVehicleChannels(id, Number(channel));
 
     console.log(`API: start-live called for vehicle ${id}, requested channel ${channel}, targets ${targetChannels.join(',')}`);
