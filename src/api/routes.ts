@@ -2231,6 +2231,22 @@ export function createRoutes(
   // Get alerts
   router.get('/alerts', async (req, res) => {
     try {
+      if (alertWorkerUrl && !isDatabaseEnabled()) {
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(req.query || {})) {
+          if (value === undefined || value === null) continue;
+          if (Array.isArray(value)) {
+            for (const item of value) search.append(key, String(item));
+          } else {
+            search.set(key, String(value));
+          }
+        }
+        const proxied = await proxyAlertWorkerJson(`/api/alerts${search.toString() ? `?${search.toString()}` : ''}`);
+        if (proxied) {
+          return res.status(proxied.response.status).json(proxied.body);
+        }
+      }
+
       const alertManager = tcpServer.getAlertManager();
       const status = String(req.query.status || '').trim();
       const priority = String(req.query.priority || '').trim();
@@ -2416,6 +2432,22 @@ export function createRoutes(
   // Get active alerts
   router.get('/alerts/active', async (req, res) => {
     try {
+      if (alertWorkerUrl && !isDatabaseEnabled()) {
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(req.query || {})) {
+          if (value === undefined || value === null) continue;
+          if (Array.isArray(value)) {
+            for (const item of value) search.append(key, String(item));
+          } else {
+            search.set(key, String(value));
+          }
+        }
+        const proxied = await proxyAlertWorkerJson(`/api/alerts/active${search.toString() ? `?${search.toString()}` : ''}`);
+        if (proxied) {
+          return res.status(proxied.response.status).json(proxied.body);
+        }
+      }
+
       const alertManager = tcpServer.getAlertManager();
       const limit = toNumericLimit(req.query.limit, 50);
       const hasMinutesFilter = req.query.minutes !== undefined && req.query.minutes !== null && String(req.query.minutes).trim() !== '';
@@ -2654,6 +2686,22 @@ export function createRoutes(
   // Get alert history
   router.get('/alerts/history', async (req, res) => {
     try {
+      if (alertWorkerUrl && !isDatabaseEnabled()) {
+        const search = new URLSearchParams();
+        for (const [key, value] of Object.entries(req.query || {})) {
+          if (value === undefined || value === null) continue;
+          if (Array.isArray(value)) {
+            for (const item of value) search.append(key, String(item));
+          } else {
+            search.set(key, String(value));
+          }
+        }
+        const proxied = await proxyAlertWorkerJson(`/api/alerts/history${search.toString() ? `?${search.toString()}` : ''}`);
+        if (proxied) {
+          return res.status(proxied.response.status).json(proxied.body);
+        }
+      }
+
       const { device_id, days = 7 } = req.query;
       const limit = toNumericLimit(req.query.limit, 100, 1, 1000);
       let query = `SELECT * FROM alerts WHERE COALESCE(last_occurrence, timestamp) > NOW() - INTERVAL '${days} days'`;
