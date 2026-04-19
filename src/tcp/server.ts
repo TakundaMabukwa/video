@@ -3646,6 +3646,7 @@ export class JTT808Server {
     }
 
     const serverIp = process.env.SERVER_IP || socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
+    const preferredStreamType = Number(process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE ?? 0) === 1 ? 1 : 0;
     
     const serial = this.getNextSerial();
     const command = JTT1078Commands.buildStartVideoCommand(
@@ -3656,10 +3657,10 @@ export class JTT808Server {
       this.udpPort,   // UDP port for RTP video stream
       channel,
       1,              // 1 = Video only
-      1               // 1 = Sub stream (lower bitrate, faster)
+      preferredStreamType
     );
     
-    console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}`);
+    console.log(`📡 Sending 0x9101: ServerIP=${serverIp}, TCP=${this.port}, UDP=${this.udpPort}, Channel=${channel}, Stream=${preferredStreamType === 0 ? 'MAIN' : 'SUB'}`);
     socket.write(command);
     this.lastStartVideoAt.set(this.getVideoStreamKey(vehicleId, channel), Date.now());
     this.pushOutboundMessageTrace(vehicleId, 0x9101, serial, command, command.slice(12, -2), {
@@ -3682,16 +3683,19 @@ export class JTT808Server {
       return false;
     }
 
+    const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || 3) || 3));
+    const frameRate = Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || 25) || 25));
+    const bitrate = Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || 2048) || 2048));
     const command = JTT1078Commands.buildSetVideoParametersCommand(
       vehicleId,
       this.getNextSerial(),
       channel,
-      1,    // CIF (352x288)
-      15,   // 15 fps
-      512   // 512 kbps
+      resolution,
+      frameRate,
+      bitrate
     );
     
-    console.log(`⚡ Optimizing camera: ${vehicleId} ch${channel} -> CIF/15fps/512kbps`);
+    console.log(`⚡ Optimizing camera: ${vehicleId} ch${channel} -> res=${resolution}, fps=${frameRate}, bitrate=${bitrate}kbps`);
     socket.write(command);
     return true;
   }

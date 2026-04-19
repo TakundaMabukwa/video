@@ -23,6 +23,16 @@ export function createRoutes(
   tcpRTPHandler?: TCPRTPHandler
 ): express.Router {
   const router = express.Router();
+  const videoResolutionLabel = (resolution: number): string => {
+    switch (resolution) {
+      case 0: return 'QCIF (176x144)';
+      case 1: return 'CIF (352x288)';
+      case 2: return 'WCIF';
+      case 3: return 'D1';
+      case 4: return 'WD1';
+      default: return `Mode ${resolution}`;
+    }
+  };
   const alertWorkerUrl = String(process.env.ALERT_WORKER_URL || '').trim().replace(/\/+$/, '');
   const videoWorkerUrl = String(process.env.VIDEO_WORKER_URL || '').trim().replace(/\/+$/, '');
   const internalWorkerToken = String(process.env.INTERNAL_WORKER_TOKEN || '').trim();
@@ -1702,16 +1712,19 @@ export function createRoutes(
     const { channel = 2 } = req.body;
 
     const success = tcpServer.optimizeVideoParameters(id, channel);
+    const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || 3) || 3));
+    const frameRate = Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || 25) || 25));
+    const bitrate = Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || 2048) || 2048));
 
     if (success) {
       res.json({
         success: true,
         message: `Camera optimized for ${id} channel ${channel}`,
         settings: {
-          resolution: 'CIF (352x288)',
-          frameRate: '15 fps',
-          bitrate: '512 kbps',
-          speedup: '3-5x faster'
+          resolution: videoResolutionLabel(resolution),
+          frameRate: `${frameRate} fps`,
+          bitrate: `${bitrate} kbps`,
+          streamType: Number(process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE ?? 0) === 1 ? 'sub' : 'main'
         }
       });
     } else {
