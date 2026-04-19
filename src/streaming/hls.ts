@@ -5,6 +5,7 @@ import { spawn, ChildProcess } from 'child_process';
 export class HLSStreamer {
   private hlsDir = path.join(process.cwd(), 'hls');
   private ffmpegProcesses = new Map<string, ChildProcess>();
+  private waitingForKeyframe = new Set<string>();
   private readonly hlsSegmentSeconds = Math.max(1, Number(process.env.HLS_SEGMENT_SECONDS || 2));
   private readonly hlsListSize = Math.max(3, Number(process.env.HLS_LIST_SIZE || 4));
   private readonly hlsOutputFps = Math.max(10, Number(process.env.HLS_OUTPUT_FPS || 20));
@@ -107,10 +108,11 @@ export class HLSStreamer {
     });
 
     this.ffmpegProcesses.set(streamKey, ffmpeg);
+    this.waitingForKeyframe.add(streamKey);
     console.log(`FFmpeg process started: ${streamKey}`);
   }
 
-  writeFrame(vehicleId: string, channel: number, frame: Buffer): void {
+  writeFrame(vehicleId: string, channel: number, frame: Buffer, isKeyframe = false): void {
     const streamKey = `${vehicleId}_${channel}`;
     const ffmpeg = this.ffmpegProcesses.get(streamKey);
 
@@ -129,6 +131,14 @@ export class HLSStreamer {
       return;
     }
 
+    if (this.waitingForKeyframe.has(streamKey)) {
+      if (!isKeyframe) {
+        return;
+      }
+      this.waitingForKeyframe.delete(streamKey);
+      console.log(`HLS stream locked to first keyframe: ${streamKey}`);
+    }
+
     const written = ffmpeg.stdin.write(frame);
     if (!written) {
       console.warn(`FFmpeg stdin buffer full for ${streamKey}`);
@@ -143,6 +153,7 @@ export class HLSStreamer {
       ffmpeg.kill();
       this.ffmpegProcesses.delete(streamKey);
     }
+    this.waitingForKeyframe.delete(streamKey);
   }
 
   getPlaylistPath(vehicleId: string, channel: number): string {

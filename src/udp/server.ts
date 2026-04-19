@@ -135,7 +135,7 @@ export class UDPRTPServer {
         this.onFrameCallback(vehicleId, header.channelNumber, completeFrame, isIFrame);
       }
       
-      this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame);
+      this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame, isIFrame);
       this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame);
     }
   }

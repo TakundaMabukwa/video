@@ -103,7 +103,7 @@ export class TCPRTPHandler {
       this.onFrameCallback(vehicleId, header.channelNumber, completeFrame, isIFrame);
     }
 
-    this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame);
+    this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame, isIFrame);
     this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame);
 
     if (this.frameCount === 1) {
