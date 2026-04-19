@@ -217,6 +217,33 @@ export class JTT808Server {
   );
   private noisyLogGate = new Map<string, number>();
 
+  private getVideoRequestProfile(): 'legacy' | 'main' {
+    const raw = String(process.env.VIDEO_REQUEST_PROFILE || '').trim().toLowerCase();
+    if (raw === 'main' || raw === 'high') return 'main';
+    return 'legacy';
+  }
+
+  private getPreferredStreamType(): 0 | 1 {
+    const explicit = process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE;
+    if (explicit !== undefined && explicit !== null && String(explicit).trim() !== '') {
+      return Number(explicit) === 1 ? 1 : 0;
+    }
+    return this.getVideoRequestProfile() === 'main' ? 0 : 1;
+  }
+
+  private getOptimizedVideoParameters(): { resolution: number; frameRate: number; bitrate: number } {
+    const profile = this.getVideoRequestProfile();
+    const defaultResolution = profile === 'main' ? 3 : 1;
+    const defaultFrameRate = profile === 'main' ? 25 : 15;
+    const defaultBitrate = profile === 'main' ? 2048 : 512;
+
+    return {
+      resolution: Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || defaultResolution) || defaultResolution)),
+      frameRate: Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || defaultFrameRate) || defaultFrameRate)),
+      bitrate: Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || defaultBitrate) || defaultBitrate)),
+    };
+  }
+
   private getNextSerial(): number {
     this.serialCounter = (this.serialCounter % 65535) + 1;
     return this.serialCounter;
@@ -3646,7 +3673,7 @@ export class JTT808Server {
     }
 
     const serverIp = process.env.SERVER_IP || socket.localAddress?.replace('::ffff:', '') || '0.0.0.0';
-    const preferredStreamType = Number(process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE ?? 0) === 1 ? 1 : 0;
+    const preferredStreamType = this.getPreferredStreamType();
     
     const serial = this.getNextSerial();
     const command = JTT1078Commands.buildStartVideoCommand(
@@ -3683,9 +3710,7 @@ export class JTT808Server {
       return false;
     }
 
-    const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || 3) || 3));
-    const frameRate = Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || 25) || 25));
-    const bitrate = Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || 2048) || 2048));
+    const { resolution, frameRate, bitrate } = this.getOptimizedVideoParameters();
     const command = JTT1078Commands.buildSetVideoParametersCommand(
       vehicleId,
       this.getNextSerial(),

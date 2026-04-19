@@ -23,6 +23,19 @@ export function createRoutes(
   tcpRTPHandler?: TCPRTPHandler
 ): express.Router {
   const router = express.Router();
+  const videoRequestProfile = (() => {
+    const raw = String(process.env.VIDEO_REQUEST_PROFILE || '').trim().toLowerCase();
+    return raw === 'main' || raw === 'high' ? 'main' : 'legacy';
+  })();
+  const defaultVideoResolution = videoRequestProfile === 'main' ? 3 : 1;
+  const defaultVideoFrameRate = videoRequestProfile === 'main' ? 25 : 15;
+  const defaultVideoBitrate = videoRequestProfile === 'main' ? 2048 : 512;
+  const preferredVideoStreamType =
+    Number(
+      (process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE ?? (videoRequestProfile === 'main' ? 0 : 1))
+    ) === 1
+      ? 1
+      : 0;
   const videoResolutionLabel = (resolution: number): string => {
     switch (resolution) {
       case 0: return 'QCIF (176x144)';
@@ -1712,9 +1725,9 @@ export function createRoutes(
     const { channel = 1 } = req.body;
 
     const success = tcpServer.optimizeVideoParameters(id, channel);
-    const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || 3) || 3));
-    const frameRate = Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || 25) || 25));
-    const bitrate = Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || 2048) || 2048));
+    const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || defaultVideoResolution) || defaultVideoResolution));
+    const frameRate = Math.max(10, Math.min(30, Number(process.env.VIDEO_REQUEST_FRAME_RATE || process.env.VIDEO_FRAME_RATE || defaultVideoFrameRate) || defaultVideoFrameRate));
+    const bitrate = Math.max(256, Math.min(8192, Number(process.env.VIDEO_REQUEST_BITRATE_KBPS || process.env.VIDEO_BITRATE_KBPS || defaultVideoBitrate) || defaultVideoBitrate));
 
     if (success) {
       res.json({
@@ -1724,7 +1737,7 @@ export function createRoutes(
           resolution: videoResolutionLabel(resolution),
           frameRate: `${frameRate} fps`,
           bitrate: `${bitrate} kbps`,
-          streamType: Number(process.env.VIDEO_REQUEST_STREAM_TYPE ?? process.env.VIDEO_STREAM_TYPE ?? 0) === 1 ? 'sub' : 'main'
+          streamType: preferredVideoStreamType === 1 ? 'sub' : 'main'
         }
       });
     } else {
