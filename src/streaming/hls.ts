@@ -16,7 +16,10 @@ export class HLSStreamer {
   private readonly hlsLevel = String(process.env.HLS_X264_LEVEL || '4.0').trim() || '4.0';
   private readonly hlsMaxRate = String(process.env.HLS_MAX_RATE || '3000k').trim() || '3000k';
   private readonly hlsBufSize = String(process.env.HLS_BUF_SIZE || '6000k').trim() || '6000k';
-  private readonly hlsVideoMode = String(process.env.HLS_VIDEO_MODE || 'copy').trim().toLowerCase();
+  private readonly hlsVideoMode = String(process.env.HLS_VIDEO_MODE || 'legacy').trim().toLowerCase();
+  private readonly waitForKeyframeOnStart = ['1', 'true', 'yes', 'on'].includes(
+    String(process.env.HLS_WAIT_FOR_KEYFRAME || (this.hlsVideoMode === 'reencode' ? 'true' : 'false')).trim().toLowerCase()
+  );
 
   constructor() {
     if (!fs.existsSync(this.hlsDir)) {
@@ -90,6 +93,7 @@ export class HLSStreamer {
           '-hide_banner',
           '-loglevel', 'warning',
           '-y',
+          '-re',
           '-f', 'h264',
           '-fflags', '+nobuffer+fastseek+flush_packets',
           '-flags', 'low_delay',
@@ -98,7 +102,7 @@ export class HLSStreamer {
           '-max_delay', '0',
           '-i', 'pipe:0',
           '-c:v', 'copy',
-          '-an',
+          '-c:a', 'copy',
           '-copyts',
           '-start_at_zero',
           '-avoid_negative_ts', 'make_zero',
@@ -142,7 +146,9 @@ export class HLSStreamer {
     });
 
     this.ffmpegProcesses.set(streamKey, ffmpeg);
-    this.waitingForKeyframe.add(streamKey);
+    if (this.waitForKeyframeOnStart) {
+      this.waitingForKeyframe.add(streamKey);
+    }
     console.log(`FFmpeg process started: ${streamKey}`);
   }
 
@@ -165,7 +171,7 @@ export class HLSStreamer {
       return;
     }
 
-    if (this.waitingForKeyframe.has(streamKey)) {
+    if (this.waitForKeyframeOnStart && this.waitingForKeyframe.has(streamKey)) {
       if (!isKeyframe) {
         return;
       }
