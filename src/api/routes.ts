@@ -1709,7 +1709,7 @@ export function createRoutes(
   // Optimize camera video parameters
   router.post('/vehicles/:id/optimize-video', (req, res) => {
     const { id } = req.params;
-    const { channel = 2 } = req.body;
+    const { channel = 1 } = req.body;
 
     const success = tcpServer.optimizeVideoParameters(id, channel);
     const resolution = Math.max(0, Math.min(4, Number(process.env.VIDEO_REQUEST_RESOLUTION || process.env.VIDEO_RESOLUTION || 3) || 3));
@@ -1807,7 +1807,7 @@ export function createRoutes(
   // Stop live video for a vehicle
   router.post('/vehicles/:id/stop-live', (req, res) => {
     const { id } = req.params;
-    const { channel = 2 } = req.body;
+    const { channel = 1 } = req.body;
 
     const success = tcpServer.stopVideo(id, channel);
     udpServer.stopStream(id, channel);
@@ -2117,7 +2117,7 @@ export function createRoutes(
   // Get stream info for a vehicle
   router.get('/vehicles/:id/stream-info', (req, res) => {
     const { id } = req.params;
-    const { channel = 2 } = req.query;
+    const { channel = 1 } = req.query;
 
     const vehicle = tcpServer.getVehicle(id);
     const streamInfo = udpServer.getStreamInfo(id, Number(channel));
