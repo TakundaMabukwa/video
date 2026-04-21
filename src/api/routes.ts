@@ -5932,6 +5932,67 @@ export function createRoutes(
   });
 
   // Get driver rating
+  router.get('/drivers/standings', async (req, res) => {
+    if (!isDatabaseEnabled()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database is disabled'
+      });
+    }
+
+    const limitRaw = Number(req.query.limit);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0
+      ? Math.min(Math.floor(limitRaw), 500)
+      : 250;
+
+    try {
+      const result = await dbQuery(
+        `SELECT
+            vehicle_id,
+            device_id,
+            display_name,
+            registration_number,
+            fleet_number,
+            violations,
+            current_points,
+            rating,
+            risk_score,
+            risk_category,
+            performance_level,
+            fatigue_score,
+            seatbelt_score,
+            lane_deviation_score,
+            possible_fatigue_score,
+            speeding_score,
+            fatigue_alerts,
+            seatbelt_alerts,
+            lane_deviation_alerts,
+            possible_fatigue_alerts,
+            speeding_alerts,
+            ncr_total,
+            ncr_open,
+            last_alert_at
+         FROM vehicle_driver_card_standings_mtd
+         ORDER BY current_points DESC, violations ASC, display_name ASC
+         LIMIT $1`,
+        [limit]
+      );
+
+      res.json({
+        success: true,
+        period: 'month_to_date',
+        total: result.rows.length,
+        data: result.rows
+      });
+    } catch (error) {
+      console.error('Failed to fetch driver standings:', error);
+      res.status(500).json({
+        success: false,
+        message: 'Failed to fetch driver standings'
+      });
+    }
+  });
+
   router.get('/drivers/:driverId/rating', async (req, res) => {
     const { driverId } = req.params;
 
