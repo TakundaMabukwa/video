@@ -20,7 +20,7 @@
 
 // async function startServer() {
 //   console.log('Starting JT/T 1078 Video Ingestion Server...');
-  
+
 //   try {
 //     await pool.query('SELECT NOW()');
 //     console.log('✅ Database connected successfully');
@@ -28,35 +28,35 @@
 //     console.error('❌ Database connection failed:', error);
 //     process.exit(1);
 //   }
-  
+
 //   const app = express();
 //   app.use(express.json());
 //   app.use(express.static('public'));
-  
+
 //   const httpServer = createServer(app);
-  
+
 //   // Initialize data WebSocket on same HTTP server
 //   const dataWsServer = new DataWebSocketServer(httpServer, '/ws/data');
-  
+
 //   const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
 //   const udpServer = new UDPRTPServer(UDP_PORT);
 //   const tcpRTPHandler = new TCPRTPHandler();
-  
+
 //   const alertManager = tcpServer.getAlertManager();
 //   udpServer.setAlertManager(alertManager);
-  
+
 //   tcpServer.setRTPHandler((buffer, vehicleId) => {
 //     console.log(`📦 RTP: ${buffer.length} bytes from ${vehicleId}`);
 //     tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
 //     dataWsServer.broadcast({ type: 'rtp', vehicleId, data: buffer.toString('base64'), size: buffer.length });
 //   });
-  
+
 //   await tcpServer.start();
 //   await udpServer.start();
-  
+
 //   app.use('/api', createRoutes(tcpServer, udpServer));
 //   app.use('/api/alerts', createAlertRoutes());
-  
+
 //   app.get('/health', (req, res) => {
 //     res.json({
 //       status: 'healthy',
@@ -68,16 +68,16 @@
 //       }
 //     });
 //   });
-  
+
 //   new AlertWebSocketServer(httpServer, alertManager);
-  
+
 //   httpServer.listen(API_PORT, () => {
 //     console.log(`\n✅ REST API: http://localhost:${API_PORT}`);
 //     console.log(`✅ Alert WS: ws://localhost:${API_PORT}/ws/alerts`);
 //     console.log(`✅ Data WS: ws://localhost:${API_PORT}/ws/data`);
 //     console.log(`✅ TCP: ${TCP_PORT} | UDP: ${UDP_PORT}\n`);
 //   });
-  
+
 //   process.on('SIGINT', () => {
 //     console.log('\nShutting down...');
 //     process.exit(0);
@@ -89,125 +89,151 @@
 //   process.exit(1);
 // });
 
+import express from 'express'
+import cors from 'cors'
+import { createServer } from 'http'
+import { JTT808Server } from './tcp/server'
+import { UDPRTPServer } from './udp/server'
+import { TCPRTPHandler } from './tcp/rtpHandler'
+import { createRoutes } from './api/routes'
+import { createAlertRoutes } from './api/alertRoutes'
+import { AlertWebSocketServer } from './api/websocket'
+import { DataWebSocketServer } from './api/dataWebsocket'
+import { ProtocolWebSocketServer } from './api/protocolWebsocket'
+import { createInternalRoutes } from './api/internalRoutes'
+import { ForwardingAlertManager } from './alerts/forwardingAlertManager'
+import { LiveVideoStreamServer } from './streaming/liveStream'
+import { RawStreamServer } from './streaming/rawStream'
+import { SSEVideoStream } from './streaming/sseStream'
+import { ReplayService } from './streaming/replay'
+import { WorkerForwarder } from './services/workerForwarder'
+import { RetentionService } from './storage/retentionService'
+import pool, { ensureRuntimeSchema } from './storage/database'
+import * as dotenv from 'dotenv'
 
-
-import express from 'express';
-import cors from 'cors';
-import { createServer } from 'http';
-import { JTT808Server } from './tcp/server';
-import { UDPRTPServer } from './udp/server';
-import { TCPRTPHandler } from './tcp/rtpHandler';
-import { createRoutes } from './api/routes';
-import { createAlertRoutes } from './api/alertRoutes';
-import { AlertWebSocketServer } from './api/websocket';
-import { DataWebSocketServer } from './api/dataWebsocket';
-import { ProtocolWebSocketServer } from './api/protocolWebsocket';
-import { createInternalRoutes } from './api/internalRoutes';
-import { ForwardingAlertManager } from './alerts/forwardingAlertManager';
-import { LiveVideoStreamServer } from './streaming/liveStream';
-import { SSEVideoStream } from './streaming/sseStream';
-import { ReplayService } from './streaming/replay';
-import { WorkerForwarder } from './services/workerForwarder';
-import { RetentionService } from './storage/retentionService';
-import pool, { ensureRuntimeSchema } from './storage/database';
-import * as dotenv from 'dotenv';
-
-dotenv.config();
+dotenv.config()
 
 function envFlag(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (typeof raw !== 'string' || !raw.trim()) return fallback;
-  const normalized = raw.trim().toLowerCase();
-  return ['1', 'true', 'yes', 'on'].includes(normalized);
+  const raw = process.env[name]
+  if (typeof raw !== 'string' || !raw.trim()) return fallback
+  const normalized = raw.trim().toLowerCase()
+  return ['1', 'true', 'yes', 'on'].includes(normalized)
 }
 
 function buildCorsOriginConfig(): true | string[] {
-  const raw = String(process.env.CORS_ORIGIN || '*').trim();
-  if (!raw || raw === '*') return true;
+  const raw = String(process.env.CORS_ORIGIN || '*').trim()
+  if (!raw || raw === '*') return true
   return raw
     .split(',')
     .map((item) => item.trim())
-    .filter(Boolean);
+    .filter(Boolean)
 }
 
 // Raw-only logging mode:
 // - keeps raw ingest persisted via RawIngestLogger
 // - suppresses noisy runtime console logs
-const RAW_LOG_ONLY = String(process.env.RAW_LOG_ONLY ?? 'true').toLowerCase() !== 'false';
+const RAW_LOG_ONLY =
+  String(process.env.RAW_LOG_ONLY ?? 'true').toLowerCase() !== 'false'
 if (RAW_LOG_ONLY) {
-  console.log = () => {};
-  console.info = () => {};
-  console.debug = () => {};
+  console.log = () => {}
+  console.info = () => {}
+  console.debug = () => {}
 }
 
-const TCP_PORT = parseInt(process.env.TCP_PORT || '7611');
-const UDP_PORT = parseInt(process.env.UDP_PORT || '6611');
-const API_PORT = parseInt(process.env.API_PORT || '3000');
-const SERVER_IP = process.env.SERVER_IP || 'localhost';
-const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000');
-const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600');
-const AUTO_SCREENSHOT_WARMUP_MS = parseInt(process.env.AUTO_SCREENSHOT_WARMUP_MS || '1500');
-const AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS = parseInt(process.env.AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS || '1500');
-const AUTO_SCREENSHOT_RETRY_DELAY_MS = parseInt(process.env.AUTO_SCREENSHOT_RETRY_DELAY_MS || '5000');
-const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true);
-const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true);
-const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true);
-const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED);
-const SHOULD_USE_DB = DB_ENABLED;
-const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED;
-const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED;
-const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag('AUTO_SCREENSHOT_FANOUT_ENABLED', VIDEO_PROCESSING_ENABLED);
-const BACKGROUND_STREAM_INTERVAL_MS = parseInt(process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000');
-const BACKGROUND_STREAM_STALE_MS = parseInt(process.env.BACKGROUND_STREAM_STALE_MS || '30000');
+const TCP_PORT = parseInt(process.env.TCP_PORT || '7611')
+const UDP_PORT = parseInt(process.env.UDP_PORT || '6611')
+const API_PORT = parseInt(process.env.API_PORT || '3000')
+const SERVER_IP = process.env.SERVER_IP || 'localhost'
+const AUTO_SCREENSHOT_INTERVAL_MS = parseInt(
+  process.env.AUTO_SCREENSHOT_INTERVAL_MS || '30000',
+)
+const AUTO_SCREENSHOT_FALLBACK_DELAY_MS = parseInt(
+  process.env.AUTO_SCREENSHOT_FALLBACK_DELAY_MS || '600',
+)
+const AUTO_SCREENSHOT_WARMUP_MS = parseInt(
+  process.env.AUTO_SCREENSHOT_WARMUP_MS || '1500',
+)
+const AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS = parseInt(
+  process.env.AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS || '1500',
+)
+const AUTO_SCREENSHOT_RETRY_DELAY_MS = parseInt(
+  process.env.AUTO_SCREENSHOT_RETRY_DELAY_MS || '5000',
+)
+const INGRESS_ENABLED = envFlag('INGRESS_ENABLED', true)
+const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true)
+const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true)
+const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED)
+const SHOULD_USE_DB = DB_ENABLED
+const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED
+const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED
+const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag(
+  'AUTO_SCREENSHOT_FANOUT_ENABLED',
+  VIDEO_PROCESSING_ENABLED,
+)
+const BACKGROUND_STREAM_INTERVAL_MS = parseInt(
+  process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000',
+)
+const BACKGROUND_STREAM_STALE_MS = parseInt(
+  process.env.BACKGROUND_STREAM_STALE_MS || '30000',
+)
 const BACKGROUND_STREAM_DEFAULT_CHANNELS = String(
-  process.env.BACKGROUND_STREAM_DEFAULT_CHANNELS || '1,2'
+  process.env.BACKGROUND_STREAM_DEFAULT_CHANNELS || '1,2',
 )
   .split(',')
   .map((value) => Number(String(value || '').trim()))
-  .filter((value, index, arr) => Number.isFinite(value) && value > 0 && arr.indexOf(value) === index);
-const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || '';
-const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || '';
-const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || '';
-const INTERNAL_WORKER_TOKEN = process.env.INTERNAL_WORKER_TOKEN || '';
-const WORKER_FORWARD_TIMEOUT_MS = parseInt(process.env.WORKER_FORWARD_TIMEOUT_MS || '15000');
-const WORKER_FORWARD_FAILURE_THRESHOLD = parseInt(process.env.WORKER_FORWARD_FAILURE_THRESHOLD || '5');
-const WORKER_FORWARD_RECOVERY_COOLDOWN_MS = parseInt(process.env.WORKER_FORWARD_RECOVERY_COOLDOWN_MS || '300000');
-const ALERT_WORKER_RECOVERY_COMMAND = process.env.ALERT_WORKER_RECOVERY_COMMAND || '';
-const VIDEO_WORKER_RECOVERY_COMMAND = process.env.VIDEO_WORKER_RECOVERY_COMMAND || '';
-const LISTENER_SERVER_RECOVERY_COMMAND = process.env.LISTENER_SERVER_RECOVERY_COMMAND || '';
+  .filter(
+    (value, index, arr) =>
+      Number.isFinite(value) && value > 0 && arr.indexOf(value) === index,
+  )
+const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || ''
+const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || ''
+const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || ''
+const INTERNAL_WORKER_TOKEN = process.env.INTERNAL_WORKER_TOKEN || ''
+const WORKER_FORWARD_TIMEOUT_MS = parseInt(
+  process.env.WORKER_FORWARD_TIMEOUT_MS || '15000',
+)
+const WORKER_FORWARD_FAILURE_THRESHOLD = parseInt(
+  process.env.WORKER_FORWARD_FAILURE_THRESHOLD || '5',
+)
+const WORKER_FORWARD_RECOVERY_COOLDOWN_MS = parseInt(
+  process.env.WORKER_FORWARD_RECOVERY_COOLDOWN_MS || '300000',
+)
+const ALERT_WORKER_RECOVERY_COMMAND =
+  process.env.ALERT_WORKER_RECOVERY_COMMAND || ''
+const VIDEO_WORKER_RECOVERY_COMMAND =
+  process.env.VIDEO_WORKER_RECOVERY_COMMAND || ''
+const LISTENER_SERVER_RECOVERY_COMMAND =
+  process.env.LISTENER_SERVER_RECOVERY_COMMAND || ''
 const MESSAGE_TRACE_ENABLED = envFlag(
   'MESSAGE_TRACE_ENABLED',
-  INGRESS_ENABLED && (ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED)
-);
-const DATA_WS_ENABLED = envFlag(
-  'DATA_WS_ENABLED',
-  MESSAGE_TRACE_ENABLED
-);
+  INGRESS_ENABLED && (ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED),
+)
+const DATA_WS_ENABLED = envFlag('DATA_WS_ENABLED', MESSAGE_TRACE_ENABLED)
 const PROTOCOL_WS_ENABLED = envFlag(
   'PROTOCOL_WS_ENABLED',
-  MESSAGE_TRACE_ENABLED
-);
+  MESSAGE_TRACE_ENABLED,
+)
 
 async function startServer() {
-  console.log('Starting JT/T 1078 Video Ingestion Server...');
-  
+  console.log('Starting JT/T 1078 Video Ingestion Server...')
+
   if (SHOULD_USE_DB) {
     try {
-      await pool.query('SELECT NOW()');
-      await ensureRuntimeSchema();
-      console.log('Database connected successfully');
+      await pool.query('SELECT NOW()')
+      await ensureRuntimeSchema()
+      console.log('Database connected successfully')
     } catch (error) {
-      console.error('Database connection failed:', error);
-      process.exit(1);
+      console.error('Database connection failed:', error)
+      process.exit(1)
     }
   } else {
-    console.log('Database startup checks skipped for listener-only mode');
+    console.log('Database startup checks skipped for listener-only mode')
   }
-  
-  const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT);
-  const udpServer = new UDPRTPServer(UDP_PORT);
-  const tcpRTPHandler = new TCPRTPHandler();
-  const retentionService = new RetentionService();
+
+  const tcpServer = new JTT808Server(TCP_PORT, UDP_PORT)
+  const udpServer = new UDPRTPServer(UDP_PORT)
+  const tcpRTPHandler = new TCPRTPHandler()
+  const retentionService = new RetentionService()
   const workerForwarder = new WorkerForwarder({
     alertWorkerUrl: ALERT_WORKER_URL,
     videoWorkerUrl: VIDEO_WORKER_URL,
@@ -218,155 +244,194 @@ async function startServer() {
     recoveryCooldownMs: WORKER_FORWARD_RECOVERY_COOLDOWN_MS,
     alertWorkerRecoveryCommand: ALERT_WORKER_RECOVERY_COMMAND,
     videoWorkerRecoveryCommand: VIDEO_WORKER_RECOVERY_COMMAND,
-    listenerServerRecoveryCommand: LISTENER_SERVER_RECOVERY_COMMAND
-  });
-  
-  let alertManager = tcpServer.getAlertManager();
+    listenerServerRecoveryCommand: LISTENER_SERVER_RECOVERY_COMMAND,
+  })
+
+  let alertManager = tcpServer.getAlertManager()
   if (!ALERT_PROCESSING_ENABLED && workerForwarder.hasAlertWorker()) {
-    alertManager = new ForwardingAlertManager(workerForwarder);
-    tcpServer.setAlertManager(alertManager);
+    alertManager = new ForwardingAlertManager(workerForwarder)
+    tcpServer.setAlertManager(alertManager)
   }
   if (INGRESS_ENABLED && ALERT_PROCESSING_ENABLED) {
-    tcpServer.attachAlertCommandBridge(alertManager);
+    tcpServer.attachAlertCommandBridge(alertManager)
   }
-  if (!INGRESS_ENABLED && ALERT_PROCESSING_ENABLED && workerForwarder.hasListenerServer()) {
+  if (
+    !INGRESS_ENABLED &&
+    ALERT_PROCESSING_ENABLED &&
+    workerForwarder.hasListenerServer()
+  ) {
     alertManager.on('request-screenshot', ({ vehicleId, channel, alertId }) => {
-      void workerForwarder.requestScreenshot(vehicleId, channel, alertId);
-    });
-    alertManager.on('request-camera-video', ({ vehicleId, channel, startTime, endTime, alertId }) => {
-      void workerForwarder.requestCameraVideo(vehicleId, channel, new Date(startTime), new Date(endTime), alertId);
-    });
+      void workerForwarder.requestScreenshot(vehicleId, channel, alertId)
+    })
+    alertManager.on(
+      'request-camera-video',
+      ({ vehicleId, channel, startTime, endTime, alertId }) => {
+        void workerForwarder.requestCameraVideo(
+          vehicleId,
+          channel,
+          new Date(startTime),
+          new Date(endTime),
+          alertId,
+        )
+      },
+    )
   }
-  udpServer.setAlertManager(alertManager);
-  udpServer.setVehicleIdResolver((ipAddress) => tcpServer.resolveVehicleIdByIp(ipAddress));
+  udpServer.setAlertManager(alertManager)
+  udpServer.setVehicleIdResolver((ipAddress) =>
+    tcpServer.resolveVehicleIdByIp(ipAddress),
+  )
   if (VIDEO_PROCESSING_ENABLED) {
-    tcpRTPHandler.setAlertManager(alertManager);
+    tcpRTPHandler.setAlertManager(alertManager)
   }
-  
-  const app = express();
-  
+
+  const app = express()
+
   // Enable CORS for Next.js frontend
-  app.use(cors({
-    origin: buildCorsOriginConfig(),
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
-  }));
-  
-  app.use(express.json());
-  app.use(express.static('public'));
-  app.use('/hls', express.static('hls'));
-  
-  const httpServer = createServer(app);
-  const dataWsServer = INGRESS_ENABLED && DATA_WS_ENABLED ? new DataWebSocketServer('/ws/data') : null;
-  const protocolWsServer = INGRESS_ENABLED && PROTOCOL_WS_ENABLED
-    ? new ProtocolWebSocketServer([
-        '0x0001',
-        '0x8001',
-        '0x0002',
-        '0x0100',
-        '0x8100',
-        '0x0102',
-        '0x8103',
-        '0x8104',
-        '0x8106',
-        '0x0200',
-        '0x0201',
-        '0x0704',
-        '0x0301',
-        '0x0302',
-        '0x0700',
-        '0x0702',
-        '0x0800',
-        '0x0801',
-        '0x0802',
-        '0x0900',
-        '0x1001',
-        '0x1003',
-        '0x1205',
-        '0x9205',
-        '0x9101',
-        '0x9102',
-        '0x9103',
-        '0x9105',
-        '0x9106',
-        '0x9201',
-        '0x9301'
-      ], '/ws/protocol')
-    : null;
-  const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video');
-  const sseVideoStream = new SSEVideoStream(tcpServer);
-  const replayService = new ReplayService(liveVideoServer);
-  
+  app.use(
+    cors({
+      origin: buildCorsOriginConfig(),
+      credentials: true,
+      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    }),
+  )
+
+  app.use(express.json())
+  app.use(express.static('public'))
+  app.use('/hls', express.static('hls'))
+
+  const httpServer = createServer(app)
+  const dataWsServer =
+    INGRESS_ENABLED && DATA_WS_ENABLED
+      ? new DataWebSocketServer('/ws/data')
+      : null
+  const protocolWsServer =
+    INGRESS_ENABLED && PROTOCOL_WS_ENABLED
+      ? new ProtocolWebSocketServer(
+          [
+            '0x0001',
+            '0x8001',
+            '0x0002',
+            '0x0100',
+            '0x8100',
+            '0x0102',
+            '0x8103',
+            '0x8104',
+            '0x8106',
+            '0x0200',
+            '0x0201',
+            '0x0704',
+            '0x0301',
+            '0x0302',
+            '0x0700',
+            '0x0702',
+            '0x0800',
+            '0x0801',
+            '0x0802',
+            '0x0900',
+            '0x1001',
+            '0x1003',
+            '0x1205',
+            '0x9205',
+            '0x9101',
+            '0x9102',
+            '0x9103',
+            '0x9105',
+            '0x9106',
+            '0x9201',
+            '0x9301',
+          ],
+          '/ws/protocol',
+        )
+      : null
+  const rawStreamServer = new RawStreamServer()
+  const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video')
+  const sseVideoStream = new SSEVideoStream(tcpServer)
+  const replayService = new ReplayService(liveVideoServer)
+
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame);
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
-    });
+      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+    })
   }
-  
+
   // Connect TCP RTP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     tcpRTPHandler.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
-      console.log(`🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`);
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame);
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame);
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame);
-    });
+      console.log(
+        `🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`,
+      )
+      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+    })
+    tcpRTPHandler.setRawPacketCallback((vehicleId, channel, packet) => {
+      rawStreamServer.handlePacket(vehicleId, packet, channel)
+    })
     tcpServer.setRTPHandler((buffer, vehicleId) => {
-      console.log(`📦 TCP RTP handler called: vehicleId=${vehicleId}, size=${buffer.length}`);
-      tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-    });
+      console.log(
+        `📦 TCP RTP handler called: vehicleId=${vehicleId}, size=${buffer.length}`,
+      )
+      tcpRTPHandler.handleRTPPacket(buffer, vehicleId)
+    })
   } else if (workerForwarder.hasVideoWorker()) {
     udpServer.setPacketForwarder((packet, vehicleId) => {
-      void workerForwarder.forwardRtpPacket(packet, vehicleId, 'udp');
-    });
+      void workerForwarder.forwardRtpPacket(packet, vehicleId, 'udp')
+    })
     tcpServer.setRTPHandler((buffer, vehicleId) => {
-      void workerForwarder.forwardRtpPacket(buffer, vehicleId, 'tcp');
-    });
+      rawStreamServer.handlePacket(vehicleId, buffer)
+      void workerForwarder.forwardRtpPacket(buffer, vehicleId, 'tcp')
+    })
   }
 
   if (MESSAGE_TRACE_ENABLED && dataWsServer && protocolWsServer) {
     tcpServer.setMessageTraceCallback((trace) => {
       dataWsServer.broadcast({
         type: 'PROTOCOL_MESSAGE',
-        trace
-      });
-      protocolWsServer.broadcastTrace(trace);
-    });
+        trace,
+      })
+      protocolWsServer.broadcastTrace(trace)
+    })
   }
-  
+
   if (INGRESS_ENABLED) {
-    await tcpServer.start();
-    await udpServer.start();
+    await tcpServer.start()
+    await udpServer.start()
   }
   if (VIDEO_PROCESSING_ENABLED && SHOULD_USE_DB) {
-    retentionService.start();
+    retentionService.start()
   }
 
   console.log(
-    `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`
-  );
-  
-  app.use('/api', createRoutes(tcpServer, udpServer, replayService, tcpRTPHandler));
+    `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
+  )
+
+  app.use(
+    '/api',
+    createRoutes(tcpServer, udpServer, replayService, tcpRTPHandler),
+  )
   if (ALERT_PROCESSING_ENABLED) {
-    app.use('/api/alerts', createAlertRoutes());
+    app.use('/api/alerts', createAlertRoutes())
   }
-  app.use('/api/internal', createInternalRoutes(alertManager, tcpRTPHandler, tcpServer));
-  
+  app.use(
+    '/api/internal',
+    createInternalRoutes(alertManager, tcpRTPHandler, tcpServer),
+  )
+
   app.get('/health', (req, res) => {
     const dbStats = SHOULD_USE_DB
       ? require('./storage/database').getPoolStats()
-      : null;
-    
+      : null
+
     res.json({
       status: 'healthy',
       timestamp: new Date().toISOString(),
       services: {
         tcp: INGRESS_ENABLED ? `listening on port ${TCP_PORT}` : 'disabled',
         udp: INGRESS_ENABLED ? `listening on port ${UDP_PORT}` : 'disabled',
-        api: `listening on port ${API_PORT}`
+        api: `listening on port ${API_PORT}`,
       },
       mode: {
         ingressEnabled: INGRESS_ENABLED,
@@ -374,30 +439,38 @@ async function startServer() {
         videoProcessingEnabled: VIDEO_PROCESSING_ENABLED,
         alertWorkerUrl: ALERT_WORKER_URL || null,
         videoWorkerUrl: VIDEO_WORKER_URL || null,
-        listenerServerUrl: LISTENER_SERVER_URL || null
+        listenerServerUrl: LISTENER_SERVER_URL || null,
       },
-      database: SHOULD_USE_DB ? {
-        pool: dbStats,
-        warning: dbStats.waiting > 0 ? `${dbStats.waiting} queries waiting for a connection` : null,
-        alert: dbStats.active > dbStats.max * 0.9 ? `Pool is ${Math.round((dbStats.active/dbStats.max)*100)}% utilized` : null
-      } : {
-        enabled: false
-      }
-    });
-  });
-  
+      database: SHOULD_USE_DB
+        ? {
+            pool: dbStats,
+            warning:
+              dbStats.waiting > 0
+                ? `${dbStats.waiting} queries waiting for a connection`
+                : null,
+            alert:
+              dbStats.active > dbStats.max * 0.9
+                ? `Pool is ${Math.round((dbStats.active / dbStats.max) * 100)}% utilized`
+                : null,
+          }
+        : {
+            enabled: false,
+          },
+    })
+  })
+
   // Database pool status endpoint (for monitoring)
   app.get('/api/db/pool-status', (req, res) => {
     if (!SHOULD_USE_DB) {
       return res.json({
         timestamp: new Date().toISOString(),
         enabled: false,
-        message: 'Database disabled in listener-only mode'
-      });
+        message: 'Database disabled in listener-only mode',
+      })
     }
-    const { getPoolStats } = require('./storage/database');
-    const stats = getPoolStats();
-    
+    const { getPoolStats } = require('./storage/database')
+    const stats = getPoolStats()
+
     res.json({
       timestamp: new Date().toISOString(),
       pool: stats,
@@ -406,63 +479,81 @@ async function startServer() {
         active: stats.active,
         idle: stats.idle,
         waiting: stats.waiting,
-        max: stats.max
+        max: stats.max,
       },
       warnings: [
-        ...(stats.waiting > 0 ? [`${stats.waiting} queries waiting for connection`] : []),
-        ...(stats.active > stats.max * 0.8 ? [`Connection pool is ${Math.round((stats.active/stats.max)*100)}% utilized`] : []),
-        ...(stats.idle === 0 && stats.active > 0 ? [`No idle connections available`] : [])
-      ]
-    });
-  });
-  
+        ...(stats.waiting > 0
+          ? [`${stats.waiting} queries waiting for connection`]
+          : []),
+        ...(stats.active > stats.max * 0.8
+          ? [
+              `Connection pool is ${Math.round((stats.active / stats.max) * 100)}% utilized`,
+            ]
+          : []),
+        ...(stats.idle === 0 && stats.active > 0
+          ? [`No idle connections available`]
+          : []),
+      ],
+    })
+  })
+
   app.get('/api/stream/stats', (req, res) => {
     res.json({
       websocket: liveVideoServer.getStats(),
-      sse: sseVideoStream.getStats()
-    });
-  });
-  
+      sse: sseVideoStream.getStats(),
+    })
+  })
+
   app.get('/api/stream/sse', (req, res) => {
-    sseVideoStream.handleConnection(req, res);
-  });
-  
+    sseVideoStream.handleConnection(req, res)
+  })
+
   // Test endpoint to check if SSE broadcast works
   app.get('/api/stream/test', (req, res) => {
-    const testFrame = Buffer.from('TEST_FRAME_DATA');
-    console.log('🧪 Manual test broadcast triggered');
-    sseVideoStream.broadcastFrame('TEST_VEHICLE', 1, testFrame, true);
-    res.json({ message: 'Test frame broadcasted', clients: sseVideoStream.getStats() });
-  });
-  
-  const getVehicleChannelsFromCapabilities = (vehicle: any): any[] => (
+    const testFrame = Buffer.from('TEST_FRAME_DATA')
+    console.log('🧪 Manual test broadcast triggered')
+    sseVideoStream.broadcastFrame('TEST_VEHICLE', 1, testFrame, true)
+    res.json({
+      message: 'Test frame broadcasted',
+      clients: sseVideoStream.getStats(),
+    })
+  })
+
+  const getVehicleChannelsFromCapabilities = (vehicle: any): any[] =>
     Array.isArray(vehicle?.channels)
-      ? vehicle.channels.filter((ch: any) => ch && (ch.type === 'video' || ch.type === 'audio_video'))
+      ? vehicle.channels.filter(
+          (ch: any) => ch && (ch.type === 'video' || ch.type === 'audio_video'),
+        )
       : []
-  );
 
   const getVehicleChannelNumbers = (
     vehicle: any,
-    options?: { includeDefaults?: boolean }
+    options?: { includeDefaults?: boolean },
   ): number[] => {
     const fromCapabilities = getVehicleChannelsFromCapabilities(vehicle)
-      .map((ch: any) => Number(ch.logicalChannel ?? ch.channel ?? ch.physicalChannel))
-      .filter((ch: number) => Number.isFinite(ch) && ch > 0);
+      .map((ch: any) =>
+        Number(ch.logicalChannel ?? ch.channel ?? ch.physicalChannel),
+      )
+      .filter((ch: number) => Number.isFinite(ch) && ch > 0)
     const fromActiveStreams = Array.from(vehicle?.activeStreams || [])
       .map((ch) => Number(ch))
-      .filter((ch) => Number.isFinite(ch) && ch > 0);
-    const defaults = options?.includeDefaults ? BACKGROUND_STREAM_DEFAULT_CHANNELS : [];
-    return Array.from(new Set<number>([
-      ...(fromCapabilities.length ? fromCapabilities : []),
-      ...fromActiveStreams,
-      ...defaults
-    ]));
-  };
+      .filter((ch) => Number.isFinite(ch) && ch > 0)
+    const defaults = options?.includeDefaults
+      ? BACKGROUND_STREAM_DEFAULT_CHANNELS
+      : []
+    return Array.from(
+      new Set<number>([
+        ...(fromCapabilities.length ? fromCapabilities : []),
+        ...fromActiveStreams,
+        ...defaults,
+      ]),
+    )
+  }
 
   const getConnectedVehicleChannels = (vehicle: any): any[] => {
-    const discovered = getVehicleChannelsFromCapabilities(vehicle);
+    const discovered = getVehicleChannelsFromCapabilities(vehicle)
     if (discovered.length > 0) {
-      return discovered;
+      return discovered
     }
 
     return getVehicleChannelNumbers(vehicle)
@@ -472,89 +563,103 @@ async function startServer() {
         logicalChannel: channel,
         type: 'video',
         hasGimbal: false,
-      }));
-  };
+      }))
+  }
 
   app.get('/api/vehicles/connected', (req, res) => {
-    const vehicles = tcpServer.getVehicles().filter(v => v.connected);
-    res.json(vehicles.map(v => ({
-      id: v.id,
-      phone: v.phone,
-      channels: getConnectedVehicleChannels(v),
-      activeStreams: Array.from(v.activeStreams)
-    })));
-  });
-  
-  const wsServer = ALERT_PROCESSING_ENABLED ? new AlertWebSocketServer(alertManager, '/ws/alerts') : null;
+    const vehicles = tcpServer.getVehicles().filter((v) => v.connected)
+    res.json(
+      vehicles.map((v) => ({
+        id: v.id,
+        phone: v.phone,
+        channels: getConnectedVehicleChannels(v),
+        activeStreams: Array.from(v.activeStreams),
+      })),
+    )
+  })
+
+  const wsServer = ALERT_PROCESSING_ENABLED
+    ? new AlertWebSocketServer(alertManager, '/ws/alerts')
+    : null
 
   // Single upgrade router for all websocket paths.
   httpServer.on('upgrade', (request, socket, head) => {
-    let pathname = '';
+    let pathname = ''
     try {
-      const host = request.headers.host || 'localhost';
-      pathname = new URL(request.url || '', `http://${host}`).pathname;
+      const host = request.headers.host || 'localhost'
+      pathname = new URL(request.url || '', `http://${host}`).pathname
     } catch {
-      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n');
-      socket.destroy();
-      return;
+      socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
+      socket.destroy()
+      return
     }
 
     if (wsServer && pathname === wsServer.getPath()) {
-      wsServer.handleUpgrade(request, socket, head);
-      return;
+      wsServer.handleUpgrade(request, socket, head)
+      return
     }
     if (dataWsServer && pathname === dataWsServer.getPath()) {
-      dataWsServer.handleUpgrade(request, socket, head);
-      return;
+      dataWsServer.handleUpgrade(request, socket, head)
+      return
     }
-    if (protocolWsServer && protocolWsServer.handleUpgrade(request, socket, head, pathname)) {
-      return;
+    if (
+      protocolWsServer &&
+      protocolWsServer.handleUpgrade(request, socket, head, pathname)
+    ) {
+      return
     }
     if (pathname === liveVideoServer.getPath()) {
-      liveVideoServer.handleUpgrade(request, socket, head);
-      return;
+      liveVideoServer.handleUpgrade(request, socket, head)
+      return
     }
 
-    socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
-    socket.destroy();
-  });
+    socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
+    socket.destroy()
+  })
 
   // Keep camera streams alive in backend mode (independent of UI subscribers).
   const getBackgroundChannels = (vehicle: any): number[] =>
-    getVehicleChannelNumbers(vehicle, { includeDefaults: true }).sort((a, b) => a - b);
+    getVehicleChannelNumbers(vehicle, { includeDefaults: true }).sort(
+      (a, b) => a - b,
+    )
 
   const ensureBackgroundStreams = () => {
-    if (!BACKGROUND_STREAMS_ENABLED) return;
-    const connected = tcpServer.getVehicles().filter(v => v.connected);
+    if (!BACKGROUND_STREAMS_ENABLED) return
+    const connected = tcpServer.getVehicles().filter((v) => v.connected)
     for (const v of connected) {
-      const channels = getBackgroundChannels(v);
+      const channels = getBackgroundChannels(v)
       for (const channel of channels) {
-        tcpServer.startVideo(String(v.id), channel);
-        udpServer.startHLSStream(String(v.id), channel);
+        tcpServer.startVideo(String(v.id), channel)
+        udpServer.startHLSStream(String(v.id), channel)
       }
     }
-  };
+  }
 
   const ensureFreshBackgroundStreams = () => {
-    if (!BACKGROUND_STREAMS_ENABLED) return;
-    const connected = tcpServer.getVehicles().filter(v => v.connected);
-    const now = Date.now();
+    if (!BACKGROUND_STREAMS_ENABLED) return
+    const connected = tcpServer.getVehicles().filter((v) => v.connected)
+    const now = Date.now()
 
     for (const v of connected) {
-      const channels = getBackgroundChannels(v);
+      const channels = getBackgroundChannels(v)
       for (const channel of channels) {
-        const streamInfo = udpServer.getStreamInfo(String(v.id), channel);
-        const lastFrameAt = streamInfo?.lastFrame ? new Date(streamInfo.lastFrame).getTime() : 0;
-        const hasFreshFrames = !!lastFrameAt && Number.isFinite(lastFrameAt) && now - lastFrameAt <= BACKGROUND_STREAM_STALE_MS;
+        const streamInfo = udpServer.getStreamInfo(String(v.id), channel)
+        const lastFrameAt = streamInfo?.lastFrame
+          ? new Date(streamInfo.lastFrame).getTime()
+          : 0
+        const hasFreshFrames =
+          !!lastFrameAt &&
+          Number.isFinite(lastFrameAt) &&
+          now - lastFrameAt <= BACKGROUND_STREAM_STALE_MS
         if (!streamInfo?.active || !hasFreshFrames) {
-          tcpServer.startVideo(String(v.id), channel);
-          udpServer.startHLSStream(String(v.id), channel);
+          tcpServer.startVideo(String(v.id), channel)
+          udpServer.startHLSStream(String(v.id), channel)
         }
       }
     }
-  };
+  }
 
-  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
   const getAutoScreenshotCaptureOptions = (channel: number) =>
     channel === 2
@@ -562,229 +667,276 @@ async function startServer() {
           retries: 16,
           retryDelayMs: Math.max(1000, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
           initialDelayMs: Math.max(2000, AUTO_SCREENSHOT_FALLBACK_DELAY_MS * 2),
-          timeoutMs: 30000
+          timeoutMs: 30000,
         }
       : {
           retries: 10,
           retryDelayMs: Math.max(700, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
           initialDelayMs: Math.max(1200, AUTO_SCREENSHOT_FALLBACK_DELAY_MS),
-          timeoutMs: 18000
-        };
+          timeoutMs: 18000,
+        }
 
-  const warmBackgroundScreenshotTargets = async (targets: Array<{ vehicleId: string; channel: number }>) => {
+  const warmBackgroundScreenshotTargets = async (
+    targets: Array<{ vehicleId: string; channel: number }>,
+  ) => {
     for (const target of targets) {
-      tcpServer.startVideo(target.vehicleId, target.channel);
-      udpServer.startHLSStream(target.vehicleId, target.channel);
+      tcpServer.startVideo(target.vehicleId, target.channel)
+      udpServer.startHLSStream(target.vehicleId, target.channel)
     }
-    const hasChannelTwo = targets.some((target) => target.channel === 2);
-    await wait(AUTO_SCREENSHOT_WARMUP_MS + (hasChannelTwo ? AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS : 0));
-  };
+    const hasChannelTwo = targets.some((target) => target.channel === 2)
+    await wait(
+      AUTO_SCREENSHOT_WARMUP_MS +
+        (hasChannelTwo ? AUTO_SCREENSHOT_CH2_EXTRA_WARMUP_MS : 0),
+    )
+  }
 
-  const captureAutoScreenshotTarget = async (target: { vehicleId: string; channel: number }) => {
-    const fallbackOptions = getAutoScreenshotCaptureOptions(target.channel);
-    const localCapture = await tcpServer.requestScreenshotWithFallback(target.vehicleId, target.channel, {
-      fallback: true,
-      fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs),
-      preferFrameFirst: false
-    });
+  const captureAutoScreenshotTarget = async (target: {
+    vehicleId: string
+    channel: number
+  }) => {
+    const fallbackOptions = getAutoScreenshotCaptureOptions(target.channel)
+    const localCapture = await tcpServer.requestScreenshotWithFallback(
+      target.vehicleId,
+      target.channel,
+      {
+        fallback: true,
+        fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs),
+        preferFrameFirst: false,
+      },
+    )
 
     if (localCapture.success || localCapture.fallback?.ok) {
       return {
         ok: true,
         imageId: localCapture.fallback?.imageId,
         reason: undefined,
-        source: localCapture.commandAccepted ? 'listener-native' as const : 'listener-fallback' as const
-      };
+        source: localCapture.commandAccepted
+          ? ('listener-native' as const)
+          : ('listener-fallback' as const),
+      }
     }
 
     if (!VIDEO_PROCESSING_ENABLED && VIDEO_WORKER_URL) {
       const response = await fetch(
-        VIDEO_WORKER_URL + '/api/video-server/vehicles/' + encodeURIComponent(String(target.vehicleId)) + '/screenshot',
+        VIDEO_WORKER_URL +
+          '/api/video-server/vehicles/' +
+          encodeURIComponent(String(target.vehicleId)) +
+          '/screenshot',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             channel: target.channel,
             fallback: true,
-            fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs)
-          })
-        }
-      );
-      const payload = await response.json().catch(() => null);
-      const ok = response.ok && payload?.success !== false && payload?.fallback?.ok !== false;
+            fallbackDelayMs: Math.max(1800, fallbackOptions.retryDelayMs),
+          }),
+        },
+      )
+      const payload = await response.json().catch(() => null)
+      const ok =
+        response.ok &&
+        payload?.success !== false &&
+        payload?.fallback?.ok !== false
       return {
         ok,
         imageId: payload?.fallback?.imageId || payload?.imageId || undefined,
-        reason: payload?.fallback?.reason || payload?.message || localCapture.fallback?.reason || undefined,
-        source: 'worker-fallback' as const
-      };
+        reason:
+          payload?.fallback?.reason ||
+          payload?.message ||
+          localCapture.fallback?.reason ||
+          undefined,
+        source: 'worker-fallback' as const,
+      }
     }
 
     return {
       ok: false,
       imageId: localCapture.fallback?.imageId,
       reason: localCapture.fallback?.reason || 'screenshot failed',
-      source: 'listener-native' as const
-    };
-  };
+      source: 'listener-native' as const,
+    }
+  }
 
-  const retryAutoScreenshotTargets = (targets: Array<{ vehicleId: string; channel: number }>) => {
-    if (targets.length === 0) return;
+  const retryAutoScreenshotTargets = (
+    targets: Array<{ vehicleId: string; channel: number }>,
+  ) => {
+    if (targets.length === 0) return
     setTimeout(() => {
       void (async () => {
         try {
-          console.log(`Auto screenshot fanout retry: retrying ${targets.length} channel snapshots`);
-          await warmBackgroundScreenshotTargets(targets);
-          const retryResults = await Promise.allSettled(targets.map((target) => captureAutoScreenshotTarget(target)));
-          const ok = retryResults.filter((result) => result.status === 'fulfilled' && result.value.ok).length;
-          const fail = retryResults.length - ok;
-          console.log(`Auto screenshot fanout retry: ${ok} success, ${fail} failed`);
+          console.log(
+            `Auto screenshot fanout retry: retrying ${targets.length} channel snapshots`,
+          )
+          await warmBackgroundScreenshotTargets(targets)
+          const retryResults = await Promise.allSettled(
+            targets.map((target) => captureAutoScreenshotTarget(target)),
+          )
+          const ok = retryResults.filter(
+            (result) => result.status === 'fulfilled' && result.value.ok,
+          ).length
+          const fail = retryResults.length - ok
+          console.log(
+            `Auto screenshot fanout retry: ${ok} success, ${fail} failed`,
+          )
         } catch (error) {
-          console.warn('Auto screenshot fanout retry failed:', error);
+          console.warn('Auto screenshot fanout retry failed:', error)
         }
-      })();
-    }, AUTO_SCREENSHOT_RETRY_DELAY_MS);
-  };
+      })()
+    }, AUTO_SCREENSHOT_RETRY_DELAY_MS)
+  }
 
   // Server-side screenshot fanout scheduler: keep recent screenshots updated for all connected vehicles/channels.
   const runAutoScreenshotFanout = async () => {
     if (!AUTO_SCREENSHOT_FANOUT_ENABLED) {
-      return;
+      return
     }
-    ensureBackgroundStreams();
-    ensureFreshBackgroundStreams();
-    const connected = tcpServer.getVehicles().filter(v => v.connected);
+    ensureBackgroundStreams()
+    ensureFreshBackgroundStreams()
+    const connected = tcpServer.getVehicles().filter((v) => v.connected)
     if (connected.length === 0) {
-      return;
+      return
     }
 
-    const targets: Array<{ vehicleId: string; channel: number }> = [];
+    const targets: Array<{ vehicleId: string; channel: number }> = []
     for (const v of connected) {
-      const channels = getBackgroundChannels(v);
+      const channels = getBackgroundChannels(v)
       for (const channel of channels) {
-        targets.push({ vehicleId: String(v.id), channel });
+        targets.push({ vehicleId: String(v.id), channel })
       }
     }
 
     if (targets.length === 0) {
-      return;
+      return
     }
 
-    console.log(`Auto screenshot fanout: starting ${targets.length} channel snapshots across ${connected.length} vehicles`);
-    await warmBackgroundScreenshotTargets(targets);
+    console.log(
+      `Auto screenshot fanout: starting ${targets.length} channel snapshots across ${connected.length} vehicles`,
+    )
+    await warmBackgroundScreenshotTargets(targets)
 
-    const results = await Promise.allSettled(targets.map((target) => captureAutoScreenshotTarget(target)));
+    const results = await Promise.allSettled(
+      targets.map((target) => captureAutoScreenshotTarget(target)),
+    )
 
-    const ok = results.filter(r => r.status === 'fulfilled' && r.value.ok).length;
-    const fail = results.length - ok;
+    const ok = results.filter(
+      (r) => r.status === 'fulfilled' && r.value.ok,
+    ).length
+    const fail = results.length - ok
     const failedTargets = results
       .map((result, index) => ({ result, target: targets[index] }))
       .filter(({ result }) => result.status !== 'fulfilled' || !result.value.ok)
-      .map(({ target }) => target);
+      .map(({ target }) => target)
 
-    console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`);
-    retryAutoScreenshotTargets(failedTargets);
-  };
+    console.log(`Auto screenshot fanout: ${ok} success, ${fail} failed`)
+    retryAutoScreenshotTargets(failedTargets)
+  }
   if (BACKGROUND_STREAMS_ENABLED || AUTO_SCREENSHOT_FANOUT_ENABLED) {
     setTimeout(() => {
-      ensureBackgroundStreams();
-      ensureFreshBackgroundStreams();
-      void runAutoScreenshotFanout();
-    }, 5000);
+      ensureBackgroundStreams()
+      ensureFreshBackgroundStreams()
+      void runAutoScreenshotFanout()
+    }, 5000)
   }
 
   if (BACKGROUND_STREAMS_ENABLED) {
     setInterval(() => {
-      ensureBackgroundStreams();
-      ensureFreshBackgroundStreams();
-    }, BACKGROUND_STREAM_INTERVAL_MS);
+      ensureBackgroundStreams()
+      ensureFreshBackgroundStreams()
+    }, BACKGROUND_STREAM_INTERVAL_MS)
   }
 
   if (AUTO_SCREENSHOT_FANOUT_ENABLED) {
     setInterval(() => {
-      void runAutoScreenshotFanout();
-    }, AUTO_SCREENSHOT_INTERVAL_MS);
+      void runAutoScreenshotFanout()
+    }, AUTO_SCREENSHOT_INTERVAL_MS)
   }
-  
+
   // Alert reminder scheduler - Check for unattended alerts every 5 minutes
   if (ALERT_PROCESSING_ENABLED && SHOULD_USE_DB) {
-    setInterval(async () => {
-      try {
-        const { AlertStorageDB } = require('./storage/alertStorageDB');
-        const alertStorage = new AlertStorageDB();
-        const unattended = await alertStorage.getUnattendedAlerts(30);
-        
-        if (unattended.length > 0) {
-          console.log(`⏰ REMINDER: ${unattended.length} unattended alerts`);
-          wsServer?.broadcast({
-            type: 'alert-reminder',
-            count: unattended.length,
-            alerts: unattended.map((a: any) => ({
-              id: a.id,
-              type: a.alert_type,
-              priority: a.priority,
-              timestamp: a.timestamp,
-              vehicleId: a.device_id
-            }))
-          });
+    setInterval(
+      async () => {
+        try {
+          const { AlertStorageDB } = require('./storage/alertStorageDB')
+          const alertStorage = new AlertStorageDB()
+          const unattended = await alertStorage.getUnattendedAlerts(30)
+
+          if (unattended.length > 0) {
+            console.log(`⏰ REMINDER: ${unattended.length} unattended alerts`)
+            wsServer?.broadcast({
+              type: 'alert-reminder',
+              count: unattended.length,
+              alerts: unattended.map((a: any) => ({
+                id: a.id,
+                type: a.alert_type,
+                priority: a.priority,
+                timestamp: a.timestamp,
+                vehicleId: a.device_id,
+              })),
+            })
+          }
+        } catch (error) {
+          console.error('Alert reminder error:', error)
         }
-      } catch (error) {
-        console.error('Alert reminder error:', error);
-      }
-    }, 5 * 60 * 1000); // Every 5 minutes
+      },
+      5 * 60 * 1000,
+    ) // Every 5 minutes
   }
-  
+
   httpServer.listen(API_PORT, '0.0.0.0', () => {
-    console.log(`REST API server listening on port ${API_PORT}`);
+    console.log(`REST API server listening on port ${API_PORT}`)
     if (ALERT_PROCESSING_ENABLED) {
-      console.log(`WebSocket - Alerts: ws://localhost:${API_PORT}/ws/alerts`);
+      console.log(`WebSocket - Alerts: ws://localhost:${API_PORT}/ws/alerts`)
     }
     if (INGRESS_ENABLED && DATA_WS_ENABLED) {
-      console.log(`WebSocket - Data: ws://localhost:${API_PORT}/ws/data`);
+      console.log(`WebSocket - Data: ws://localhost:${API_PORT}/ws/data`)
     }
     if (INGRESS_ENABLED && PROTOCOL_WS_ENABLED) {
-      console.log(`WebSocket - Protocol All: ws://localhost:${API_PORT}/ws/protocol/all`);
-      console.log(`WebSocket - Protocol 0x1205: ws://localhost:${API_PORT}/ws/protocol/0x1205`);
+      console.log(
+        `WebSocket - Protocol All: ws://localhost:${API_PORT}/ws/protocol/all`,
+      )
+      console.log(
+        `WebSocket - Protocol 0x1205: ws://localhost:${API_PORT}/ws/protocol/0x1205`,
+      )
     }
     if (VIDEO_PROCESSING_ENABLED) {
-      console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`);
+      console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`)
     }
-  });
-  
-  console.log('\n=== JT/T 1078 Video Server Started ===');
-  console.log(`API: ${API_PORT}`);
+  })
+
+  console.log('\n=== JT/T 1078 Video Server Started ===')
+  console.log(`API: ${API_PORT}`)
   if (INGRESS_ENABLED) {
-    console.log(`TCP: ${TCP_PORT} | UDP: ${UDP_PORT}`);
+    console.log(`TCP: ${TCP_PORT} | UDP: ${UDP_PORT}`)
   }
   if (VIDEO_PROCESSING_ENABLED) {
-    console.log(`Live Stream: ws://localhost:${API_PORT}/ws/video`);
-    console.log(`SSE Test: http://localhost:${API_PORT}/api/stream/test`);
+    console.log(`Live Stream: ws://localhost:${API_PORT}/ws/video`)
+    console.log(`SSE Test: http://localhost:${API_PORT}/api/stream/test`)
   }
-  console.log('==========================================\n');
-  
+  console.log('==========================================\n')
+
   // Graceful shutdown
   process.on('SIGINT', async () => {
-    console.log('\nShutting down server...');
-    
+    console.log('\nShutting down server...')
+
     // Close database pool
-    const { closePool } = await import('./storage/database');
-    await closePool();
-    
-    process.exit(0);
-  });
-  
+    const { closePool } = await import('./storage/database')
+    await closePool()
+
+    process.exit(0)
+  })
+
   process.on('SIGTERM', async () => {
-    console.log('\nTerminating server...');
-    
+    console.log('\nTerminating server...')
+
     // Close database pool
-    const { closePool } = await import('./storage/database');
-    await closePool();
-    
-    process.exit(0);
-  });
+    const { closePool } = await import('./storage/database')
+    await closePool()
+
+    process.exit(0)
+  })
 }
 
 startServer().catch((error) => {
-  console.error('Failed to start server:', error);
-  process.exit(1);
-});
+  console.error('Failed to start server:', error)
+  process.exit(1)
+})
