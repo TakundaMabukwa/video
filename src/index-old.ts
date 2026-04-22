@@ -105,7 +105,6 @@ import { ProtocolWebSocketServer } from './api/protocolWebsocket';
 import { createInternalRoutes } from './api/internalRoutes';
 import { ForwardingAlertManager } from './alerts/forwardingAlertManager';
 import { LiveVideoStreamServer } from './streaming/liveStream';
-import { RawStreamServer } from './api/rawStream';
 import { SSEVideoStream } from './streaming/sseStream';
 import { ReplayService } from './streaming/replay';
 import { WorkerForwarder } from './services/workerForwarder';
@@ -295,7 +294,6 @@ async function startServer() {
       ], '/ws/protocol')
     : null;
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video');
-  const rawStreamServer = new RawStreamServer('/ws/raw');
   const sseVideoStream = new SSEVideoStream(tcpServer);
   const replayService = new ReplayService(liveVideoServer);
   
@@ -319,7 +317,6 @@ async function startServer() {
     tcpServer.setRTPHandler((buffer, vehicleId) => {
       console.log(`📦 TCP RTP handler called: vehicleId=${vehicleId}, size=${buffer.length}`);
       tcpRTPHandler.handleRTPPacket(buffer, vehicleId);
-      rawStreamServer.push(buffer);
     });
   } else if (workerForwarder.hasVideoWorker()) {
     udpServer.setPacketForwarder((packet, vehicleId) => {
@@ -515,10 +512,6 @@ async function startServer() {
     }
     if (pathname === liveVideoServer.getPath()) {
       liveVideoServer.handleUpgrade(request, socket, head);
-      return;
-    }
-    if (pathname === rawStreamServer.getPath()) {
-      rawStreamServer.handleUpgrade(request, socket, head);
       return;
     }
 

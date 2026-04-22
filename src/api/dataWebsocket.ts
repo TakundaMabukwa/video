@@ -67,6 +67,14 @@ export class DataWebSocketServer {
     });
   }
  
+  public broadcastBinary(data: Buffer) {
+    for (const ws of this.clients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try { ws.send(data); } catch { }
+      }
+    }
+  }
+
   public broadcast(payload: BroadcastPayload) {
     const message = JSON.stringify(payload);
     let sent = 0;

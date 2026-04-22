@@ -219,8 +219,8 @@ export class JTT808Server {
 
   private getVideoRequestProfile(): 'legacy' | 'main' {
     const raw = String(process.env.VIDEO_REQUEST_PROFILE || '').trim().toLowerCase();
-    if (raw === 'main' || raw === 'high') return 'main';
-    return 'legacy';
+    if (raw === 'legacy' || raw === 'low') return 'legacy';
+    return 'main';
   }
 
   private getPreferredStreamType(): 0 | 1 {
