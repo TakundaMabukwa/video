@@ -612,6 +612,10 @@ async function startServer() {
       liveVideoServer.handleUpgrade(request, socket, head)
       return
     }
+    if (pathname === rawStreamServer.getPath()) {
+      rawStreamServer.handleUpgrade(request, socket, head)
+      return
+    }
 
     socket.write('HTTP/1.1 404 Not Found\r\n\r\n')
     socket.destroy()
