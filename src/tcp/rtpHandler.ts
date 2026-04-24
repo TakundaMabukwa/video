@@ -36,6 +36,9 @@ export class TCPRTPHandler {
     packet: Buffer,
   ) => void
   private alertManager?: AlertManager
+  private readonly continuousVideoOutputEnabled = !['1', 'true', 'yes', 'on'].includes(
+    String(process.env.ARCHIVE_ONLY_MODE ?? 'false').trim().toLowerCase(),
+  )
 
   setFrameCallback(
     callback: (
@@ -117,9 +120,11 @@ export class TCPRTPHandler {
     }
 
     if (!this.activeStreams.has(streamKey)) {
-      this.hlsStreamer.startStream(vehicleId, header.channelNumber)
+      if (this.continuousVideoOutputEnabled) {
+        this.hlsStreamer.startStream(vehicleId, header.channelNumber)
+        console.log(`[RTP] HLS stream started: ${streamKey}`)
+      }
       this.activeStreams.add(streamKey)
-      console.log(`[RTP] HLS stream started: ${streamKey}`)
     }
 
     const completeFrame = this.frameAssembler.assembleFrame(
@@ -151,13 +156,15 @@ export class TCPRTPHandler {
       )
     }
 
-    this.hlsStreamer.writeFrame(
-      vehicleId,
-      header.channelNumber,
-      completeFrame,
-      isIFrame,
-    )
-    this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame)
+    if (this.continuousVideoOutputEnabled) {
+      this.hlsStreamer.writeFrame(
+        vehicleId,
+        header.channelNumber,
+        completeFrame,
+        isIFrame,
+      )
+      this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame)
+    }
 
     if (this.frameCount === 1) {
       console.log(
@@ -461,8 +468,10 @@ export class TCPRTPHandler {
 
   stopStream(vehicleId: string, channel: number): void {
     const streamKey = `${vehicleId}_${channel}`
-    this.hlsStreamer.stopStream(vehicleId, channel)
-    this.videoWriter.stopRecording(vehicleId, channel)
+    if (this.continuousVideoOutputEnabled) {
+      this.hlsStreamer.stopStream(vehicleId, channel)
+      this.videoWriter.stopRecording(vehicleId, channel)
+    }
     this.activeStreams.delete(streamKey)
   }
 

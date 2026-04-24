@@ -165,12 +165,6 @@ const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true)
 const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true)
 const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED)
 const SHOULD_USE_DB = DB_ENABLED
-const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED
-const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED
-const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag(
-  'AUTO_SCREENSHOT_FANOUT_ENABLED',
-  VIDEO_PROCESSING_ENABLED,
-)
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(
   process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000',
 )
@@ -217,6 +211,25 @@ const RAW_VIDEO_ARCHIVE_RECOVERY_COOLDOWN_MS = parseInt(
 )
 const RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND =
   process.env.RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND || ''
+const ARCHIVE_ONLY_MODE = envFlag(
+  'ARCHIVE_ONLY_MODE',
+  !!RAW_VIDEO_ARCHIVE_URL,
+)
+const CONTINUOUS_VIDEO_OUTPUT_ENABLED =
+  VIDEO_PROCESSING_ENABLED && !ARCHIVE_ONLY_MODE
+const BACKGROUND_STREAMS_ENABLED = envFlag(
+  'BACKGROUND_STREAMS_ENABLED',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+const KEEP_STREAMS_WITHOUT_CLIENTS = envFlag(
+  'KEEP_STREAMS_WITHOUT_CLIENTS',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag(
+  'AUTO_SCREENSHOT_FANOUT_ENABLED',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+process.env.ARCHIVE_ONLY_MODE = ARCHIVE_ONLY_MODE ? 'true' : 'false'
 const MESSAGE_TRACE_ENABLED = envFlag(
   'MESSAGE_TRACE_ENABLED',
   INGRESS_ENABLED && (ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED),
@@ -384,9 +397,11 @@ async function startServer() {
         frame,
         isIFrame,
       )
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+        liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+        sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      }
     })
   }
 
@@ -396,7 +411,9 @@ async function startServer() {
       console.log(
         `🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`,
       )
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      }
       rawStreamServer.handleFrame('tcp', vehicleId, channel, frame, isIFrame)
       rawVideoArchiveForwarder.queueFrame(
         'tcp',
@@ -405,8 +422,10 @@ async function startServer() {
         frame,
         isIFrame,
       )
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+        sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      }
     })
     tcpRTPHandler.setRawPacketCallback((vehicleId, channel, packet) => {
       rawStreamServer.handlePacket(vehicleId, packet, channel)
@@ -446,7 +465,7 @@ async function startServer() {
   }
 
   console.log(
-    `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
+    `Background capture mode: archiveOnly=${ARCHIVE_ONLY_MODE ? 'on' : 'off'}, continuousOutputs=${CONTINUOUS_VIDEO_OUTPUT_ENABLED ? 'on' : 'off'}, streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
   )
 
   app.use(
@@ -478,6 +497,8 @@ async function startServer() {
         ingressEnabled: INGRESS_ENABLED,
         alertProcessingEnabled: ALERT_PROCESSING_ENABLED,
         videoProcessingEnabled: VIDEO_PROCESSING_ENABLED,
+        archiveOnlyMode: ARCHIVE_ONLY_MODE,
+        continuousVideoOutputEnabled: CONTINUOUS_VIDEO_OUTPUT_ENABLED,
         alertWorkerUrl: ALERT_WORKER_URL || null,
         videoWorkerUrl: VIDEO_WORKER_URL || null,
         listenerServerUrl: LISTENER_SERVER_URL || null,
