@@ -138,6 +138,15 @@ export class JTT808Server {
   private ipToVehicle = new Map<string, string>(); // Map IP to vehicle ID
   private serialCounter = 1;
   private rtpHandler?: (buffer: Buffer, vehicleId: string) => void;
+  private rawCameraDataHandler?: (payload: {
+    sourceIp: string;
+    vehicleId: string | null;
+    sourcePort: number | null;
+    chunkBase64: string;
+    chunkSize: number;
+    receivedAt: string;
+    transport: 'tcp';
+  }) => void;
   private alertStorage = new AlertStorageDB();
   private deviceStorage = new DeviceStorage();
   private imageStorage = new ImageStorage();
@@ -604,6 +613,20 @@ export class JTT808Server {
     this.rtpHandler = handler;
   }
 
+  setRawCameraDataHandler(
+    handler: (payload: {
+      sourceIp: string;
+      vehicleId: string | null;
+      sourcePort: number | null;
+      chunkBase64: string;
+      chunkSize: number;
+      receivedAt: string;
+      transport: 'tcp';
+    }) => void,
+  ): void {
+    this.rawCameraDataHandler = handler;
+  }
+
   setMessageTraceCallback(handler: (trace: MessageTraceEntry) => void): void {
     this.messageTraceCallback = handler;
   }
@@ -622,6 +645,24 @@ export class JTT808Server {
     let buffer = Buffer.alloc(0);
     
     socket.on('data', async (data) => {
+      try {
+        const sourceIp = socket.remoteAddress?.replace('::ffff:', '') || '';
+        const mappedVehicleId =
+          this.socketToVehicle.get(socket) ||
+          this.ipToVehicle.get(sourceIp) ||
+          null;
+        this.rawCameraDataHandler?.({
+          sourceIp,
+          vehicleId: mappedVehicleId,
+          sourcePort: socket.remotePort ?? null,
+          chunkBase64: data.toString('base64'),
+          chunkSize: data.length,
+          receivedAt: new Date().toISOString(),
+          transport: 'tcp',
+        });
+      } catch {
+        // Never let raw ingest taps interfere with protocol handling.
+      }
       if (this.verboseIngressLogs) {
         console.log(`[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`);
       }

@@ -45,6 +45,28 @@ export class RawStreamServer {
     })
   }
 
+  public handleCameraChunk(payload: {
+    sourceIp: string
+    vehicleId: string | null
+    sourcePort: number | null
+    chunkBase64: string
+    chunkSize: number
+    receivedAt: string
+    transport: 'tcp'
+  }) {
+    this.broadcast({
+      type: 'CAMERA_TCP_CHUNK_RAW',
+      sourceIp: payload.sourceIp,
+      vehicleId: payload.vehicleId,
+      sourcePort: payload.sourcePort,
+      timestamp: payload.receivedAt,
+      size: payload.chunkSize,
+      encoding: 'base64',
+      transport: payload.transport,
+      chunk: payload.chunkBase64,
+    })
+  }
+
   public handleFrame(
     transport: 'udp' | 'tcp',
     vehicleId: string,

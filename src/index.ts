@@ -347,6 +347,9 @@ async function startServer() {
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video')
   const sseVideoStream = new SSEVideoStream(tcpServer)
   const replayService = new ReplayService(liveVideoServer)
+  tcpServer.setRawCameraDataHandler((payload) => {
+    rawStreamServer.handleCameraChunk(payload)
+  })
 
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {

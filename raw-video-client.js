@@ -5,6 +5,7 @@ const WebSocket = require('ws')
 const RAW_VIDEO_WS_URL =
   process.env.RAW_VIDEO_WS_URL || 'ws://209.38.206.44:3000/ws/raw'
 const RECONNECT_DELAY_MS = Number(process.env.RAW_VIDEO_WS_RECONNECT_MS || 3000)
+const CONNECT_TIMEOUT_MS = Number(process.env.RAW_VIDEO_CONNECT_TIMEOUT_MS || 10000)
 const VEHICLE_FILTER = (process.env.RAW_VIDEO_VEHICLE_ID || '').trim()
 const RAW_PRINT_MODE = String(process.env.RAW_VIDEO_PRINT_MODE || 'summary')
   .trim()
@@ -69,6 +70,20 @@ function clip(value) {
 }
 
 function formatTextLine(payload) {
+  if (payload.type === 'CAMERA_TCP_CHUNK_RAW') {
+    return JSON.stringify({
+      type: payload.type,
+      sourceIp: payload.sourceIp,
+      vehicleId: payload.vehicleId,
+      sourcePort: payload.sourcePort,
+      transport: payload.transport,
+      timestamp: payload.timestamp,
+      size: payload.size,
+      encoding: payload.encoding,
+      chunk: payload.chunk,
+    })
+  }
+
   if (payload.type === 'VIDEO_PACKET_RAW') {
     return JSON.stringify({
       type: payload.type,
@@ -109,9 +124,22 @@ function scheduleReconnect() {
 function connect() {
   console.log(`Connecting to ${RAW_VIDEO_WS_URL}`)
   const ws = new WebSocket(RAW_VIDEO_WS_URL)
+  let opened = false
+  const connectTimer = setTimeout(() => {
+    if (opened) return
+    console.error(`WebSocket connect timeout after ${CONNECT_TIMEOUT_MS}ms`)
+    try {
+      ws.terminate()
+    } catch {}
+  }, CONNECT_TIMEOUT_MS)
 
   ws.on('open', () => {
+    opened = true
+    clearTimeout(connectTimer)
     console.log('Connected to raw video websocket')
+    if (VEHICLE_FILTER) {
+      console.log(`Filtering for vehicle ${VEHICLE_FILTER}`)
+    }
   })
 
   ws.on('message', (data) => {
@@ -134,6 +162,33 @@ function connect() {
       }
 
       if (!vehicleMatches(payload)) {
+        return
+      }
+
+      if (payload.type === 'CAMERA_TCP_CHUNK_RAW') {
+        if (RAW_PRINT_MODE === 'raw') {
+          console.log(
+            JSON.stringify(
+              {
+                type: payload.type,
+                sourceIp: payload.sourceIp,
+                vehicleId: payload.vehicleId,
+                sourcePort: payload.sourcePort,
+                transport: payload.transport,
+                timestamp: payload.timestamp,
+                size: payload.size,
+                encoding: payload.encoding,
+                chunk: clip(payload.chunk),
+              },
+              null,
+              2,
+            ),
+          )
+        } else {
+          console.log(
+            `camera-chunk vehicle=${payload.vehicleId || 'unknown'} ip=${payload.sourceIp} size=${payload.size}`,
+          )
+        }
         return
       }
 
@@ -201,6 +256,7 @@ function connect() {
   })
 
   ws.on('close', (code, reason) => {
+    clearTimeout(connectTimer)
     const reasonText =
       reason && reason.length ? reason.toString() : 'no reason provided'
     console.log(`Disconnected: ${code} ${reasonText}`)
@@ -208,6 +264,7 @@ function connect() {
   })
 
   ws.on('error', (error) => {
+    clearTimeout(connectTimer)
     console.error('WebSocket error:', error.message)
   })
 }
