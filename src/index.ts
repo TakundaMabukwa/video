@@ -351,6 +351,7 @@ async function startServer() {
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
+      rawStreamServer.handleFrame('udp', vehicleId, channel, frame, isIFrame)
       tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
       liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
       sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
@@ -364,6 +365,7 @@ async function startServer() {
         `🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`,
       )
       tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      rawStreamServer.handleFrame('tcp', vehicleId, channel, frame, isIFrame)
       liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
       sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
     })
@@ -904,6 +906,7 @@ async function startServer() {
     }
     if (VIDEO_PROCESSING_ENABLED) {
       console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`)
+      console.log(`WebSocket - Raw Video: ws://localhost:${API_PORT}/ws/raw`)
     }
   })
 
@@ -914,6 +917,7 @@ async function startServer() {
   }
   if (VIDEO_PROCESSING_ENABLED) {
     console.log(`Live Stream: ws://localhost:${API_PORT}/ws/video`)
+    console.log(`Raw Video Stream: ws://localhost:${API_PORT}/ws/raw`)
     console.log(`SSE Test: http://localhost:${API_PORT}/api/stream/test`)
   }
   console.log('==========================================\n')
