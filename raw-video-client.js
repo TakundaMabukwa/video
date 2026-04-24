@@ -14,8 +14,10 @@ const PRINT_PAYLOAD_LIMIT = Number(process.env.RAW_VIDEO_PRINT_LIMIT || 240)
 const logsDir = path.join(__dirname, 'logs')
 const outputFile = path.join(logsDir, 'raw-video-client.ndjson')
 const textOutputFile = path.join(logsDir, 'raw-video-client.txt')
+const rawBytesDir = path.join(logsDir, 'raw-bytes')
 
 fs.mkdirSync(logsDir, { recursive: true })
+fs.mkdirSync(rawBytesDir, { recursive: true })
 
 let reconnectTimer = null
 
@@ -55,6 +57,28 @@ function appendVehicleTextLine(vehicleId, text) {
     fs.appendFileSync(perVehicleTextFile, text + '\n')
   } catch (error) {
     console.error('Failed to write per-vehicle raw-video text log:', error.message)
+  }
+}
+
+function writeRawChunk(payload) {
+  if (payload.type !== 'CAMERA_TCP_CHUNK_RAW' || !payload.chunk) return
+
+  try {
+    const vehicleId = String(payload.vehicleId || 'unknown')
+    const vehicleDir = path.join(rawBytesDir, vehicleId)
+    fs.mkdirSync(vehicleDir, { recursive: true })
+
+    const safeTimestamp = String(payload.timestamp || new Date().toISOString())
+      .replace(/[:.]/g, '-')
+      .replace(/Z$/, 'Z')
+    const sourceIp = String(payload.sourceIp || 'unknown').replace(/[^\w.-]/g, '_')
+    const sourcePort = String(payload.sourcePort ?? 'na')
+    const fileName = `${safeTimestamp}_tcp_${sourceIp}_${sourcePort}_${payload.size || '0'}b.bin`
+    const filePath = path.join(vehicleDir, fileName)
+    const buffer = Buffer.from(String(payload.chunk), 'base64')
+    fs.writeFileSync(filePath, buffer)
+  } catch (error) {
+    console.error('Failed to write raw camera bytes:', error.message)
   }
 }
 
@@ -149,6 +173,7 @@ function connect() {
       const payload = JSON.parse(raw)
       appendLine(payload)
       appendTextLine(formatTextLine(payload))
+      writeRawChunk(payload)
       if (payload.vehicleId) {
         appendVehicleLine(payload.vehicleId, payload)
         appendVehicleTextLine(payload.vehicleId, formatTextLine(payload))
@@ -179,6 +204,11 @@ function connect() {
                 size: payload.size,
                 encoding: payload.encoding,
                 chunk: clip(payload.chunk),
+                bytesFile: path.join(
+                  rawBytesDir,
+                  String(payload.vehicleId || 'unknown'),
+                  `${String(payload.timestamp || '').replace(/[:.]/g, '-').replace(/Z$/, 'Z')}_tcp_${String(payload.sourceIp || 'unknown').replace(/[^\w.-]/g, '_')}_${String(payload.sourcePort ?? 'na')}_${payload.size || '0'}b.bin`,
+                ),
               },
               null,
               2,
