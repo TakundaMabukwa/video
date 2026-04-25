@@ -173,7 +173,16 @@ export class JTT808Server {
   private vehicleIdentityById = new Map<string, VehicleIdentity>()
   private lastStartVideoAt = new Map<string, number>()
   private lastRtpPacketAt = new Map<string, number>()
-  private messageTraceCallback?: (trace: MessageTraceEntry) => void
+  private messageTraceCallbacks: Array<(trace: MessageTraceEntry) => void> = []
+  private rawCameraDataHandler?: (payload: {
+    sourceIp: string
+    vehicleId: string | null
+    sourcePort: number | null
+    chunkBase64: string
+    chunkSize: number
+    receivedAt: string
+    transport: 'tcp'
+  }) => void
   private boundAlertManagerForCommands?: AlertManager
   private boundRequestScreenshotHandler?: (payload: any) => void
   private boundRequestCameraVideoHandler?: (payload: any) => void

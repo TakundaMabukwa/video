@@ -132,8 +132,8 @@ export class RawStreamServer {
     if (!RAW_STREAM_PROTOCOL_TRACE) return
 
     this.broadcast({
-      type: 'JT808_PROTOCOL_MESSAGE',
       ...metadata,
+      type: 'JT808_PROTOCOL_MESSAGE',
     })
   }
 
