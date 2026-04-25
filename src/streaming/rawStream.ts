@@ -2,6 +2,27 @@ import net from 'net'
 
 const RAW_STREAM_PORT = parseInt(process.env.RAW_STREAM_PORT || '7081', 10)
 const RAW_STREAM_HOST = process.env.RAW_STREAM_HOST || '0.0.0.0'
+const RAW_STREAM_PROTOCOL_TRACE =
+  process.env.RAW_STREAM_PROTOCOL_TRACE === undefined
+    ? true
+    : parseInt(process.env.RAW_STREAM_PROTOCOL_TRACE, 10) === 1 ||
+      process.env.RAW_STREAM_PROTOCOL_TRACE?.toLowerCase() === 'true' ||
+      process.env.RAW_STREAM_PROTOCOL_TRACE?.toLowerCase() === 'yes'
+
+export interface ProtocolMessageMetadata {
+  type: 'jt808-message'
+  vehicleId: string
+  messageId: number
+  messageIdHex: string
+  serialNumber: number
+  bodyLength: number
+  rawFrameHex: string
+  bodyHex: string
+  bodyTextPreview: string
+  parse?: Record<string, unknown>
+  direction?: 'inbound' | 'outbound'
+  timestamp: number
+}
 
 export class RawStreamServer {
   private server: net.Server
@@ -61,6 +82,43 @@ export class RawStreamServer {
         if (error) {
           this.clients.delete(client)
           console.error('Raw stream write failed:', error)
+          client.destroy()
+        }
+      })
+    }
+  }
+
+  /**
+   * Handle JT808 protocol message for raw stream tap.
+   * Only emits if RAW_STREAM_PROTOCOL_TRACE env is enabled.
+   * This is additive and does not affect existing RTP packet handling.
+   */
+  public handleProtocolMessage(metadata: ProtocolMessageMetadata) {
+    // Only emit if protocol trace is enabled
+    if (!RAW_STREAM_PROTOCOL_TRACE) {
+      return
+    }
+
+    if (this.clients.size === 0) return
+
+    // Serialize metadata - no additional payload for JT808 messages
+    const metadataBuffer = Buffer.from(JSON.stringify(metadata), 'utf8')
+    const header = Buffer.allocUnsafe(8)
+    header.writeUInt32BE(metadataBuffer.length, 0)
+    // Use 0 for payload length since there's no raw packet data
+    header.writeUInt32BE(0, 4)
+    const payload = Buffer.concat([header, metadataBuffer])
+
+    for (const client of Array.from(this.clients)) {
+      if (client.destroyed) {
+        this.clients.delete(client)
+        continue
+      }
+
+      client.write(payload, (error) => {
+        if (error) {
+          this.clients.delete(client)
+          console.error('Raw stream protocol message write failed:', error)
           client.destroy()
         }
       })

@@ -396,6 +396,25 @@ async function startServer() {
     })
   }
 
+  // Add raw stream tap for JT808 protocol messages (optional, additive only)
+  // This does not affect existing behavior - only emits when RAW_STREAM_PROTOCOL_TRACE=true
+  tcpServer.setMessageTraceCallback((trace) => {
+    rawStreamServer.handleProtocolMessage({
+      type: 'jt808-message',
+      vehicleId: trace.vehicleId,
+      messageId: trace.messageId,
+      messageIdHex: trace.messageIdHex,
+      serialNumber: trace.serialNumber,
+      bodyLength: trace.bodyLength,
+      rawFrameHex: trace.rawFrameHex,
+      bodyHex: trace.bodyHex,
+      bodyTextPreview: trace.bodyTextPreview,
+      parse: trace.parse,
+      direction: trace.direction,
+      timestamp: Date.now(),
+    })
+  })
+
   if (INGRESS_ENABLED) {
     await tcpServer.start()
     await udpServer.start()
