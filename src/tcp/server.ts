@@ -173,7 +173,7 @@ export class JTT808Server {
   private vehicleIdentityById = new Map<string, VehicleIdentity>()
   private lastStartVideoAt = new Map<string, number>()
   private lastRtpPacketAt = new Map<string, number>()
-  private messageTraceCallbacks: Array<(trace: MessageTraceEntry) => void> = []
+  private messageTraceCallback?: (trace: MessageTraceEntry) => void
   private boundAlertManagerForCommands?: AlertManager
   private boundRequestScreenshotHandler?: (payload: any) => void
   private boundRequestCameraVideoHandler?: (payload: any) => void
@@ -755,6 +755,20 @@ export class JTT808Server {
     this.rtpHandler = handler
   }
 
+  setRawCameraDataHandler(
+    handler: (payload: {
+      sourceIp: string
+      vehicleId: string | null
+      sourcePort: number | null
+      chunkBase64: string
+      chunkSize: number
+      receivedAt: string
+      transport: 'tcp'
+    }) => void,
+  ): void {
+    this.rawCameraDataHandler = handler
+  }
+
   setMessageTraceCallback(handler: (trace: MessageTraceEntry) => void): void {
     this.messageTraceCallbacks.push(handler)
   }
@@ -773,6 +787,24 @@ export class JTT808Server {
     let buffer = Buffer.alloc(0)
 
     socket.on('data', async (data) => {
+      try {
+        const sourceIp = socket.remoteAddress?.replace('::ffff:', '') || ''
+        const mappedVehicleId =
+          this.socketToVehicle.get(socket) ||
+          this.ipToVehicle.get(sourceIp) ||
+          null
+        this.rawCameraDataHandler?.({
+          sourceIp,
+          vehicleId: mappedVehicleId,
+          sourcePort: socket.remotePort ?? null,
+          chunkBase64: data.toString('base64'),
+          chunkSize: data.length,
+          receivedAt: new Date().toISOString(),
+          transport: 'tcp',
+        })
+      } catch {
+        // Never let raw ingest taps interfere with protocol handling.
+      }
       if (this.verboseIngressLogs) {
         console.log(
           `[${clientAddr}] ${data.length}B: ${data.toString('hex').substring(0, 100)}${data.length > 50 ? '...' : ''}`,
@@ -2295,9 +2327,7 @@ export class JTT808Server {
     return match ? Number(match[1]) : null
   }
 
-  private mapVendorAlertText(
-    text: string,
-  ):
+  private mapVendorAlertText(text: string):
     | ({
         type: string
         priority: AlertPriority

@@ -107,6 +107,7 @@ import { RawStreamServer } from './streaming/rawStream'
 import { SSEVideoStream } from './streaming/sseStream'
 import { ReplayService } from './streaming/replay'
 import { WorkerForwarder } from './services/workerForwarder'
+import { RawVideoArchiveForwarder } from './services/rawVideoArchiveForwarder'
 import { RetentionService } from './storage/retentionService'
 import pool, { ensureRuntimeSchema } from './storage/database'
 import * as dotenv from 'dotenv'
@@ -164,12 +165,6 @@ const ALERT_PROCESSING_ENABLED = envFlag('ALERT_PROCESSING_ENABLED', true)
 const VIDEO_PROCESSING_ENABLED = envFlag('VIDEO_PROCESSING_ENABLED', true)
 const DB_ENABLED = envFlag('DB_ENABLED', ALERT_PROCESSING_ENABLED)
 const SHOULD_USE_DB = DB_ENABLED
-const BACKGROUND_STREAMS_ENABLED = VIDEO_PROCESSING_ENABLED
-const KEEP_STREAMS_WITHOUT_CLIENTS = VIDEO_PROCESSING_ENABLED
-const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag(
-  'AUTO_SCREENSHOT_FANOUT_ENABLED',
-  VIDEO_PROCESSING_ENABLED,
-)
 const BACKGROUND_STREAM_INTERVAL_MS = parseInt(
   process.env.BACKGROUND_STREAM_INTERVAL_MS || '15000',
 )
@@ -188,6 +183,7 @@ const BACKGROUND_STREAM_DEFAULT_CHANNELS = String(
 const ALERT_WORKER_URL = process.env.ALERT_WORKER_URL || ''
 const VIDEO_WORKER_URL = process.env.VIDEO_WORKER_URL || ''
 const LISTENER_SERVER_URL = process.env.LISTENER_SERVER_URL || ''
+const RAW_VIDEO_ARCHIVE_URL = process.env.RAW_VIDEO_ARCHIVE_URL || ''
 const INTERNAL_WORKER_TOKEN = process.env.INTERNAL_WORKER_TOKEN || ''
 const WORKER_FORWARD_TIMEOUT_MS = parseInt(
   process.env.WORKER_FORWARD_TIMEOUT_MS || '15000',
@@ -204,6 +200,36 @@ const VIDEO_WORKER_RECOVERY_COMMAND =
   process.env.VIDEO_WORKER_RECOVERY_COMMAND || ''
 const LISTENER_SERVER_RECOVERY_COMMAND =
   process.env.LISTENER_SERVER_RECOVERY_COMMAND || ''
+const RAW_VIDEO_ARCHIVE_TIMEOUT_MS = parseInt(
+  process.env.RAW_VIDEO_ARCHIVE_TIMEOUT_MS || '15000',
+)
+const RAW_VIDEO_ARCHIVE_FAILURE_THRESHOLD = parseInt(
+  process.env.RAW_VIDEO_ARCHIVE_FAILURE_THRESHOLD || '5',
+)
+const RAW_VIDEO_ARCHIVE_RECOVERY_COOLDOWN_MS = parseInt(
+  process.env.RAW_VIDEO_ARCHIVE_RECOVERY_COOLDOWN_MS || '300000',
+)
+const RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND =
+  process.env.RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND || ''
+const ARCHIVE_ONLY_MODE = envFlag(
+  'ARCHIVE_ONLY_MODE',
+  !!RAW_VIDEO_ARCHIVE_URL,
+)
+const CONTINUOUS_VIDEO_OUTPUT_ENABLED =
+  VIDEO_PROCESSING_ENABLED && !ARCHIVE_ONLY_MODE
+const BACKGROUND_STREAMS_ENABLED = envFlag(
+  'BACKGROUND_STREAMS_ENABLED',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+const KEEP_STREAMS_WITHOUT_CLIENTS = envFlag(
+  'KEEP_STREAMS_WITHOUT_CLIENTS',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+const AUTO_SCREENSHOT_FANOUT_ENABLED = envFlag(
+  'AUTO_SCREENSHOT_FANOUT_ENABLED',
+  CONTINUOUS_VIDEO_OUTPUT_ENABLED,
+)
+process.env.ARCHIVE_ONLY_MODE = ARCHIVE_ONLY_MODE ? 'true' : 'false'
 const MESSAGE_TRACE_ENABLED = envFlag(
   'MESSAGE_TRACE_ENABLED',
   INGRESS_ENABLED && (ALERT_PROCESSING_ENABLED || VIDEO_PROCESSING_ENABLED),
@@ -245,6 +271,14 @@ async function startServer() {
     alertWorkerRecoveryCommand: ALERT_WORKER_RECOVERY_COMMAND,
     videoWorkerRecoveryCommand: VIDEO_WORKER_RECOVERY_COMMAND,
     listenerServerRecoveryCommand: LISTENER_SERVER_RECOVERY_COMMAND,
+  })
+  const rawVideoArchiveForwarder = new RawVideoArchiveForwarder({
+    archiveServerUrl: RAW_VIDEO_ARCHIVE_URL,
+    authToken: INTERNAL_WORKER_TOKEN,
+    forwardTimeoutMs: RAW_VIDEO_ARCHIVE_TIMEOUT_MS,
+    failureThreshold: RAW_VIDEO_ARCHIVE_FAILURE_THRESHOLD,
+    recoveryCooldownMs: RAW_VIDEO_ARCHIVE_RECOVERY_COOLDOWN_MS,
+    recoveryCommand: RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND,
   })
 
   let alertManager = tcpServer.getAlertManager()
@@ -347,13 +381,27 @@ async function startServer() {
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video')
   const sseVideoStream = new SSEVideoStream(tcpServer)
   const replayService = new ReplayService(liveVideoServer)
+  tcpServer.setRawCameraDataHandler((payload) => {
+    rawStreamServer.handleCameraChunk(payload)
+    rawVideoArchiveForwarder.queueRawChunk(payload)
+  })
 
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      rawStreamServer.handleFrame('udp', vehicleId, channel, frame, isIFrame)
+      rawVideoArchiveForwarder.queueFrame(
+        'udp',
+        vehicleId,
+        channel,
+        frame,
+        isIFrame,
+      )
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+        liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+        sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      }
     })
   }
 
@@ -363,9 +411,21 @@ async function startServer() {
       console.log(
         `🔄 TCP Frame callback triggered: ${vehicleId}_ch${channel}, size=${frame.length}, isIFrame=${isIFrame}`,
       )
-      tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
-      liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
-      sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
+      }
+      rawStreamServer.handleFrame('tcp', vehicleId, channel, frame, isIFrame)
+      rawVideoArchiveForwarder.queueFrame(
+        'tcp',
+        vehicleId,
+        channel,
+        frame,
+        isIFrame,
+      )
+      if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
+        liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
+        sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
+      }
     })
     tcpRTPHandler.setRawPacketCallback((vehicleId, channel, packet) => {
       rawStreamServer.handlePacket(vehicleId, packet, channel)
@@ -424,7 +484,7 @@ async function startServer() {
   }
 
   console.log(
-    `Background capture mode: streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
+    `Background capture mode: archiveOnly=${ARCHIVE_ONLY_MODE ? 'on' : 'off'}, continuousOutputs=${CONTINUOUS_VIDEO_OUTPUT_ENABLED ? 'on' : 'off'}, streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
   )
 
   app.use(
@@ -456,9 +516,12 @@ async function startServer() {
         ingressEnabled: INGRESS_ENABLED,
         alertProcessingEnabled: ALERT_PROCESSING_ENABLED,
         videoProcessingEnabled: VIDEO_PROCESSING_ENABLED,
+        archiveOnlyMode: ARCHIVE_ONLY_MODE,
+        continuousVideoOutputEnabled: CONTINUOUS_VIDEO_OUTPUT_ENABLED,
         alertWorkerUrl: ALERT_WORKER_URL || null,
         videoWorkerUrl: VIDEO_WORKER_URL || null,
         listenerServerUrl: LISTENER_SERVER_URL || null,
+        rawVideoArchiveUrl: RAW_VIDEO_ARCHIVE_URL || null,
       },
       database: SHOULD_USE_DB
         ? {
@@ -629,6 +692,10 @@ async function startServer() {
     }
     if (pathname === liveVideoServer.getPath()) {
       liveVideoServer.handleUpgrade(request, socket, head)
+      return
+    }
+    if (pathname === rawStreamServer.getPath()) {
+      rawStreamServer.handleUpgrade(request, socket, head)
       return
     }
 
@@ -919,6 +986,12 @@ async function startServer() {
     }
     if (VIDEO_PROCESSING_ENABLED) {
       console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`)
+      console.log(`WebSocket - Raw Video: ws://localhost:${API_PORT}/ws/raw`)
+    }
+    if (rawVideoArchiveForwarder.isEnabled()) {
+      console.log(
+        `Raw video archival forwarding: ${RAW_VIDEO_ARCHIVE_URL}/api/internal/ingest/raw-video/*`,
+      )
     }
   })
 
@@ -929,6 +1002,7 @@ async function startServer() {
   }
   if (VIDEO_PROCESSING_ENABLED) {
     console.log(`Live Stream: ws://localhost:${API_PORT}/ws/video`)
+    console.log(`Raw Video Stream: ws://localhost:${API_PORT}/ws/raw`)
     console.log(`SSE Test: http://localhost:${API_PORT}/api/stream/test`)
   }
   console.log('==========================================\n')

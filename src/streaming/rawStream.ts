@@ -1,7 +1,7 @@
-import net from 'net'
+import { IncomingMessage } from 'http'
+import WebSocket, { WebSocketServer } from 'ws'
+import { RawVideoMessageLogger } from '../logging/rawVideoMessageLogger'
 
-const RAW_STREAM_PORT = parseInt(process.env.RAW_STREAM_PORT || '7081', 10)
-const RAW_STREAM_HOST = process.env.RAW_STREAM_HOST || '0.0.0.0'
 const RAW_STREAM_PROTOCOL_TRACE =
   process.env.RAW_STREAM_PROTOCOL_TRACE === undefined
     ? true
@@ -25,103 +25,152 @@ export interface ProtocolMessageMetadata {
 }
 
 export class RawStreamServer {
-  private server: net.Server
-  private clients = new Set<net.Socket>()
+  private wss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+  })
 
-  constructor() {
-    this.server = net.createServer((socket) => this.onConnection(socket))
-    this.server.on('error', (error) => {
-      console.error('RawStreamServer error:', error)
-    })
-    this.server.listen(RAW_STREAM_PORT, RAW_STREAM_HOST, () => {
-      console.log(
-        `Raw stream TCP tap listening on ${RAW_STREAM_HOST}:${RAW_STREAM_PORT}`,
-      )
+  private clients = new Set<WebSocket>()
+
+  private path: string
+
+  private encoding: 'base64' | 'hex' =
+    String(process.env.RAW_VIDEO_WS_ENCODING || 'base64')
+      .trim()
+      .toLowerCase() === 'hex'
+      ? 'hex'
+      : 'base64'
+
+  constructor(path = '/ws/raw') {
+    this.path = path
+
+    this.wss.on('connection', (ws) => {
+      this.clients.add(ws)
+
+      this.safeSend(ws, {
+        type: 'hello',
+        ts: Date.now(),
+        stream: 'raw-video',
+        encoding: this.encoding,
+      })
+
+      ws.on('close', () => {
+        this.clients.delete(ws)
+      })
+
+      ws.on('error', () => {
+        this.clients.delete(ws)
+      })
     })
   }
 
-  private onConnection(socket: net.Socket) {
-    const clientId = `${socket.remoteAddress}:${socket.remotePort}`
-    console.log('Raw stream client connected:', clientId)
-    this.clients.add(socket)
+  public getPath() {
+    return this.path
+  }
 
-    socket.on('close', () => {
-      this.clients.delete(socket)
-      console.log('Raw stream client disconnected:', clientId)
-    })
-
-    socket.on('error', (error) => {
-      this.clients.delete(socket)
-      console.error('Raw stream client error:', clientId, error)
+  public handleUpgrade(req: IncomingMessage, socket: any, head: Buffer) {
+    this.wss.handleUpgrade(req, socket, head, (ws) => {
+      this.wss.emit('connection', ws, req)
     })
   }
 
   public handlePacket(vehicleId: string, packet: Buffer, channel?: number) {
-    if (this.clients.size === 0) return
-
-    const metadata = {
-      type: 'tcp-rtp',
+    this.broadcast({
+      type: 'VIDEO_PACKET_RAW',
       vehicleId,
-      channel: typeof channel === 'number' ? channel : null,
+      channel: channel ?? null,
+      timestamp: new Date().toISOString(),
       size: packet.length,
-      timestamp: Date.now(),
-    }
-    const metadataBuffer = Buffer.from(JSON.stringify(metadata), 'utf8')
-    const header = Buffer.allocUnsafe(8)
-    header.writeUInt32BE(metadataBuffer.length, 0)
-    header.writeUInt32BE(packet.length, 4)
-    const payload = Buffer.concat([header, metadataBuffer, packet])
+      encoding: this.encoding,
+      payload: this.encode(packet),
+    })
+  }
 
-    for (const client of Array.from(this.clients)) {
-      if (client.destroyed) {
-        this.clients.delete(client)
+  public handleCameraChunk(payload: {
+    sourceIp: string
+    vehicleId: string | null
+    sourcePort: number | null
+    chunkBase64: string
+    chunkSize: number
+    receivedAt: string
+    transport: 'tcp'
+  }) {
+    this.broadcast({
+      type: 'CAMERA_TCP_CHUNK_RAW',
+      sourceIp: payload.sourceIp,
+      vehicleId: payload.vehicleId,
+      sourcePort: payload.sourcePort,
+      timestamp: payload.receivedAt,
+      size: payload.chunkSize,
+      encoding: 'base64',
+      transport: payload.transport,
+      chunk: payload.chunkBase64,
+    })
+  }
+
+  public handleFrame(
+    transport: 'udp' | 'tcp',
+    vehicleId: string,
+    channel: number,
+    frame: Buffer,
+    isIFrame: boolean,
+  ) {
+    this.broadcast({
+      type: 'VIDEO_FRAME_RAW',
+      transport,
+      vehicleId,
+      channel,
+      timestamp: new Date().toISOString(),
+      isIFrame,
+      size: frame.length,
+      encoding: this.encoding,
+      assembledPayload: this.encode(frame),
+    })
+  }
+
+  public handleProtocolMessage(metadata: ProtocolMessageMetadata) {
+    if (!RAW_STREAM_PROTOCOL_TRACE) return
+
+    this.broadcast({
+      type: 'JT808_PROTOCOL_MESSAGE',
+      ...metadata,
+    })
+  }
+
+  private encode(buffer: Buffer): string {
+    return this.encoding === 'hex'
+      ? buffer.toString('hex')
+      : buffer.toString('base64')
+  }
+
+  private broadcast(payload: Record<string, unknown>) {
+    RawVideoMessageLogger.write(payload)
+
+    const message = JSON.stringify(payload)
+
+    for (const ws of Array.from(this.clients)) {
+      if (ws.readyState !== WebSocket.OPEN) {
+        this.clients.delete(ws)
         continue
       }
 
-      client.write(payload, (error) => {
-        if (error) {
-          this.clients.delete(client)
-          console.error('Raw stream write failed:', error)
-          client.destroy()
-        }
-      })
+      try {
+        ws.send(message)
+      } catch (error) {
+        this.clients.delete(ws)
+        console.error('Raw stream WebSocket send failed:', error)
+      }
     }
   }
 
-  /**
-   * Handle JT808 protocol message for raw stream tap.
-   * Only emits if RAW_STREAM_PROTOCOL_TRACE env is enabled.
-   * This is additive and does not affect existing RTP packet handling.
-   */
-  public handleProtocolMessage(metadata: ProtocolMessageMetadata) {
-    // Only emit if protocol trace is enabled
-    if (!RAW_STREAM_PROTOCOL_TRACE) {
-      return
-    }
+  private safeSend(ws: WebSocket, payload: Record<string, unknown>) {
+    if (ws.readyState !== WebSocket.OPEN) return
 
-    if (this.clients.size === 0) return
-
-    // Serialize metadata - no additional payload for JT808 messages
-    const metadataBuffer = Buffer.from(JSON.stringify(metadata), 'utf8')
-    const header = Buffer.allocUnsafe(8)
-    header.writeUInt32BE(metadataBuffer.length, 0)
-    // Use 0 for payload length since there's no raw packet data
-    header.writeUInt32BE(0, 4)
-    const payload = Buffer.concat([header, metadataBuffer])
-
-    for (const client of Array.from(this.clients)) {
-      if (client.destroyed) {
-        this.clients.delete(client)
-        continue
-      }
-
-      client.write(payload, (error) => {
-        if (error) {
-          this.clients.delete(client)
-          console.error('Raw stream protocol message write failed:', error)
-          client.destroy()
-        }
-      })
+    try {
+      ws.send(JSON.stringify(payload))
+    } catch (error) {
+      this.clients.delete(ws)
+      console.error('Raw stream WebSocket hello failed:', error)
     }
   }
 }

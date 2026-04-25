@@ -22,6 +22,9 @@ export class UDPRTPServer {
   private readonly verboseIngressLogs = ['1', 'true', 'yes', 'on'].includes(
     String(process.env.VERBOSE_RTP_INGRESS_LOGS ?? 'false').trim().toLowerCase()
   );
+  private readonly continuousVideoOutputEnabled = !['1', 'true', 'yes', 'on'].includes(
+    String(process.env.ARCHIVE_ONLY_MODE ?? 'false').trim().toLowerCase()
+  );
 
   constructor(private port: number) {
     this.server = dgram.createSocket('udp4');
@@ -109,7 +112,9 @@ export class UDPRTPServer {
       console.log(`📹 New stream: ${vehicleId} ch${header.channelNumber} from ${vehicleIp}`);
       
       // Auto-start HLS stream
-      this.hlsStreamer.startStream(vehicleId, header.channelNumber);
+      if (this.continuousVideoOutputEnabled) {
+        this.hlsStreamer.startStream(vehicleId, header.channelNumber);
+      }
       console.log(`🎬 HLS stream started: ${streamKey}`);
     }
 
@@ -135,8 +140,10 @@ export class UDPRTPServer {
         this.onFrameCallback(vehicleId, header.channelNumber, completeFrame, isIFrame);
       }
       
-      this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame, isIFrame);
-      this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame);
+      if (this.continuousVideoOutputEnabled) {
+        this.hlsStreamer.writeFrame(vehicleId, header.channelNumber, completeFrame, isIFrame);
+        this.videoWriter.writeFrame(vehicleId, header.channelNumber, completeFrame);
+      }
     }
   }
 
@@ -288,6 +295,7 @@ export class UDPRTPServer {
   }
 
   startHLSStream(vehicleId: string, channel: number): void {
+    if (!this.continuousVideoOutputEnabled) return;
     this.hlsStreamer.startStream(vehicleId, channel);
   }
 
@@ -296,8 +304,10 @@ export class UDPRTPServer {
     const streamInfo = this.streams.get(streamKey);
     if (streamInfo) {
       streamInfo.active = false;
-      this.hlsStreamer.stopStream(vehicleId, channel);
-      this.videoWriter.stopRecording(vehicleId, channel);
+      if (this.continuousVideoOutputEnabled) {
+        this.hlsStreamer.stopStream(vehicleId, channel);
+        this.videoWriter.stopRecording(vehicleId, channel);
+      }
       console.log(`Stream stopped: ${streamKey}`);
     }
   }
