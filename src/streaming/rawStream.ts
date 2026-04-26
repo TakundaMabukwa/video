@@ -1,4 +1,5 @@
 import { IncomingMessage } from 'http'
+import net from 'net'
 import WebSocket, { WebSocketServer } from 'ws'
 import { RawVideoMessageLogger } from '../logging/rawVideoMessageLogger'
 import type { AlertEvent } from '../alerts/alertManager'
@@ -9,6 +10,16 @@ const RAW_STREAM_PROTOCOL_TRACE =
     : parseInt(process.env.RAW_STREAM_PROTOCOL_TRACE, 10) === 1 ||
       process.env.RAW_STREAM_PROTOCOL_TRACE?.toLowerCase() === 'true' ||
       process.env.RAW_STREAM_PROTOCOL_TRACE?.toLowerCase() === 'yes'
+
+const RAW_STREAM_TCP_ENABLED =
+  process.env.RAW_STREAM_TCP_ENABLED === undefined
+    ? true
+    : parseInt(process.env.RAW_STREAM_TCP_ENABLED, 10) === 1 ||
+      process.env.RAW_STREAM_TCP_ENABLED?.toLowerCase() === 'true' ||
+      process.env.RAW_STREAM_TCP_ENABLED?.toLowerCase() === 'yes'
+
+const RAW_STREAM_HOST = process.env.RAW_STREAM_HOST || '0.0.0.0'
+const RAW_STREAM_PORT = parseInt(process.env.RAW_STREAM_PORT || '7081', 10)
 
 export interface ProtocolMessageMetadata {
   type: 'jt808-message'
@@ -44,6 +55,10 @@ export class RawStreamServer {
 
   private clients = new Set<WebSocket>()
 
+  private tcpClients = new Set<net.Socket>()
+
+  private tcpServer: net.Server | null = null
+
   private path: string
 
   private encoding: 'base64' | 'hex' =
@@ -74,6 +89,36 @@ export class RawStreamServer {
         this.clients.delete(ws)
       })
     })
+
+    if (RAW_STREAM_TCP_ENABLED) {
+      this.tcpServer = net.createServer((socket) => {
+        socket.setNoDelay(true)
+        this.tcpClients.add(socket)
+
+        socket.on('close', () => {
+          this.tcpClients.delete(socket)
+        })
+
+        socket.on('end', () => {
+          this.tcpClients.delete(socket)
+        })
+
+        socket.on('error', (error) => {
+          this.tcpClients.delete(socket)
+          console.error('Raw stream TCP client error:', error)
+        })
+      })
+
+      this.tcpServer.on('error', (error) => {
+        console.error('Raw stream TCP server error:', error)
+      })
+
+      this.tcpServer.listen(RAW_STREAM_PORT, RAW_STREAM_HOST, () => {
+        console.log(
+          `Raw stream TCP feed listening on ${RAW_STREAM_HOST}:${RAW_STREAM_PORT}`,
+        )
+      })
+    }
   }
 
   public getPath() {
@@ -87,15 +132,28 @@ export class RawStreamServer {
   }
 
   public handlePacket(vehicleId: string, packet: Buffer, channel?: number) {
+    const timestamp = Date.now()
+
     this.broadcast({
       type: 'VIDEO_PACKET_RAW',
       vehicleId,
       channel: channel ?? null,
-      timestamp: new Date().toISOString(),
+      timestamp: new Date(timestamp).toISOString(),
       size: packet.length,
       encoding: this.encoding,
       payload: this.encode(packet),
     })
+
+    this.broadcastTcpPacket(
+      {
+        type: 'tcp-rtp',
+        vehicleId,
+        channel: channel ?? null,
+        size: packet.length,
+        timestamp,
+      },
+      packet,
+    )
   }
 
   public handleCameraChunk(payload: {
@@ -212,6 +270,37 @@ export class RawStreamServer {
     } catch (error) {
       this.clients.delete(ws)
       console.error('Raw stream WebSocket hello failed:', error)
+    }
+  }
+
+  private broadcastTcpPacket(
+    metadata: Record<string, unknown>,
+    payload: Buffer,
+  ) {
+    if (this.tcpClients.size === 0) return
+
+    const metadataBuffer = Buffer.from(JSON.stringify(metadata), 'utf8')
+    const header = Buffer.allocUnsafe(8)
+    header.writeUInt32BE(metadataBuffer.length, 0)
+    header.writeUInt32BE(payload.length, 4)
+    const packet = Buffer.concat([header, metadataBuffer, payload])
+
+    for (const client of Array.from(this.tcpClients)) {
+      if (client.destroyed || !client.writable) {
+        this.tcpClients.delete(client)
+        continue
+      }
+
+      client.write(packet, (error) => {
+        if (!error) return
+        this.tcpClients.delete(client)
+        console.error('Raw stream TCP send failed:', error)
+        try {
+          client.destroy()
+        } catch {
+          // ignore socket cleanup failures
+        }
+      })
     }
   }
 }
