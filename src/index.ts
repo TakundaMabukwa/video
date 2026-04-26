@@ -211,12 +211,13 @@ const RAW_VIDEO_ARCHIVE_RECOVERY_COOLDOWN_MS = parseInt(
 )
 const RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND =
   process.env.RAW_VIDEO_ARCHIVE_RECOVERY_COMMAND || ''
+const RELAY_ONLY_MODE = true
 const ARCHIVE_ONLY_MODE = envFlag(
   'ARCHIVE_ONLY_MODE',
-  !!RAW_VIDEO_ARCHIVE_URL,
+  !RELAY_ONLY_MODE && !!RAW_VIDEO_ARCHIVE_URL,
 )
 const CONTINUOUS_VIDEO_OUTPUT_ENABLED =
-  VIDEO_PROCESSING_ENABLED && !ARCHIVE_ONLY_MODE
+  !RELAY_ONLY_MODE && VIDEO_PROCESSING_ENABLED && !ARCHIVE_ONLY_MODE
 const BACKGROUND_STREAMS_ENABLED = envFlag(
   'BACKGROUND_STREAMS_ENABLED',
   CONTINUOUS_VIDEO_OUTPUT_ENABLED,
@@ -388,20 +389,24 @@ async function startServer() {
   }
   tcpServer.setRawCameraDataHandler((payload) => {
     rawStreamServer.handleCameraChunk(payload)
-    rawVideoArchiveForwarder.queueRawChunk(payload)
+    if (!RELAY_ONLY_MODE) {
+      rawVideoArchiveForwarder.queueRawChunk(payload)
+    }
   })
 
   // Connect UDP frames to WebSocket and SSE broadcast
   if (VIDEO_PROCESSING_ENABLED) {
     udpServer.setFrameCallback((vehicleId, channel, frame, isIFrame) => {
       rawStreamServer.handleFrame('udp', vehicleId, channel, frame, isIFrame)
-      rawVideoArchiveForwarder.queueFrame(
-        'udp',
-        vehicleId,
-        channel,
-        frame,
-        isIFrame,
-      )
+      if (!RELAY_ONLY_MODE) {
+        rawVideoArchiveForwarder.queueFrame(
+          'udp',
+          vehicleId,
+          channel,
+          frame,
+          isIFrame,
+        )
+      }
       if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
         tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
         liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
@@ -420,13 +425,15 @@ async function startServer() {
         tcpServer.cacheLiveFrame(vehicleId, channel, frame, isIFrame)
       }
       rawStreamServer.handleFrame('tcp', vehicleId, channel, frame, isIFrame)
-      rawVideoArchiveForwarder.queueFrame(
-        'tcp',
-        vehicleId,
-        channel,
-        frame,
-        isIFrame,
-      )
+      if (!RELAY_ONLY_MODE) {
+        rawVideoArchiveForwarder.queueFrame(
+          'tcp',
+          vehicleId,
+          channel,
+          frame,
+          isIFrame,
+        )
+      }
       if (CONTINUOUS_VIDEO_OUTPUT_ENABLED) {
         liveVideoServer.broadcastFrame(vehicleId, channel, frame, isIFrame)
         sseVideoStream.broadcastFrame(vehicleId, channel, frame, isIFrame)
@@ -480,12 +487,12 @@ async function startServer() {
     await tcpServer.start()
     await udpServer.start()
   }
-  if (VIDEO_PROCESSING_ENABLED && SHOULD_USE_DB) {
+  if (!RELAY_ONLY_MODE && VIDEO_PROCESSING_ENABLED && SHOULD_USE_DB) {
     retentionService.start()
   }
 
   console.log(
-    `Background capture mode: archiveOnly=${ARCHIVE_ONLY_MODE ? 'on' : 'off'}, continuousOutputs=${CONTINUOUS_VIDEO_OUTPUT_ENABLED ? 'on' : 'off'}, streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
+    `Background capture mode: relayOnly=${RELAY_ONLY_MODE ? 'on' : 'off'}, archiveOnly=${ARCHIVE_ONLY_MODE ? 'on' : 'off'}, continuousOutputs=${CONTINUOUS_VIDEO_OUTPUT_ENABLED ? 'on' : 'off'}, streams=${BACKGROUND_STREAMS_ENABLED ? 'on' : 'off'}, keepWithoutClients=${KEEP_STREAMS_WITHOUT_CLIENTS ? 'on' : 'off'}, screenshotFanout=${AUTO_SCREENSHOT_FANOUT_ENABLED ? 'on' : 'off'}`,
   )
 
   app.use(
@@ -517,6 +524,7 @@ async function startServer() {
         ingressEnabled: INGRESS_ENABLED,
         alertProcessingEnabled: ALERT_PROCESSING_ENABLED,
         videoProcessingEnabled: VIDEO_PROCESSING_ENABLED,
+        relayOnlyMode: RELAY_ONLY_MODE,
         archiveOnlyMode: ARCHIVE_ONLY_MODE,
         continuousVideoOutputEnabled: CONTINUOUS_VIDEO_OUTPUT_ENABLED,
         alertWorkerUrl: ALERT_WORKER_URL || null,
@@ -989,7 +997,7 @@ async function startServer() {
       console.log(`WebSocket - Live Video: ws://localhost:${API_PORT}/ws/video`)
       console.log(`WebSocket - Raw Video: ws://localhost:${API_PORT}/ws/raw`)
     }
-    if (rawVideoArchiveForwarder.isEnabled()) {
+    if (!RELAY_ONLY_MODE && rawVideoArchiveForwarder.isEnabled()) {
       console.log(
         `Raw video archival forwarding: ${RAW_VIDEO_ARCHIVE_URL}/api/internal/ingest/raw-video/*`,
       )
