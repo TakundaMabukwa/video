@@ -381,6 +381,11 @@ async function startServer() {
   const liveVideoServer = new LiveVideoStreamServer(tcpServer, '/ws/video')
   const sseVideoStream = new SSEVideoStream(tcpServer)
   const replayService = new ReplayService(liveVideoServer)
+  if (ALERT_PROCESSING_ENABLED) {
+    alertManager.on('alert', (alert) => {
+      rawStreamServer.handleAlert(alert)
+    })
+  }
   tcpServer.setRawCameraDataHandler((payload) => {
     rawStreamServer.handleCameraChunk(payload)
     rawVideoArchiveForwarder.queueRawChunk(payload)
@@ -446,19 +451,15 @@ async function startServer() {
     })
   }
 
-  if (MESSAGE_TRACE_ENABLED && dataWsServer && protocolWsServer) {
-    tcpServer.setMessageTraceCallback((trace) => {
+  tcpServer.setMessageTraceCallback((trace) => {
+    if (MESSAGE_TRACE_ENABLED && dataWsServer && protocolWsServer) {
       dataWsServer.broadcast({
         type: 'PROTOCOL_MESSAGE',
         trace,
       })
       protocolWsServer.broadcastTrace(trace)
-    })
-  }
+    }
 
-  // Add raw stream tap for JT808 protocol messages (optional, additive only)
-  // This does not affect existing behavior - only emits when RAW_STREAM_PROTOCOL_TRACE=true
-  tcpServer.setMessageTraceCallback((trace) => {
     rawStreamServer.handleProtocolMessage({
       type: 'jt808-message',
       vehicleId: trace.vehicleId,

@@ -199,7 +199,7 @@ export class UDPRTPServer {
         dataType: 0x04,
         alarmCode: mapped.alarmCode ?? null,
         payloadText: text.slice(0, 320),
-        rawPayloadHex: payload.toString('hex').slice(0, 1024)
+        rawPayloadHex: payload.toString('hex')
       }
     });
   }

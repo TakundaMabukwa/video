@@ -1867,7 +1867,7 @@ export class JTT808Server {
         decodedText: decoded || null,
         payloadPreview: preview,
         rawPayloadHash: this.buildPayloadHash(payload),
-        rawPayloadHex: payload.toString('hex').slice(0, 1024),
+        rawPayloadHex: payload.toString('hex'),
       },
     })
 
@@ -1923,7 +1923,7 @@ export class JTT808Server {
       defaultChannel: 1,
       metadata: {
         rawPayloadHash: this.buildPayloadHash(body),
-        rawPayloadHex: body.toString('hex').slice(0, 1024),
+        rawPayloadHex: body.toString('hex'),
       },
     })
     this.pushMessageTrace(message, rawFrame, {

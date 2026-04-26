@@ -1,6 +1,7 @@
 import { IncomingMessage } from 'http'
 import WebSocket, { WebSocketServer } from 'ws'
 import { RawVideoMessageLogger } from '../logging/rawVideoMessageLogger'
+import type { AlertEvent } from '../alerts/alertManager'
 
 const RAW_STREAM_PROTOCOL_TRACE =
   process.env.RAW_STREAM_PROTOCOL_TRACE === undefined
@@ -22,6 +23,17 @@ export interface ProtocolMessageMetadata {
   parse?: Record<string, unknown>
   direction?: 'inbound' | 'outbound'
   timestamp: number
+}
+
+type RawAlertPayload = {
+  vehicleId: string
+  channel: number
+  priority: string
+  alertType: string
+  signalCodes: string[]
+  sourceMessageId: string | null
+  timestamp: string
+  metadata: Record<string, unknown>
 }
 
 export class RawStreamServer {
@@ -134,6 +146,35 @@ export class RawStreamServer {
     this.broadcast({
       ...metadata,
       type: 'JT808_PROTOCOL_MESSAGE',
+    })
+  }
+
+  public handleAlert(alert: AlertEvent) {
+    const metadata =
+      alert.metadata && typeof alert.metadata === 'object' ? alert.metadata : {}
+    const signalCodes = Array.isArray((metadata as any).alertSignals)
+      ? (metadata as any).alertSignals
+          .map((value: unknown) => String(value || '').trim())
+          .filter(Boolean)
+      : []
+
+    const payload: RawAlertPayload = {
+      vehicleId: String(alert.vehicleId || ''),
+      channel: Number(alert.channel || 1),
+      priority: String(alert.priority || ''),
+      alertType: String(alert.type || ''),
+      signalCodes,
+      sourceMessageId: String((metadata as any).sourceMessageId || '') || null,
+      timestamp:
+        alert.timestamp instanceof Date
+          ? alert.timestamp.toISOString()
+          : new Date().toISOString(),
+      metadata: metadata as Record<string, unknown>,
+    }
+
+    this.broadcast({
+      type: 'ALERT_RAW',
+      ...payload,
     })
   }
 
