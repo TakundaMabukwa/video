@@ -290,22 +290,45 @@ export function createRoutes(
     ...alert,
     mediaLinks: buildAlertMediaLinks(alert.id)
   });
+  const SILENCED_ALERT_MATCHERS = [
+    'storage unit failure',
+    'storage failure',
+    'dms: forward camera invisible too long',
+    'forward camera invisible too long',
+    'other video equipment failure',
+    'special alarm recording threshold',
+  ];
+  const SILENCED_ALERT_SIGNALS = new Set([
+    'jtt1078_storage_failure',
+    'platform_video_alarm_0103',
+    'platform_video_alarm_0104',
+    'platform_video_alarm_0107',
+    'custom_keyword_storage_failure',
+    'dms_10104_forward_invisible_too_long',
+  ]);
   const isSilencedAlert = (alert: any) => {
-    const metadata = alert?.metadata || {};
-    const type = String(alert?.alert_type || alert?.type || metadata?.primaryAlertType || '').trim().toLowerCase();
-    if (type === 'storage unit failure' || type === 'storage failure') return true;
+      const metadata = alert?.metadata || {};
+      const candidates = [
+        alert?.title,
+        alert?.alert_type,
+        alert?.type,
+        metadata?.primaryAlertType,
+      ]
+        .map((value: any) => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
+      if (candidates.some((value: string) => SILENCED_ALERT_MATCHERS.some((matcher) => value.includes(matcher)))) {
+        return true;
+      }
 
-    const signals = [
-      ...(Array.isArray(metadata?.alertSignals) ? metadata.alertSignals : []),
-      ...(Array.isArray(metadata?.alertSignalDetails) ? metadata.alertSignalDetails.map((item: any) => item?.code) : [])
-    ]
-      .map((value: any) => String(value || '').trim().toLowerCase())
-      .filter(Boolean);
+      const signals = [
+        ...(Array.isArray(metadata?.alertSignals) ? metadata.alertSignals : []),
+        ...(Array.isArray(metadata?.alertSignalDetails) ? metadata.alertSignalDetails.map((item: any) => item?.code) : [])
+      ]
+        .map((value: any) => String(value || '').trim().toLowerCase())
+        .filter(Boolean);
 
-    return signals.includes('jtt1078_storage_failure') ||
-      signals.includes('platform_video_alarm_0103') ||
-      signals.includes('custom_keyword_storage_failure');
-  };
+      return signals.some((signal: string) => SILENCED_ALERT_SIGNALS.has(signal));
+    };
   const loadAlertRow = async (alertId: string): Promise<any | null> => {
     const alertManager = tcpServer.getAlertManager();
     const inMemory = alertManager.getAlertById(alertId);
