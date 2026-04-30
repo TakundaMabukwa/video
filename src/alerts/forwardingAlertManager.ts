@@ -14,6 +14,15 @@ const STORAGE_ALERT_TYPES = new Set([
 ]);
 
 export class ForwardingAlertManager extends AlertManager {
+  private readonly minForwardIntervalMs = Math.max(
+    250,
+    Number(process.env.ALERT_FORWARD_MIN_INTERVAL_MS || 3000)
+  );
+  private readonly forwardedState = new Map<
+    string,
+    { active: boolean; signature: string; forwardedAt: number }
+  >();
+
   constructor(private readonly forwarder: WorkerForwarder) {
     super();
   }
@@ -77,14 +86,117 @@ export class ForwardingAlertManager extends AlertManager {
     return next;
   }
 
+  private resolveForwardChannel(alert: LocationAlert): number {
+    if (Array.isArray(alert.signalLossChannels) && alert.signalLossChannels.length > 0) {
+      return Number(alert.signalLossChannels[0] || 1);
+    }
+    if (Array.isArray(alert.blockingChannels) && alert.blockingChannels.length > 0) {
+      return Number(alert.blockingChannels[0] || 1);
+    }
+    return 1;
+  }
+
+  private buildForwardSnapshotSignature(alert: LocationAlert): string {
+    const signals: string[] = [];
+    const alarmFlags = alert.alarmFlags || ({} as Record<string, any>);
+    const videoAlarms = alert.videoAlarms || ({} as Record<string, any>);
+    const driving = alert.drivingBehavior || ({} as Record<string, any>);
+
+    const alarmBits = Array.isArray(alert.alarmFlagSetBits) ? alert.alarmFlagSetBits : [];
+    const videoBits = Array.isArray(alert.videoAlarms?.setBits) ? alert.videoAlarms!.setBits || [] : [];
+    const signalLoss = Array.isArray(alert.signalLossChannels) ? alert.signalLossChannels : [];
+    const blocking = Array.isArray(alert.blockingChannels) ? alert.blockingChannels : [];
+    const memMain = Array.isArray(alert.memoryFailures?.main) ? alert.memoryFailures!.main : [];
+    const memBackup = Array.isArray(alert.memoryFailures?.backup) ? alert.memoryFailures!.backup : [];
+    const vendorCodes = (Array.isArray(alert.vendorExtensions) ? alert.vendorExtensions : [])
+      .flatMap((entry) => (Array.isArray(entry.detectedCodes) ? entry.detectedCodes : []))
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value));
+
+    for (const [key, value] of Object.entries(alarmFlags)) {
+      if (value === true) signals.push(`a:${key}`);
+    }
+    for (const [key, value] of Object.entries(videoAlarms)) {
+      if (key === 'setBits') continue;
+      if (value === true) signals.push(`v:${key}`);
+    }
+    if (driving.fatigue) signals.push('d:fatigue');
+    if (driving.phoneCall) signals.push('d:phone_call');
+    if (driving.smoking) signals.push('d:smoking');
+    if (Number(driving.custom) > 0) signals.push(`d:custom:${Number(driving.custom)}`);
+
+    for (const bit of alarmBits) {
+      const value = Number(bit);
+      if (Number.isFinite(value)) signals.push(`ab:${value}`);
+    }
+    for (const bit of videoBits) {
+      const value = Number(bit);
+      if (Number.isFinite(value)) signals.push(`vb:${value}`);
+    }
+    for (const ch of signalLoss) {
+      const value = Number(ch);
+      if (Number.isFinite(value)) signals.push(`sl:${value}`);
+    }
+    for (const ch of blocking) {
+      const value = Number(ch);
+      if (Number.isFinite(value)) signals.push(`bl:${value}`);
+    }
+    for (const ch of memMain) {
+      const value = Number(ch);
+      if (Number.isFinite(value)) signals.push(`mm:${value}`);
+    }
+    for (const ch of memBackup) {
+      const value = Number(ch);
+      if (Number.isFinite(value)) signals.push(`mb:${value}`);
+    }
+    for (const code of vendorCodes) {
+      signals.push(`ve:${code}`);
+    }
+
+    return Array.from(new Set(signals)).sort().join('|');
+  }
+
   override async processAlert(alert: LocationAlert): Promise<void> {
     const sanitized = this.sanitizeForwardedLocationAlert(alert);
     if (!sanitized) return;
+
+    const vehicleId = String(sanitized.vehicleId || '').trim();
+    if (!vehicleId) return;
+    const channel = this.resolveForwardChannel(sanitized);
+    const key = `${vehicleId}|${channel}`;
+    const now = Date.now();
+    const signature = this.buildForwardSnapshotSignature(sanitized);
+    const hasSignals = signature.length > 0;
+    const previous = this.forwardedState.get(key);
+
+    // Do not forward idle packets repeatedly. Forward one "clear" packet only when
+    // transitioning from active -> idle so downstream edge-state can be released.
+    if (!hasSignals) {
+      if (!previous?.active) {
+        return;
+      }
+      await this.forwarder.forwardLocationAlert(
+        sanitized,
+        String((alert as any)?.sourceMessageId || '0x0200')
+      );
+      this.forwardedState.set(key, { active: false, signature: '', forwardedAt: now });
+      return;
+    }
+
+    // Throttle unchanged active snapshots to prevent flooding alert worker.
+    if (
+      previous?.active &&
+      previous.signature === signature &&
+      now - previous.forwardedAt < this.minForwardIntervalMs
+    ) {
+      return;
+    }
 
     await this.forwarder.forwardLocationAlert(
       sanitized,
       String((alert as any)?.sourceMessageId || '0x0200')
     );
+    this.forwardedState.set(key, { active: true, signature, forwardedAt: now });
   }
 
   override async processExternalAlert(input: ExternalAlertInput): Promise<void> {

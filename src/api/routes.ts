@@ -137,6 +137,36 @@ export function createRoutes(
     pushIf(2);
     return ordered;
   };
+  const resolveRequestedVehicleId = (requestedId: string): string => {
+    const raw = String(requestedId || '').trim();
+    if (!raw) return raw;
+
+    const variants = new Set<string>([raw]);
+    const digitsOnly = raw.replace(/\D/g, '');
+    if (digitsOnly) {
+      variants.add(digitsOnly);
+      if (digitsOnly.startsWith('862') && digitsOnly.length > 3) {
+        variants.add(digitsOnly.slice(3));
+      } else {
+        variants.add(`862${digitsOnly}`);
+      }
+    }
+
+    for (const candidate of variants) {
+      if (tcpServer.getVehicle(candidate)) {
+        return candidate;
+      }
+    }
+
+    const connectedVehicle = tcpServer.getVehicles().find((vehicle: any) => {
+      const vehicleIds = [vehicle?.id, vehicle?.phone]
+        .map((value: any) => String(value || '').trim())
+        .filter(Boolean);
+      return vehicleIds.some((value: string) => variants.has(value));
+    });
+
+    return String(connectedVehicle?.id || raw).trim() || raw;
+  };
   const ensureAlertMediaRequested = async (
     alertId: string,
     vehicleId: string,
@@ -1745,14 +1775,15 @@ export function createRoutes(
   router.post('/vehicles/:id/start-live', (req, res) => {
     const { id } = req.params;
     const { channel = 1 } = req.body;
-    const targetChannels = getVehicleChannels(id, Number(channel));
+    const resolvedVehicleId = resolveRequestedVehicleId(id);
+    const targetChannels = getVehicleChannels(resolvedVehicleId, Number(channel));
 
-    console.log(`API: start-live called for vehicle ${id}, requested channel ${channel}, targets ${targetChannels.join(',')}`);
+    console.log(`API: start-live called for vehicle ${id} (resolved ${resolvedVehicleId}), requested channel ${channel}, targets ${targetChannels.join(',')}`);
 
     const results = targetChannels.map((targetChannel) => {
-      const success = tcpServer.startVideo(id, targetChannel);
+      const success = tcpServer.startVideo(resolvedVehicleId, targetChannel);
       if (success) {
-        udpServer.startHLSStream(id, targetChannel);
+        udpServer.startHLSStream(resolvedVehicleId, targetChannel);
       }
       return { channel: targetChannel, success };
     });
@@ -1760,8 +1791,10 @@ export function createRoutes(
     if (results.some((result) => result.success)) {
       res.json({
         success: true,
-        message: `Video stream started for vehicle ${id} on ${results.filter((result) => result.success).length}/${results.length} channel(s)`,
+        message: `Video stream started for vehicle ${resolvedVehicleId} on ${results.filter((result) => result.success).length}/${results.length} channel(s)`,
         data: {
+          requestedVehicleId: id,
+          resolvedVehicleId,
           requestedChannel: Number(channel) || 1,
           channels: results
         }
@@ -1769,7 +1802,11 @@ export function createRoutes(
     } else {
       res.status(404).json({
         success: false,
-        message: `Vehicle ${id} not found or not connected`
+        message: `Vehicle ${id} not found or not connected`,
+        data: {
+          requestedVehicleId: id,
+          resolvedVehicleId
+        }
       });
     }
   });
